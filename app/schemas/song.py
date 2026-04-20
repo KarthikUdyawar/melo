@@ -1,0 +1,58 @@
+# app/schemas/song.py
+import re
+from uuid import UUID
+
+from pydantic import BaseModel, field_validator, model_validator
+
+YOUTUBE_REGEX = re.compile(
+    r"^(https?://)?(www\.)?"
+    r"(youtube\.com/(watch\?v=|shorts/|embed/)|youtu\.be/)"
+    r"[\w\-]{11}"
+)
+
+
+class SongCreate(BaseModel):
+    url: str
+    start: float | None = None
+    end: float | None = None
+    speed: float = 1.0
+
+    @field_validator("url")
+    @classmethod
+    def validate_youtube_url(cls, v: str) -> str:
+        if not YOUTUBE_REGEX.match(v.strip()):
+            raise ValueError(
+                "url must be a valid YouTube URL "
+                "(youtube.com/watch?v=..., youtu.be/..., or shorts/)"
+            )
+        return v.strip()
+
+    @field_validator("speed")
+    @classmethod
+    def validate_speed(cls, v: float) -> float:
+        if not (0.5 <= v <= 4.0):
+            raise ValueError("speed must be between 0.5 and 4.0")
+        return v
+
+    @model_validator(mode="after")
+    def validate_trim_range(self) -> "SongCreate":
+        if self.start is not None and self.start < 0:
+            raise ValueError("start must be >= 0")
+        if self.end is not None and self.end <= 0:
+            raise ValueError("end must be > 0")
+        if self.start is not None and self.end is not None and self.start >= self.end:
+            raise ValueError("start must be less than end")
+        return self
+
+
+class SongResponse(BaseModel):
+    id: UUID
+    title: str | None
+    youtube_id: str | None
+    file_url: str | None
+    duration: float | None
+    speed: float
+    status: str
+    created_at: str
+
+    model_config = {"from_attributes": True}
