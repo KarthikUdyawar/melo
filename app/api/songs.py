@@ -2,8 +2,9 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
+from app.api.responses import envelope_response, paginated_response
 from app.core.config import get_settings
 from app.core.deps import DbDep
 from app.models.song import Song, SongStatus
@@ -13,7 +14,7 @@ from app.services.storage import _client
 router = APIRouter(prefix="/songs", tags=["songs"])
 
 
-def _serialize(song: Song) -> SongResponse:
+def _serialize(song: Song) -> dict:
     return SongResponse(
         id=song.id,
         title=song.title,
@@ -23,11 +24,11 @@ def _serialize(song: Song) -> SongResponse:
         speed=song.speed,
         status=song.status.value,
         created_at=song.created_at.isoformat(),
-    )
+    ).model_dump(mode="json")
 
 
-@router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=SongResponse)
-def create_song(payload: SongCreate, db: DbDep) -> SongResponse:
+@router.post("", status_code=status.HTTP_202_ACCEPTED)
+def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
     """
     Submit a YouTube URL for async download + processing.
 
@@ -66,18 +67,21 @@ def create_song(payload: SongCreate, db: DbDep) -> SongResponse:
         payload.speed,
     )
 
-    return _serialize(song)
+    return envelope_response(
+        _serialize(song), "Song submitted.", status.HTTP_202_ACCEPTED
+    )
 
 
-@router.get("", response_model=list[SongResponse])
-def list_songs(db: DbDep) -> list[SongResponse]:
+@router.get("")
+def list_songs(db: DbDep) -> JSONResponse:
     """List all songs with their current processing status."""
     songs = db.query(Song).order_by(Song.created_at.desc()).all()
-    return [_serialize(s) for s in songs]
+    records = [_serialize(s) for s in songs]
+    return paginated_response(records, len(records), "Songs retrieved.")
 
 
-@router.get("/{song_id}", response_model=SongResponse)
-def get_song(song_id: UUID, db: DbDep) -> SongResponse:
+@router.get("/{song_id}")
+def get_song(song_id: UUID, db: DbDep) -> JSONResponse:
     """Retrieve a single song by ID."""
     song = db.query(Song).filter(Song.id == song_id).first()
     if not song:
@@ -85,11 +89,12 @@ def get_song(song_id: UUID, db: DbDep) -> SongResponse:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Song {song_id} not found.",
         )
-    return _serialize(song)
+    return envelope_response(_serialize(song), "Song retrieved.")
 
 
 @router.get("/{song_id}/stream")
-def stream_song(song_id: UUID, db: DbDep):
+def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
+    # NOTE: StreamingResponse intentionally skips envelope (binary stream).
     song = db.query(Song).filter(Song.id == song_id).first()
     if not song:
         raise HTTPException(status_code=404, detail=f"Song {song_id} not found.")

@@ -2,10 +2,16 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import HTTPException, RequestValidationError
 
 from app.api.songs import router as songs_router
 from app.core.config import get_settings
 from app.core.db import init_db, ping_db
+from app.core.exception_handlers import (
+    http_exception_handler,
+    unhandled_exception_handler,
+    validation_exception_handler,
+)
 
 
 @asynccontextmanager
@@ -19,13 +25,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    return FastAPI(
+    app = FastAPI(
         title="Melo",
         description="Personal self-hosted audio library",
         version="0.1.0",
         debug=not settings.is_production,
         lifespan=lifespan,
     )
+
+    app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(Exception, unhandled_exception_handler)
+
+    app.include_router(songs_router)
+
+    return app
 
 
 app = create_app()
@@ -39,6 +53,3 @@ async def health() -> dict[str, object]:
         "db": "up" if db_ok else "down",
         "env": get_settings().app_env,
     }
-
-
-app.include_router(songs_router)
