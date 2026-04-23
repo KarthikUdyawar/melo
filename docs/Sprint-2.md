@@ -19,15 +19,15 @@
 ### 📦 API-1 — Response Envelope
 **Branch:** `feature/api-envelope`
 
-- [ ] `app/schemas/envelope.py` — `Envelope` generic schema:
+- [x] `app/schemas/envelope.py` — `Envelope` generic schema:
   ```python
   class Envelope(BaseModel, Generic[T]):
       status_code: int
       message: str
       body: T | None
   ```
-- [ ] `app/api/responses.py` — `envelope_response(data, message, status_code)` helper that returns `JSONResponse` with envelope shape
-- [ ] `app/api/responses.py` — `paginated_response(records, count, message, status_code)` helper:
+- [x] `app/api/responses.py` — `envelope_response(data, message, status_code)` helper that returns `JSONResponse` with envelope shape
+- [x] `app/api/responses.py` — `paginated_response(records, count, message, status_code)` helper:
   ```json
   {
     "status_code": 200,
@@ -35,31 +35,31 @@
     "body": { "records": [...], "count": 3 }
   }
   ```
-- [ ] `app/core/exception_handlers.py` — global `HTTPException` handler → envelope with `body: null`
-- [ ] `app/core/exception_handlers.py` — global `RequestValidationError` handler → 422 envelope with field errors in `message`
-- [ ] `app/core/exception_handlers.py` — global unhandled `Exception` handler → 500 envelope
-- [ ] Register all handlers in `main.py` via `app.add_exception_handler(...)`
-- [ ] Skip envelope for: `GET /songs/{id}/stream`, `/docs`, `/redoc`, `/openapi.json`, `/health`
-- [ ] Update all existing routers (`songs.py`) to use `envelope_response` / `paginated_response`
-- [ ] Verify: error responses from 404, 409, 422, 500 all return envelope with `body: null`
+- [x] `app/core/exception_handlers.py` — global `HTTPException` handler → envelope with `body: null`
+- [x] `app/core/exception_handlers.py` — global `RequestValidationError` handler → 422 envelope with field errors in `message`
+- [x] `app/core/exception_handlers.py` — global unhandled `Exception` handler → 500 envelope
+- [x] Register all handlers in `main.py` via `app.add_exception_handler(...)`
+- [x] Skip envelope for: `GET /songs/{id}/stream`, `/docs`, `/redoc`, `/openapi.json`, `/health`
+- [x] Update all existing routers (`songs.py`) to use `envelope_response` / `paginated_response`
+- [x] Verify: error responses from 404, 409, 422, 500 all return envelope with `body: null`
 
 ---
 
 ### 📝 LOG-1 — Structured JSON Logging + Request Middleware
 **Branch:** `feature/logging`
 
-- [ ] `app/core/logging.py` — configure `structlog` (or `python-json-logger`) at app startup:
+- [x] `app/core/logging.py` — configure `structlog` (or `python-json-logger`) at app startup:
   - JSON format in staging/production, pretty console format in development
   - Fields on every log line: `timestamp`, `level`, `logger`, `message`, `env`
-- [ ] `app/core/middleware.py` — `RequestLoggingMiddleware` (Starlette `BaseHTTPMiddleware`):
+- [x] `app/core/middleware.py` — `RequestLoggingMiddleware` (Starlette `BaseHTTPMiddleware`):
   - On request: log `method`, `path`, `query_params`, `client_ip`
   - On response: log `status_code`, `duration_ms`
   - Skip logging body for `/health`
-- [ ] Register middleware in `main.py`
-- [ ] Replace all `logging.getLogger(__name__)` calls across `downloader.py`, `storage.py`, `tasks.py`, `songs.py` with structured logger
-- [ ] Uvicorn access logs disabled (duplicate of middleware); uvicorn error logs kept
-- [ ] Worker logs (Celery) also emit JSON: `task_name`, `song_id`, `status`, `duration_ms`
-- [ ] Verify: `make logs-api` shows one JSON line per request with all fields
+- [x] Register middleware in `main.py`
+- [x] Replace all `logging.getLogger(__name__)` calls across `downloader.py`, `storage.py`, `tasks.py`, `songs.py` with structured logger
+- [x] Uvicorn access logs disabled (duplicate of middleware); uvicorn error logs kept
+- [x] Worker logs (Celery) also emit JSON: `task_name`, `song_id`, `status`, `duration_ms`
+- [x] Verify: `make logs-api` shows one JSON line per request with all fields
 
 ---
 

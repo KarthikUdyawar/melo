@@ -1,12 +1,17 @@
 # app/services/downloader.py
-import logging
+"""
+Audio downloader — wraps yt-dlp for Melo.
+"""
+
 from pathlib import Path
 from typing import Any, cast
 
 import yt_dlp
 from yt_dlp.utils import DownloadError as YtDlpDownloadError
 
-logger = logging.getLogger(__name__)
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Worker container writes downloads here; volume `worker_tmp` is mounted at /tmp/melo
 _DOWNLOAD_DIR = Path("/tmp/melo")
@@ -60,30 +65,65 @@ def download_audio(url: str, song_id: str) -> tuple[Path, float | None]:
         "socket_timeout": 30,
     }
 
-    logger.info("Starting download: song_id=%s url=%s", song_id, url)
+    logger.info(
+        "download_start",
+        song_id=song_id,
+        url=url,
+        output_path=str(out_path),
+    )
 
     try:
         with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
+            logger.debug(
+                "yt_dlp_extract_info_begin",
+                song_id=song_id,
+                url=url,
+                options=ydl_opts,
+            )
+
             info = ydl.extract_info(url, download=True)
+
+            logger.debug(
+                "yt_dlp_extract_info_success",
+                song_id=song_id,
+                title=info.get("title") if info else None,
+                extractor=info.get("extractor") if info else None,
+            )
     except YtDlpDownloadError as exc:
+        logger.error(
+            "download_failed_yt_dlp",
+            song_id=song_id,
+            url=url,
+            error=str(exc),
+        )
         raise DownloadError(f"yt-dlp failed for {url!r}: {exc}") from exc
     except Exception as exc:
+        logger.exception(  # includes stack trace
+            "download_failed_unexpected",
+            song_id=song_id,
+            url=url,
+        )
         raise DownloadError(f"Unexpected error downloading {url!r}: {exc}") from exc
 
     if not out_path.exists():
+        logger.error(
+            "download_missing_output",
+            song_id=song_id,
+            expected_path=str(out_path),
+        )
         raise DownloadError(
             f"Expected output file not found after download: {out_path}"
         )
 
     duration: float | None = None
     if info:
-        duration = info.get("duration")  # seconds, float or None
+        duration = info.get("duration")
 
     logger.info(
-        "Download complete: song_id=%s path=%s duration=%s",
-        song_id,
-        out_path,
-        duration,
+        "download_complete",
+        song_id=song_id,
+        path=str(out_path),
+        duration=duration,
     )
     return out_path, duration
 
@@ -94,16 +134,16 @@ def download_audio(url: str, song_id: str) -> tuple[Path, float | None]:
 
 
 class _YtDlpLogger:
-    """Bridge yt-dlp's internal logger to stdlib logging."""
+    """Bridge yt-dlp's internal logger to structlog."""
 
     def debug(self, msg: str) -> None:
-        logger.debug("[yt-dlp] %s", msg)
+        logger.debug(msg, source="yt-dlp")
 
     def info(self, msg: str) -> None:
-        logger.info("[yt-dlp] %s", msg)
+        logger.info(msg, source="yt-dlp")
 
     def warning(self, msg: str) -> None:
-        logger.warning("[yt-dlp] %s", msg)
+        logger.warning(msg, source="yt-dlp")
 
     def error(self, msg: str) -> None:
-        logger.error("[yt-dlp] %s", msg)
+        logger.error(msg, source="yt-dlp")

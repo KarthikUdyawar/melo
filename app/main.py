@@ -13,14 +13,21 @@ from app.core.exception_handlers import (
     validation_exception_handler,
 )
 
+# setup_logging() is called at import time inside app.core.logging —
+# importing it here ensures logging is ready before any other module loads.
+from app.core.logging import get_logger  # noqa: E402
+from app.core.middleware import RequestLoggingMiddleware
+
+logger = get_logger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     init_db()
-    # Future: auto-create MinIO bucket here (WORKER-1)
-    _ = settings  # referenced to avoid unused-var lint error
+    logger.info("app_startup", env=settings.app_env, log_file=settings.log_file_path)
     yield
+    logger.info("app_shutdown")
 
 
 def create_app() -> FastAPI:
@@ -32,6 +39,8 @@ def create_app() -> FastAPI:
         debug=not settings.is_production,
         lifespan=lifespan,
     )
+
+    app.add_middleware(RequestLoggingMiddleware)
 
     app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
     app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]

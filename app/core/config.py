@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     # ── App ───────────────────────────────────────────────────────────────────
     app_env: str = Field(default="development")
     log_level: str = Field(default="info")
+    log_file_path: str = Field(default="/var/log/melo/app.log")
 
     # ── Database ──────────────────────────────────────────────────────────────
     database_url: str = Field(

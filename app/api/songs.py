@@ -1,4 +1,6 @@
 # app/api/songs.py
+import re
+from urllib.parse import parse_qs, urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -7,11 +9,23 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.api.responses import envelope_response, paginated_response
 from app.core.config import get_settings
 from app.core.deps import DbDep
+from app.core.logging import get_logger
 from app.models.song import Song, SongStatus
 from app.schemas.song import SongCreate, SongResponse
 from app.services.storage import _client
 
+logger = get_logger(__name__)
+
 router = APIRouter(prefix="/songs", tags=["songs"])
+
+YOUTUBE_DOMAINS = {
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "youtu.be",
+}
+
+YOUTUBE_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 
 def _serialize(song: Song) -> dict:
@@ -35,37 +49,63 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
     Returns the created song record (status=pending) immediately.
     The Celery worker will update status → processing → done/failed.
     """
-    existing = (
-        db.query(Song)
-        .filter(Song.youtube_id == _extract_youtube_id(payload.url))
-        .first()
-    )
+    logger.info("create_song_request", url=payload.url, speed=payload.speed)
+
+    youtube_id = _extract_youtube_id(payload.url)
+    logger.debug("youtube_id_extracted", youtube_id=youtube_id)
+
+    existing = db.query(Song).filter(Song.youtube_id == youtube_id).first()
+
     if existing:
+        logger.warning(
+            "duplicate_song_submission",
+            youtube_id=youtube_id,
+            existing_song_id=str(existing.id),
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Song with youtube_id '{existing.youtube_id}' \
                 already exists (id={existing.id}).",
         )
 
-    youtube_id = _extract_youtube_id(payload.url)
     song = Song(
         youtube_id=youtube_id,
         speed=payload.speed,
         status=SongStatus.pending,
     )
+
     db.add(song)
     db.commit()
     db.refresh(song)
 
+    logger.info(
+        "song_created",
+        song_id=str(song.id),
+        youtube_id=youtube_id,
+        status=song.status.value,
+    )
+
     from app.workers.tasks import process_song_task
 
-    process_song_task.delay(
-        str(song.id),
-        payload.url,
-        payload.start,
-        payload.end,
-        payload.speed,
-    )
+    try:
+        process_song_task.delay(
+            str(song.id),
+            payload.url,
+            payload.start,
+            payload.end,
+            payload.speed,
+        )
+        logger.info(
+            "song_processing_dispatched",
+            song_id=str(song.id),
+        )
+    except Exception as exc:
+        logger.error(
+            "celery_dispatch_failed",
+            song_id=str(song.id),
+            error=str(exc),
+        )
+        raise
 
     return envelope_response(
         _serialize(song), "Song submitted.", status.HTTP_202_ACCEPTED
@@ -75,7 +115,12 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
 @router.get("")
 def list_songs(db: DbDep) -> JSONResponse:
     """List all songs with their current processing status."""
+    logger.debug("list_songs_request")
+
     songs = db.query(Song).order_by(Song.created_at.desc()).all()
+
+    logger.info("songs_retrieved", count=len(songs))
+
     records = [_serialize(s) for s in songs]
     return paginated_response(records, len(records), "Songs retrieved.")
 
@@ -83,26 +128,48 @@ def list_songs(db: DbDep) -> JSONResponse:
 @router.get("/{song_id}")
 def get_song(song_id: UUID, db: DbDep) -> JSONResponse:
     """Retrieve a single song by ID."""
+    logger.debug("get_song_request", song_id=str(song_id))
+
     song = db.query(Song).filter(Song.id == song_id).first()
+
     if not song:
+        logger.warning("song_not_found", song_id=str(song_id))
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Song {song_id} not found.",
         )
+
+    logger.info("song_retrieved", song_id=str(song_id))
+
     return envelope_response(_serialize(song), "Song retrieved.")
 
 
 @router.get("/{song_id}/stream")
 def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
     # NOTE: StreamingResponse intentionally skips envelope (binary stream).
+    logger.debug("stream_request", song_id=str(song_id))
+
     song = db.query(Song).filter(Song.id == song_id).first()
+
     if not song:
+        logger.warning("stream_song_not_found", song_id=str(song_id))
         raise HTTPException(status_code=404, detail=f"Song {song_id} not found.")
+
     if song.status != SongStatus.done:
+        logger.warning(
+            "stream_not_ready",
+            song_id=str(song_id),
+            status=song.status.value,
+        )
         raise HTTPException(
             status_code=409, detail=f"Song not ready. Status: {song.status.value}"
         )
+
     if not song.file_url:
+        logger.error(
+            "missing_file_url",
+            song_id=str(song_id),
+        )
         raise HTTPException(
             status_code=500, detail="Song marked done but has no file_url."
         )
@@ -111,11 +178,22 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
     client = _client()
 
     try:
+        logger.debug(
+            "fetching_from_storage",
+            bucket=s.minio_bucket,
+            file_url=song.file_url,
+        )
         response = client.get_object(s.minio_bucket, song.file_url)
     except Exception as exc:
+        logger.error("stream_fetch_error", song_id=str(song_id), error=str(exc))
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     filename = f"{song.title or song_id}.mp3"
+    logger.info(
+        "stream_started",
+        song_id=str(song_id),
+        filename=filename,
+    )
 
     return StreamingResponse(
         response.stream(32 * 1024),
@@ -126,24 +204,32 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
 
 def _extract_youtube_id(url: str) -> str:
     """
-    Extract the 11-char video ID from any supported YouTube URL format.
-
-    Supported:
-      https://www.youtube.com/watch?v=<id>
-      https://youtu.be/<id>
-      https://youtube.com/shorts/<id>
-      https://youtube.com/embed/<id>
+    Extract YouTube video ID from any URL format.
+    Works with playlists but only returns video_id.
     """
-    import re
+    parsed = urlparse(url)
+    domain = parsed.netloc.lower()
 
-    patterns = [
-        r"(?:v=)([\w\-]{11})",
-        r"youtu\.be/([\w\-]{11})",
-        r"(?:shorts|embed)/([\w\-]{11})",
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, url)
-        if m:
-            return m.group(1)
-    # Fallback: last 11-char segment (already validated by SongCreate)
-    return url.split("/")[-1][:11]
+    if domain not in YOUTUBE_DOMAINS:
+        raise ValueError(f"Invalid YouTube domain: {domain}")
+
+    # --- 1. Query param (?v=...) → MOST IMPORTANT (covers playlists)
+    query = parse_qs(parsed.query)
+    video_ids = query.get("v")
+    if video_ids:
+        vid = video_ids[0]
+        if YOUTUBE_ID_REGEX.match(vid):
+            return vid
+
+    # --- 2. Short URL (youtu.be/<id>)
+    if domain == "youtu.be":
+        vid = parsed.path.lstrip("/").split("/")[0]
+        if YOUTUBE_ID_REGEX.match(vid):
+            return vid
+
+    # --- 3. Path-based formats (/shorts/, /embed/, /live/)
+    match = re.search(r"/(shorts|embed|live)/([\w\-]{11})", parsed.path)
+    if match:
+        return match.group(2)
+
+    raise ValueError("Could not extract valid YouTube video ID")

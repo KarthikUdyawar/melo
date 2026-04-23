@@ -1,11 +1,16 @@
 # app/workers/celery_app.py
-import logging
 import os
 
 from celery import Celery
-from celery.signals import worker_ready
+from celery.signals import worker_init, worker_ready
 
-logger = logging.getLogger(__name__)
+# Configure structured logging before any other import so worker loggers
+# are fully set up from the first line of every task module.
+from app.core.logging import get_logger, setup_logging
+
+setup_logging()
+
+logger = get_logger(__name__)
 
 celery_app = Celery(
     "melo",
@@ -25,6 +30,13 @@ celery_app.conf.update(
 )
 
 
+@worker_init.connect
+def on_worker_init(**kwargs):
+    """Re-run setup_logging on worker fork so file handler is open in child process."""
+    setup_logging()
+    logger.info("worker_logging_ready")
+
+
 @worker_ready.connect
 def on_worker_ready(**kwargs):
     """
@@ -35,5 +47,6 @@ def on_worker_ready(**kwargs):
 
     try:
         ensure_bucket_exists()
+        logger.info("worker_ready", bucket_check="ok")
     except StorageError:
-        logger.exception("Failed to ensure MinIO bucket on worker startup")
+        logger.exception("worker_ready_bucket_failed")

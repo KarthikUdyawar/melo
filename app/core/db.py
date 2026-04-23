@@ -1,3 +1,4 @@
+# app/core/db.py
 from collections.abc import Generator
 
 from sqlalchemy import create_engine, text
