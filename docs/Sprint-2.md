@@ -66,21 +66,25 @@
 ### 🎬 META-1 — YouTube Metadata Probe on Ingest
 **Branch:** `feature/metadata`
 
-- [ ] `app/models/song.py` — add fields: `thumbnail_url: str | None`, `channel: str | None`, `upload_date: str | None`
-- [ ] `app/services/downloader.py` — `probe_metadata(url) -> dict` using `yt_dlp.YoutubeDL.extract_info(download=False)`:
-  - Returns: `title`, `duration`, `thumbnail`, `channel`, `upload_date`
+- [x] `app/models/song.py` — add fields: `thumbnail_url: str | None`, `channel: str | None`, `upload_date: str | None`
+- [x] `app/models/song.py` — add fields: `start: float | None`, `end: float | None` (persisted to DB)
+- [x] `app/models/song.py` — removed `unique=True` on `youtube_id` to allow multiple rows per video (dedup-with-trim)
+- [x] `app/services/downloader.py` — `probe_metadata(url) -> dict` using `yt_dlp.YoutubeDL.extract_info(download=False)`:
+  - Returns: `title`, `duration`, `thumbnail_url`, `channel`, `upload_date`
   - Raises `DownloadError` on failure
-- [ ] `app/workers/tasks.py` — call `probe_metadata` as first step in `process_song_task`:
-  - Populate `song.title`, `song.duration`, `song.thumbnail_url` immediately after probe (before download)
+  - Uses same explicit format selector (`140/251/…`) + `extractor_args: {skip: [hls, dash]}` to suppress JS runtime warnings
+  - `noplaylist: True` — playlist URLs resolve to single `?v=` video only
+- [x] `app/workers/tasks.py` — call `probe_metadata` as first step in `process_song_task`:
+  - Populate `song.title`, `song.duration`, `song.thumbnail_url`, `song.channel`, `song.upload_date` immediately after probe (before download)
   - Status stays `processing` during download
-- [ ] **Dedup with different trim:** `POST /songs` with existing `youtube_id` but different `start`/`end`:
-  - Do NOT 409 — create new `Song` DB record pointing to same MinIO object
-  - Reuse `file_url` from existing done song with same `youtube_id`
-  - Copy `title`, `duration`, `thumbnail_url` from existing record — no re-probe, no re-download
-  - Enqueue no Celery task — record goes straight to `done`
-- [ ] `app/schemas/song.py` — add `thumbnail_url`, `channel`, `upload_date` to `SongResponse`
-- [ ] `GET /songs/{id}` — returns metadata fields alongside existing fields
-- [ ] `GET /songs` — includes metadata fields in list response
+- [x] **Dedup with different trim:** `POST /songs` with existing `youtube_id` but different `start`/`end`:
+  - Router always inserts new `Song` record (no 409)
+  - Task detects existing `done` record with same `youtube_id` → copies `file_url` + all metadata → marks `done` immediately
+  - No re-probe, no re-download, no Celery retry risk
+- [x] `app/api/songs.py` — removed 409 duplicate check; `_serialize` passes all metadata fields
+- [x] `app/schemas/song.py` — add `thumbnail_url`, `channel`, `upload_date`, `start`, `end` to `SongResponse` (all `| None = None`)
+- [x] `GET /songs/{id}` — returns metadata fields alongside existing fields
+- [x] `GET /songs` — includes metadata fields in list response
 
 ---
 
@@ -92,7 +96,6 @@
   - Falls back to `-c:a libmp3lame` re-encode if stream copy fails (codec mismatch)
   - Raises `ProcessingError` on non-zero ffmpeg exit
   - Cleans up `output_path` on failure
-- [ ] `app/models/song.py` — `start: float | None`, `end: float | None` fields (already in `SongCreate`, now persisted to DB)
 - [ ] `app/workers/tasks.py` — persist `start` and `end` onto `Song` record after creation
 - [ ] `GET /songs/{id}/stream` — trim-on-stream logic:
   - If `song.start` or `song.end` is set: fetch from MinIO → write to `/tmp/melo/{id}_original.mp3` → `trim_audio(...)` → stream trimmed file → cleanup both files
@@ -105,10 +108,10 @@
 ## Definition of Done
 
 - [ ] All feature branches merged to `develop` via PR
-- [ ] `POST /songs` with existing `youtube_id` + new trim params → new DB record, no re-download, status `done` immediately
+- [x] `POST /songs` with existing `youtube_id` + new trim params → new DB record, no re-download, status `done` immediately
 - [ ] `GET /songs/{id}/stream` with trim params → correct trimmed audio segment
-- [ ] All endpoints (except stream + docs) return envelope shape
-- [ ] `make logs-api` shows structured JSON per request
+- [x] All endpoints (except stream + docs) return envelope shape
+- [x] `make logs-api` shows structured JSON per request
 - [ ] `SPRINT_2.md` checked off and moved to `melo/docs/sprints/`
 
 ---
@@ -124,12 +127,16 @@
 
 ## Decision Log
 
-| Decision                                              | Reason                                                                                                                                    |
-| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Dedup reuses existing MinIO object                    | Same audio source, different trim — no point re-downloading. New DB row allows different `start`/`end` per record while sharing one file. |
-| FFmpeg trim on stream, not on ingest                  | Avoids storing N trimmed variants per song. One source file in MinIO; trim applied ephemerally per stream request.                        |
-| `probe_metadata(download=False)` before download      | Populates `title`, `thumbnail_url`, `duration` immediately so `GET /songs/{id}` returns useful data even while status is `processing`.    |
-| Global exception handler wraps all errors in envelope | Single place to control error shape; routers never build error responses manually.                                                        |
-| Skip envelope on `StreamingResponse` endpoints        | Binary stream cannot be wrapped in JSON. Documented exception — not a design inconsistency.                                               |
-| Structured JSON logs, pretty in dev                   | JSON parseable by log aggregators in staging/prod; human-readable in dev without config change.                                           |
-| Uvicorn access logs disabled                          | Middleware already logs method + path + status + duration — duplicate lines add noise.                                                    |
+| Decision                                              | Reason                                                                                                                                     |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Dedup reuses existing MinIO object                    | Same audio source, different trim — no point re-downloading. New DB row allows different `start`/`end` per record while sharing one file.  |
+| FFmpeg trim on stream, not on ingest                  | Avoids storing N trimmed variants per song. One source file in MinIO; trim applied ephemerally per stream request.                         |
+| `probe_metadata(download=False)` before download      | Populates `title`, `thumbnail_url`, `duration` immediately so `GET /songs/{id}` returns useful data even while status is `processing`.     |
+| Global exception handler wraps all errors in envelope | Single place to control error shape; routers never build error responses manually.                                                         |
+| Skip envelope on `StreamingResponse` endpoints        | Binary stream cannot be wrapped in JSON. Documented exception — not a design inconsistency.                                                |
+| Structured JSON logs, pretty in dev                   | JSON parseable by log aggregators in staging/prod; human-readable in dev without config change.                                            |
+| Uvicorn access logs disabled                          | Middleware already logs method + path + status + duration — duplicate lines add noise.                                                     |
+| Removed `unique=True` on `youtube_id`                 | Dedup-with-trim requires multiple DB rows per video. Uniqueness enforced at task level (check for existing `done` record), not DB level.   |
+| `noplaylist: True` on both probe and download         | Playlist URLs (`?v=X&list=Y`) must resolve to single video only. Without this, yt-dlp resolves playlist context and may pick wrong ID.     |
+| Pinned format selector on probe too                   | `download=False` still triggers JS-runtime format checks. Same explicit format IDs + `skip: [hls, dash]` suppress the 5min hang + warning. |
+| All new `SongResponse` fields default to `None`       | Record is serialized immediately after insert (pre-probe). Fields populated async by worker — must not be required at creation time.       |

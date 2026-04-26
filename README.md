@@ -27,7 +27,8 @@ graph TD
     API -->|create record status=pending| PG[(PostgreSQL)]
     API -->|enqueue task| Redis[(Redis)]
     Redis -->|consume| Worker
-    Worker -->|yt-dlp download| YT[YouTube]
+    Worker -->|probe_metadata yt-dlp| YT[YouTube]
+    Worker -->|yt-dlp download| YT
     Worker -->|upload mp3| MinIO[(MinIO)]
     Worker -->|update status=done| PG
     Client -->|GET /songs/id/stream| API
@@ -48,13 +49,15 @@ sequenceDiagram
     participant M as MinIO
     participant D as DB
 
-    C->>A: POST /songs {url, speed}
+    C->>A: POST /songs {url, start, end, speed}
     A->>D: INSERT song status=pending
     A->>R: enqueue process_song_task
     A-->>C: 202 {id, status=pending}
 
     R->>W: dequeue task
     W->>D: UPDATE status=processing
+    W->>W: probe_metadata (yt-dlp, download=False)
+    W->>D: UPDATE title, duration, thumbnail_url, channel, upload_date
     W->>W: yt-dlp download → /tmp/melo/<id>.mp3
     W->>M: upload songs/<id>.mp3
     W->>D: UPDATE file_url, duration, status=done
@@ -67,13 +70,40 @@ sequenceDiagram
 
 ---
 
+## Dedup Flow (same youtube_id, different trim)
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as API
+    participant R as Redis
+    participant W as Worker
+    participant D as DB
+
+    C->>A: POST /songs {url, start=30, end=90}
+    A->>D: INSERT new song record status=pending
+    A->>R: enqueue process_song_task
+    A-->>C: 202 {id, status=pending}
+
+    R->>W: dequeue task
+    W->>D: UPDATE status=processing
+    W->>W: probe_metadata
+    W->>D: UPDATE metadata fields
+    W->>D: SELECT existing done song WHERE youtube_id matches
+    W->>D: UPDATE new song: copy file_url + metadata, status=done
+    Note over W: No download. No MinIO upload.
+```
+
+---
+
 ## Task State Machine
 
 ```mermaid
 stateDiagram-v2
     [*] --> pending: POST /songs
     pending --> processing: worker picks up task
-    processing --> done: download + upload success
+    processing --> done: probe + download + upload success
+    processing --> done: dedup hit (existing file reused)
     processing --> failed: DownloadError / StorageError
     processing --> processing: retry (max 3×, unknown errors only)
     processing --> failed: MaxRetriesExceeded
@@ -125,10 +155,15 @@ curl -X POST http://localhost:8000/songs \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "speed": 1.0}'
 
-# 5. Check status
+# 5. Submit same song with trim (no re-download)
+curl -X POST http://localhost:8000/songs \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "start": 30, "end": 90}'
+
+# 6. Check status
 curl http://localhost:8000/songs/<id>
 
-# 6. Download when done
+# 7. Download when done
 curl -OJ http://localhost:8000/songs/<id>/stream
 ```
 
@@ -154,15 +189,32 @@ curl -OJ http://localhost:8000/songs/<id>/stream
 
 ## API
 
-| Method | Path                 | Description                    |
-| ------ | -------------------- | ------------------------------ |
-| `POST` | `/songs`             | Submit YouTube URL → async job |
-| `GET`  | `/songs`             | List all songs                 |
-| `GET`  | `/songs/{id}`        | Get song detail + status       |
-| `GET`  | `/songs/{id}/stream` | Download mp3                   |
-| `GET`  | `/health`            | Health check                   |
+| Method | Path                 | Description                                                                                                                    |
+| ------ | -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `POST` | `/songs`             | Submit YouTube URL → async job. Supports `start`, `end`, `speed` params. Same `youtube_id` + new trim → dedup, no re-download. |
+| `GET`  | `/songs`             | List all songs with metadata                                                                                                   |
+| `GET`  | `/songs/{id}`        | Get song detail + status + metadata                                                                                            |
+| `GET`  | `/songs/{id}/stream` | Download mp3                                                                                                                   |
+| `GET`  | `/health`            | Health check                                                                                                                   |
 
 Interactive docs: **http://localhost:8000/docs**
+
+### Song fields
+
+| Field           | Type           | Notes                                              |
+| --------------- | -------------- | -------------------------------------------------- |
+| `id`            | UUID           |                                                    |
+| `youtube_id`    | string         | Extracted from URL                                 |
+| `title`         | string \| null | Populated by probe before download completes       |
+| `duration`      | float \| null  | Seconds. Probe estimate, overwritten post-download |
+| `thumbnail_url` | string \| null | YouTube thumbnail                                  |
+| `channel`       | string \| null | Uploader channel name                              |
+| `upload_date`   | string \| null | YYYYMMDD                                           |
+| `start`         | float \| null  | Trim start in seconds                              |
+| `end`           | float \| null  | Trim end in seconds                                |
+| `speed`         | float          | Playback speed (0.5–4.0)                           |
+| `status`        | enum           | `pending` → `processing` → `done` / `failed`       |
+| `file_url`      | string \| null | MinIO object key, set when `done`                  |
 
 ---
 
@@ -203,20 +255,27 @@ melo/
 
 ## Decision Log
 
-| Decision                               | Reason                                                                                       |
-| -------------------------------------- | -------------------------------------------------------------------------------------------- |
-| No Alembic                             | Solo project; `create_all()` on startup sufficient                                           |
-| `APP_ENV`-driven env files             | Clean separation: dev (localhost) / staging (Docker) / prod                                  |
-| Pinned yt-dlp format selector          | `bestaudio` needs JS runtime; explicit IDs (`140/251/…`) use plain HTTPS                     |
-| `worker_ready` signal for MinIO bucket | Create once per process, not per task                                                        |
-| Proxy stream via FastAPI               | Presigned URLs signed to internal hostname break on host rewrite; API proxies bytes directly |
-| `expire_on_commit=False`               | Avoids lazy-load errors post-commit in Celery context                                        |
+| Decision                               | Reason                                                                                                                             |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| No Alembic                             | Solo project; `create_all()` on startup sufficient                                                                                 |
+| `APP_ENV`-driven env files             | Clean separation: dev (localhost) / staging (Docker) / prod                                                                        |
+| Pinned yt-dlp format selector          | `bestaudio` needs JS runtime; explicit IDs (`140/251/…`) use plain HTTPS                                                           |
+| Same format selector on probe          | `download=False` still triggers JS-runtime format checks; pinned IDs + `skip:[hls,dash]` suppress 5min hang and warning            |
+| `noplaylist: True` on probe + download | Playlist URLs must resolve to single `?v=` video; without this yt-dlp picks wrong video from playlist context                      |
+| `worker_ready` signal for MinIO bucket | Create once per process, not per task                                                                                              |
+| Proxy stream via FastAPI               | Presigned URLs signed to internal hostname break on host rewrite; API proxies bytes directly                                       |
+| `expire_on_commit=False`               | Avoids lazy-load errors post-commit in Celery context                                                                              |
+| Removed `unique=True` on `youtube_id`  | Dedup-with-trim requires multiple DB rows per video; uniqueness enforced at task level                                             |
+| Dedup at task level, not router level  | Router inserts new record for every submission; worker detects existing `done` record and fast-paths to `done` without re-download |
+| `probe_metadata` before download       | Populates title, thumbnail, channel immediately — `GET /songs/{id}` returns useful data while still `processing`                   |
+| All new `SongResponse` fields nullable | Record serialized at creation (pre-probe); fields populated async — cannot be required                                             |
 
 ---
 
 ## Out of Scope (v1)
 
-- FFmpeg trim + speed processing → Sprint 2
-- Favorites + playlists endpoints → Sprint 2  
+- FFmpeg trim on stream → Sprint 2 (FFMPEG-1, in progress)
+- Speed processing (`atempo`) → Sprint 2
+- Favorites + playlists endpoints → Sprint 3
 - Frontend UI → Sprint 3
 - Multi-user auth, lyrics, waveforms → never (personal tool)

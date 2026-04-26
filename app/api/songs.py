@@ -35,8 +35,13 @@ def _serialize(song: Song) -> dict:
         youtube_id=song.youtube_id,
         file_url=song.file_url,
         duration=song.duration,
+        start=song.start,
+        end=song.end,
         speed=song.speed,
         status=song.status.value,
+        thumbnail_url=song.thumbnail_url,
+        channel=song.channel,
+        upload_date=song.upload_date,
         created_at=song.created_at.isoformat(),
     ).model_dump(mode="json")
 
@@ -46,30 +51,19 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
     """
     Submit a YouTube URL for async download + processing.
 
-    Returns the created song record (status=pending) immediately.
-    The Celery worker will update status → processing → done/failed.
+    - First submission: creates record, enqueues Celery task.
+    - Same youtube_id + different trim: creates new record, task handles dedup
+      (reuses existing MinIO object, no re-download).
     """
     logger.info("create_song_request", url=payload.url, speed=payload.speed)
 
     youtube_id = _extract_youtube_id(payload.url)
     logger.debug("youtube_id_extracted", youtube_id=youtube_id)
 
-    existing = db.query(Song).filter(Song.youtube_id == youtube_id).first()
-
-    if existing:
-        logger.warning(
-            "duplicate_song_submission",
-            youtube_id=youtube_id,
-            existing_song_id=str(existing.id),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Song with youtube_id '{existing.youtube_id}' \
-                already exists (id={existing.id}).",
-        )
-
     song = Song(
         youtube_id=youtube_id,
+        start=payload.start,
+        end=payload.end,
         speed=payload.speed,
         status=SongStatus.pending,
     )

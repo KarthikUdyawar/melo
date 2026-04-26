@@ -47,12 +47,18 @@ class SongCreate(BaseModel):
 
 class SongResponse(BaseModel):
     id: UUID
-    title: str | None
-    youtube_id: str | None
-    file_url: str | None
-    duration: float | None
-    speed: float
+    title: str | None = None
+    youtube_id: str | None = None
+    file_url: str | None = None
+    duration: float | None = None
+    start: float | None = None
+    end: float | None = None
+    speed: float = 1.0
     status: str
+    # Metadata fields — populated after probe, before download completes
+    thumbnail_url: str | None = None
+    channel: str | None = None
+    upload_date: str | None = None  # YYYYMMDD string from yt-dlp
     created_at: str
 
     model_config = {"from_attributes": True}

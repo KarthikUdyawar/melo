@@ -21,6 +21,74 @@ class DownloadError(Exception):
     """Raised when yt-dlp fails to download or extract audio."""
 
 
+# ---------------------------------------------------------------------------
+# Metadata probe (no download)
+# ---------------------------------------------------------------------------
+
+
+def probe_metadata(url: str) -> dict:
+    """
+    Extract metadata for *url* without downloading any media.
+
+    Returns a dict with keys:
+        title, duration, thumbnail_url, channel, upload_date
+
+    Raises:
+        DownloadError: on any yt-dlp failure.
+    """
+    ydl_opts: dict[str, object] = {
+        "quiet": True,
+        "no_warnings": True,
+        "logger": _YtDlpLogger(),
+        "socket_timeout": 15,
+        # Same format selector as download — avoids JS-runtime-dependent formats
+        # and suppresses the repeated "No supported JavaScript runtime" warning.
+        "format": "140/251/250/249/139/18",
+        # Skip format types that require JS signature extraction
+        "extractor_args": {"youtube": {"skip": ["hls", "dash"]}},
+        # Probe only needs top-level info, not playlist entries
+        "noplaylist": True,
+    }
+
+    logger.info("probe_start", url=url)
+
+    try:
+        with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except YtDlpDownloadError as exc:
+        logger.error("probe_failed_yt_dlp", url=url, error=str(exc))
+        raise DownloadError(f"yt-dlp probe failed for {url!r}: {exc}") from exc
+    except Exception as exc:
+        logger.exception("probe_failed_unexpected", url=url)
+        raise DownloadError(f"Unexpected error probing {url!r}: {exc}") from exc
+
+    if not info:
+        raise DownloadError(f"yt-dlp returned no info for {url!r}")
+
+    result = {
+        "title": info.get("title"),
+        "duration": info.get("duration"),
+        "thumbnail_url": info.get("thumbnail"),
+        "channel": info.get("channel") or info.get("uploader"),
+        "upload_date": info.get("upload_date"),  # YYYYMMDD string
+    }
+
+    logger.info(
+        "probe_complete",
+        url=url,
+        title=result["title"],
+        duration=result["duration"],
+        channel=result["channel"],
+    )
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Audio download
+# ---------------------------------------------------------------------------
+
+
 def download_audio(url: str, song_id: str) -> tuple[Path, float | None]:
     """
     Download the best audio track for *url* and transcode it to mp3.
@@ -63,6 +131,8 @@ def download_audio(url: str, song_id: str) -> tuple[Path, float | None]:
         "logger": _YtDlpLogger(),
         "retries": 3,
         "socket_timeout": 30,
+        # Always download single video even if URL contains playlist params
+        "noplaylist": True,
     }
 
     logger.info(

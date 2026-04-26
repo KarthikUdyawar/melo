@@ -58,10 +58,18 @@ def process_song_task(
     Steps
     -----
     1. Mark DB record → ``processing``
-    2. Download audio with yt-dlp  (→ /tmp/melo/<song_id>.mp3)
-    3. Upload mp3 to MinIO          (→ songs/<song_id>.mp3)
-    4. Update DB: file_url, duration, status → ``done``
-    5. Clean up the local tmp file
+    2. probe_metadata (yt-dlp, download=False) → populate
+       title/thumbnail/channel/upload_date
+    3. Check for existing done record with same youtube_id → dedup fast path
+    4. Download audio with yt-dlp  (→ /tmp/melo/<song_id>.mp3)
+    5. Upload mp3 to MinIO          (→ songs/<song_id>.mp3)
+    6. Update DB: file_url, duration, status → ``done``
+    7. Clean up the local tmp file
+
+    Dedup (same youtube_id, different trim)
+    ----------------------------------------
+    If a ``done`` record already exists for the same youtube_id, reuse its
+    file_url and metadata — no re-download, no re-upload, status → done immediately.
 
     On any unhandled exception the record is marked ``failed`` and the
     exception is re-raised so Celery can log it and (optionally) retry.
@@ -69,12 +77,12 @@ def process_song_task(
     from pathlib import Path
 
     from app.models.song import Song, SongStatus
-    from app.services.downloader import DownloadError, download_audio
+    from app.services.downloader import DownloadError, download_audio, probe_metadata
     from app.services.storage import StorageError, upload_file
 
     task_name = "process_song"
     t_start = time.perf_counter()
-    
+
     attempt = self.request.retries + 1
     max_retries = self.max_retries
 
@@ -89,7 +97,7 @@ def process_song_task(
 
     # ── 1. Fetch record and move to processing ───────────────────────────────
     song = self.db.query(Song).filter(Song.id == UUID(song_id)).first()
-    
+
     if song is None:
         # Record was deleted between enqueue and execution — nothing to do.
         logger.warning(
@@ -106,10 +114,10 @@ def process_song_task(
         song_id=song_id,
         current_status=str(song.status),
     )
-    
+
     song.status = SongStatus.processing
     self.db.commit()
-    
+
     logger.debug(
         "db_status_updated",
         task_name=task_name,
@@ -120,12 +128,77 @@ def process_song_task(
     local_path: Path | None = None
 
     try:
-        # ── 2. Download ──────────────────────────────────────────────────────
+        # ── 2. Probe metadata ────────────────────────────────────────────────
+        t_probe = time.perf_counter()
+        logger.info("step_start", step="probe_metadata", song_id=song_id)
+
+        meta = probe_metadata(url)
+
+        song.title = meta.get("title")
+        song.duration = meta.get("duration")
+        song.thumbnail_url = meta.get("thumbnail_url")
+        song.channel = meta.get("channel")
+        song.upload_date = meta.get("upload_date")
+        self.db.commit()
+
+        logger.info(
+            "step_complete",
+            step="probe_metadata",
+            song_id=song_id,
+            title=song.title,
+            elapsed_ms=round((time.perf_counter() - t_probe) * 1000, 2),
+        )
+
+        # ── 3. Dedup: reuse existing done record for same youtube_id ─────────
+        existing = (
+            self.db.query(Song)
+            .filter(
+                Song.youtube_id == song.youtube_id,
+                Song.status == SongStatus.done,
+                Song.id != song.id,
+            )
+            .first()
+        )
+
+        if existing is not None:
+            logger.info(
+                "dedup_hit",
+                task_name=task_name,
+                song_id=song_id,
+                source_song_id=str(existing.id),
+                file_url=existing.file_url,
+            )
+            # Copy file reference + metadata from existing record
+            song.file_url = existing.file_url
+            song.duration = existing.duration
+            song.title = existing.title
+            song.thumbnail_url = existing.thumbnail_url
+            song.channel = existing.channel
+            song.upload_date = existing.upload_date
+            song.status = SongStatus.done
+            self.db.commit()
+
+            total_ms = round((time.perf_counter() - t_start) * 1000, 2)
+            logger.info(
+                "task_done",
+                task_name=task_name,
+                song_id=song_id,
+                status="done",
+                duration_ms=total_ms,
+                via="dedup",
+            )
+            return {"song_id": song_id, "status": "done", "via": "dedup"}
+
+        # ── 4. Download ──────────────────────────────────────────────────────
         t_dl = time.perf_counter()
         logger.info("step_start", step="download", song_id=song_id)
-        
+
         local_path, duration = download_audio(url=url, song_id=song_id)
-        
+
+        # duration from download more accurate than probe (post-transcode length)
+        if duration is not None:
+            song.duration = duration
+
         logger.info(
             "step_complete",
             step="download",
@@ -135,14 +208,14 @@ def process_song_task(
             path=str(local_path),
         )
 
-        # ── 3. Upload ────────────────────────────────────────────────────────
+        # ── 5. Upload ────────────────────────────────────────────────────────
         t_up = time.perf_counter()
         object_key = f"{song_id}.mp3"
-        
+
         logger.info("step_start", step="upload", song_id=song_id, key=object_key)
-        
+
         upload_file(local_path=local_path, object_key=object_key)
-        
+
         logger.info(
             "step_complete",
             step="upload",
@@ -151,11 +224,10 @@ def process_song_task(
             elapsed_ms=round((time.perf_counter() - t_up) * 1000, 2),
         )
 
-        # ── 4. Update DB ─────────────────────────────────────────────────────
+        # ── 6. Update DB ─────────────────────────────────────────────────────
         t_db = time.perf_counter()
 
         song.file_url = object_key
-        song.duration = duration
         song.status = SongStatus.done
         self.db.commit()
 
@@ -166,7 +238,7 @@ def process_song_task(
             status="done",
             elapsed_ms=round((time.perf_counter() - t_db) * 1000, 2),
         )
-        
+
         total_ms = round((time.perf_counter() - t_start) * 1000, 2)
 
         logger.info(
@@ -227,7 +299,7 @@ def process_song_task(
             raise
 
     finally:
-        # ── 5. Cleanup ───────────────────────────────────────────────────────
+        # ── 7. Cleanup ───────────────────────────────────────────────────────
         if local_path:
             try:
                 if local_path.exists():
@@ -255,7 +327,7 @@ def process_song_task(
 
 
 def _mark_failed(db, song) -> None:
-    """Best-effort status update to failed; swallows DB errors 
+    """Best-effort status update to failed; swallows DB errors
     to avoid masking the original."""
     try:
         from app.models.song import SongStatus
