@@ -1,5 +1,6 @@
 # app/api/songs.py
 import re
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID
 
@@ -26,6 +27,8 @@ YOUTUBE_DOMAINS = {
 }
 
 YOUTUBE_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+_TMP_DIR = Path("/tmp/melo")
 
 
 def _serialize(song: Song) -> dict:
@@ -89,16 +92,9 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
             payload.end,
             payload.speed,
         )
-        logger.info(
-            "song_processing_dispatched",
-            song_id=str(song.id),
-        )
+        logger.info("song_processing_dispatched", song_id=str(song.id))
     except Exception as exc:
-        logger.error(
-            "celery_dispatch_failed",
-            song_id=str(song.id),
-            error=str(exc),
-        )
+        logger.error("celery_dispatch_failed", song_id=str(song.id), error=str(exc))
         raise
 
     return envelope_response(
@@ -110,11 +106,8 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
 def list_songs(db: DbDep) -> JSONResponse:
     """List all songs with their current processing status."""
     logger.debug("list_songs_request")
-
     songs = db.query(Song).order_by(Song.created_at.desc()).all()
-
     logger.info("songs_retrieved", count=len(songs))
-
     records = [_serialize(s) for s in songs]
     return paginated_response(records, len(records), "Songs retrieved.")
 
@@ -123,7 +116,6 @@ def list_songs(db: DbDep) -> JSONResponse:
 def get_song(song_id: UUID, db: DbDep) -> JSONResponse:
     """Retrieve a single song by ID."""
     logger.debug("get_song_request", song_id=str(song_id))
-
     song = db.query(Song).filter(Song.id == song_id).first()
 
     if not song:
@@ -134,13 +126,21 @@ def get_song(song_id: UUID, db: DbDep) -> JSONResponse:
         )
 
     logger.info("song_retrieved", song_id=str(song_id))
-
     return envelope_response(_serialize(song), "Song retrieved.")
 
 
 @router.get("/{song_id}/stream")
 def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
-    # NOTE: StreamingResponse intentionally skips envelope (binary stream).
+    """
+    Stream the audio for a done song.
+
+    Trim-on-stream logic
+    --------------------
+    - No trim params (start=None, end=None): stream raw MinIO object directly.
+    - Trim params set: fetch to /tmp/melo, run FFmpeg trim, stream result, cleanup.
+
+    NOTE: StreamingResponse intentionally skips envelope (binary stream).
+    """
     logger.debug("stream_request", song_id=str(song_id))
 
     song = db.query(Song).filter(Song.id == song_id).first()
@@ -151,49 +151,112 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
 
     if song.status != SongStatus.done:
         logger.warning(
-            "stream_not_ready",
-            song_id=str(song_id),
-            status=song.status.value,
+            "stream_not_ready", song_id=str(song_id), status=song.status.value
         )
         raise HTTPException(
             status_code=409, detail=f"Song not ready. Status: {song.status.value}"
         )
 
     if not song.file_url:
-        logger.error(
-            "missing_file_url",
-            song_id=str(song_id),
-        )
+        logger.error("missing_file_url", song_id=str(song_id))
         raise HTTPException(
             status_code=500, detail="Song marked done but has no file_url."
         )
 
     s = get_settings()
     client = _client()
+    filename = f"{song.title or song_id}.mp3"
+
+    # ── No trim: stream directly from MinIO ──────────────────────────────────
+    if song.start is None and song.end is None:
+        try:
+            logger.debug(
+                "stream_direct",
+                song_id=str(song_id),
+                bucket=s.minio_bucket,
+                file_url=song.file_url,
+            )
+            response = client.get_object(s.minio_bucket, song.file_url)
+        except Exception as exc:
+            logger.error("stream_fetch_error", song_id=str(song_id), error=str(exc))
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        logger.info(
+            "stream_started", song_id=str(song_id), filename=filename, mode="direct"
+        )
+        return StreamingResponse(
+            response.stream(32 * 1024),
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # ── Trim: fetch → FFmpeg → stream → cleanup ──────────────────────────────
+    from app.services.processor import ProcessingError, trim_audio
+
+    original_path = _TMP_DIR / f"{song_id}_original.mp3"
+    trimmed_path = _TMP_DIR / f"{song_id}_trimmed.mp3"
 
     try:
+        # 1. Fetch from MinIO to local tmp
+        _TMP_DIR.mkdir(parents=True, exist_ok=True)
         logger.debug(
-            "fetching_from_storage",
-            bucket=s.minio_bucket,
-            file_url=song.file_url,
+            "stream_fetch_for_trim",
+            song_id=str(song_id),
+            start=song.start,
+            end=song.end,
         )
-        response = client.get_object(s.minio_bucket, song.file_url)
-    except Exception as exc:
-        logger.error("stream_fetch_error", song_id=str(song_id), error=str(exc))
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        try:
+            minio_response = client.get_object(s.minio_bucket, song.file_url)
+            with original_path.open("wb") as f:
+                for chunk in minio_response.stream(32 * 1024):
+                    f.write(chunk)
+        except Exception as exc:
+            logger.error("stream_fetch_error", song_id=str(song_id), error=str(exc))
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    filename = f"{song.title or song_id}.mp3"
-    logger.info(
-        "stream_started",
-        song_id=str(song_id),
-        filename=filename,
-    )
+        # 2. Trim
+        try:
+            trim_audio(
+                input_path=original_path,
+                output_path=trimmed_path,
+                start=song.start,
+                end=song.end,
+            )
+        except ProcessingError as exc:
+            logger.error("trim_error", song_id=str(song_id), error=str(exc))
+            raise HTTPException(status_code=502, detail=f"Trim failed: {exc}") from exc
 
-    return StreamingResponse(
-        response.stream(32 * 1024),
-        media_type="audio/mpeg",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+        # 3. Stream trimmed file, cleanup in generator finally block
+        logger.info(
+            "stream_started",
+            song_id=str(song_id),
+            filename=filename,
+            mode="trimmed",
+            start=song.start,
+            end=song.end,
+        )
+
+        def _iter_and_cleanup():
+            try:
+                with trimmed_path.open("rb") as f:
+                    while chunk := f.read(32 * 1024):
+                        yield chunk
+            finally:
+                original_path.unlink(missing_ok=True)
+                trimmed_path.unlink(missing_ok=True)
+                logger.debug("stream_trim_cleanup", song_id=str(song_id))
+
+        return StreamingResponse(
+            _iter_and_cleanup(),
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    except HTTPException:
+        # Cleanup on error before streaming starts
+        original_path.unlink(missing_ok=True)
+        trimmed_path.unlink(missing_ok=True)
+        raise
 
 
 def _extract_youtube_id(url: str) -> str:

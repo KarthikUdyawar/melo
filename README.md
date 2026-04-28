@@ -32,7 +32,7 @@ graph TD
     Worker -->|upload mp3| MinIO[(MinIO)]
     Worker -->|update status=done| PG
     Client -->|GET /songs/id/stream| API
-    API -->|fetch object| MinIO
+    API -->|fetch + FFmpeg trim| MinIO
     API -->|StreamingResponse| Client
 ```
 
@@ -64,8 +64,15 @@ sequenceDiagram
 
     C->>A: GET /songs/{id}/stream
     A->>D: SELECT song WHERE id=...
-    A->>M: get_object(songs/<id>.mp3)
-    A-->>C: StreamingResponse audio/mpeg
+    alt no trim params
+        A->>M: get_object(songs/<id>.mp3)
+        A-->>C: StreamingResponse audio/mpeg (direct)
+    else trim params set
+        A->>M: get_object → write /tmp/melo/<id>_original.mp3
+        A->>A: FFmpeg trim → /tmp/melo/<id>_trimmed.mp3
+        A-->>C: StreamingResponse audio/mpeg (trimmed)
+        A->>A: cleanup tmp files
+    end
 ```
 
 ---
@@ -155,7 +162,7 @@ curl -X POST http://localhost:8000/songs \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "speed": 1.0}'
 
-# 5. Submit same song with trim (no re-download)
+# 5. Submit same song with trim (no re-download — dedup kicks in)
 curl -X POST http://localhost:8000/songs \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "start": 30, "end": 90}'
@@ -163,7 +170,7 @@ curl -X POST http://localhost:8000/songs \
 # 6. Check status
 curl http://localhost:8000/songs/<id>
 
-# 7. Download when done
+# 7. Stream when done (trim applied on-the-fly if start/end set)
 curl -OJ http://localhost:8000/songs/<id>/stream
 ```
 
@@ -194,27 +201,27 @@ curl -OJ http://localhost:8000/songs/<id>/stream
 | `POST` | `/songs`             | Submit YouTube URL → async job. Supports `start`, `end`, `speed` params. Same `youtube_id` + new trim → dedup, no re-download. |
 | `GET`  | `/songs`             | List all songs with metadata                                                                                                   |
 | `GET`  | `/songs/{id}`        | Get song detail + status + metadata                                                                                            |
-| `GET`  | `/songs/{id}/stream` | Download mp3                                                                                                                   |
+| `GET`  | `/songs/{id}/stream` | Stream mp3. No trim params → direct from MinIO. `start`/`end` set → FFmpeg trim applied on-the-fly, ephemerally.               |
 | `GET`  | `/health`            | Health check                                                                                                                   |
 
 Interactive docs: **http://localhost:8000/docs**
 
 ### Song fields
 
-| Field           | Type           | Notes                                              |
-| --------------- | -------------- | -------------------------------------------------- |
-| `id`            | UUID           |                                                    |
-| `youtube_id`    | string         | Extracted from URL                                 |
-| `title`         | string \| null | Populated by probe before download completes       |
-| `duration`      | float \| null  | Seconds. Probe estimate, overwritten post-download |
-| `thumbnail_url` | string \| null | YouTube thumbnail                                  |
-| `channel`       | string \| null | Uploader channel name                              |
-| `upload_date`   | string \| null | YYYYMMDD                                           |
-| `start`         | float \| null  | Trim start in seconds                              |
-| `end`           | float \| null  | Trim end in seconds                                |
-| `speed`         | float          | Playback speed (0.5–4.0)                           |
-| `status`        | enum           | `pending` → `processing` → `done` / `failed`       |
-| `file_url`      | string \| null | MinIO object key, set when `done`                  |
+| Field           | Type           | Notes                                                       |
+| --------------- | -------------- | ----------------------------------------------------------- |
+| `id`            | UUID           |                                                             |
+| `youtube_id`    | string         | Extracted from URL                                          |
+| `title`         | string \| null | Populated by probe before download completes                |
+| `duration`      | float \| null  | Seconds. Probe estimate, overwritten post-download          |
+| `thumbnail_url` | string \| null | YouTube thumbnail                                           |
+| `channel`       | string \| null | Uploader channel name                                       |
+| `upload_date`   | string \| null | YYYYMMDD                                                    |
+| `start`         | float \| null  | Trim start in seconds — applied at stream time by FFmpeg    |
+| `end`           | float \| null  | Trim end in seconds — applied at stream time by FFmpeg      |
+| `speed`         | float          | Playback speed (0.5–4.0), applied in Sprint 3               |
+| `status`        | enum           | `pending` → `processing` → `done` / `failed`                |
+| `file_url`      | string \| null | MinIO object key (full-length source file), set when `done` |
 
 ---
 
@@ -227,7 +234,7 @@ melo/
 │   ├── core/         # config, db, deps
 │   ├── models/       # SQLAlchemy models
 │   ├── schemas/      # Pydantic schemas
-│   ├── services/     # downloader, storage
+│   ├── services/     # downloader, processor, storage
 │   └── workers/      # Celery app + tasks
 ├── docs/
 │   └── sprints/
@@ -269,13 +276,15 @@ melo/
 | Dedup at task level, not router level  | Router inserts new record for every submission; worker detects existing `done` record and fast-paths to `done` without re-download |
 | `probe_metadata` before download       | Populates title, thumbnail, channel immediately — `GET /songs/{id}` returns useful data while still `processing`                   |
 | All new `SongResponse` fields nullable | Record serialized at creation (pre-probe); fields populated async — cannot be required                                             |
+| FFmpeg trim on stream, not on ingest   | One source file in MinIO; trim applied ephemerally per request. No N trimmed variants stored.                                      |
+| Stream copy first, re-encode fallback  | `-c copy` is instant and lossless; libmp3lame re-encode only fires on codec mismatch. `-q:a 2` matches ~192kbps download quality.  |
+| Cleanup in generator `finally` block   | Ensures `/tmp/melo` files deleted after last byte sent, even on client disconnect.                                                 |
 
 ---
 
 ## Out of Scope (v1)
 
-- FFmpeg trim on stream → Sprint 2 (FFMPEG-1, in progress)
-- Speed processing (`atempo`) → Sprint 2
+- Speed processing (`atempo`) → Sprint 3
 - Favorites + playlists endpoints → Sprint 3
 - Frontend UI → Sprint 3
 - Multi-user auth, lyrics, waveforms → never (personal tool)

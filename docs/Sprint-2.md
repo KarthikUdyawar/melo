@@ -91,17 +91,17 @@
 ### ✂️ FFMPEG-1 — Trim on Stream
 **Branch:** `feature/ffmpeg-trim`
 
-- [ ] `app/services/processor.py` — `trim_audio(input_path, output_path, start, end) -> Path`:
+- [x] `app/services/processor.py` — `trim_audio(input_path, output_path, start, end) -> Path`:
   - Uses `subprocess` + `ffmpeg` with `-ss {start} -to {end} -c copy` for fast stream copy
-  - Falls back to `-c:a libmp3lame` re-encode if stream copy fails (codec mismatch)
+  - Falls back to `-c:a libmp3lame -q:a 2` re-encode if stream copy fails (codec mismatch)
   - Raises `ProcessingError` on non-zero ffmpeg exit
-  - Cleans up `output_path` on failure
-- [ ] `app/workers/tasks.py` — persist `start` and `end` onto `Song` record after creation
-- [ ] `GET /songs/{id}/stream` — trim-on-stream logic:
-  - If `song.start` or `song.end` is set: fetch from MinIO → write to `/tmp/melo/{id}_original.mp3` → `trim_audio(...)` → stream trimmed file → cleanup both files
-  - If no trim params: stream original directly from MinIO (existing behaviour)
-- [ ] `ProcessingError` → 502 response with envelope
-- [ ] Verify: song submitted with `start=30, end=90` streams only the 60s segment
+  - Cleans up `output_path` on failure before retry and on final error
+- [x] `GET /songs/{id}/stream` — trim-on-stream logic:
+  - `start=None and end=None`: stream raw MinIO object directly (zero FFmpeg overhead)
+  - Trim params set: fetch to `/tmp/melo/{id}_original.mp3` → `trim_audio(...)` → stream via generator → cleanup both files in `finally`
+  - Early error (fetch/trim fails before streaming): cleanup in `except HTTPException` block
+- [x] `ProcessingError` → 502 response
+- [x] Verify: song submitted with `start=30, end=90` streams only the 60s segment
 
 ---
 
@@ -109,7 +109,7 @@
 
 - [ ] All feature branches merged to `develop` via PR
 - [x] `POST /songs` with existing `youtube_id` + new trim params → new DB record, no re-download, status `done` immediately
-- [ ] `GET /songs/{id}/stream` with trim params → correct trimmed audio segment
+- [x] `GET /songs/{id}/stream` with trim params → correct trimmed audio segment
 - [x] All endpoints (except stream + docs) return envelope shape
 - [x] `make logs-api` shows structured JSON per request
 - [ ] `SPRINT_2.md` checked off and moved to `melo/docs/sprints/`
@@ -140,3 +140,5 @@
 | `noplaylist: True` on both probe and download         | Playlist URLs (`?v=X&list=Y`) must resolve to single video only. Without this, yt-dlp resolves playlist context and may pick wrong ID.     |
 | Pinned format selector on probe too                   | `download=False` still triggers JS-runtime format checks. Same explicit format IDs + `skip: [hls, dash]` suppress the 5min hang + warning. |
 | All new `SongResponse` fields default to `None`       | Record is serialized immediately after insert (pre-probe). Fields populated async by worker — must not be required at creation time.       |
+| Stream copy first, re-encode fallback                 | `-c copy` is instant and lossless; re-encode only fires on codec mismatch. `-q:a 2` matches ~192kbps download quality.                     |
+| Cleanup in generator `finally` block                  | Ensures `/tmp/melo` files deleted after last byte sent, even on client disconnect.                                                         |
