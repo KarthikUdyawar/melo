@@ -107,12 +107,12 @@
 
 ## Definition of Done
 
-- [ ] All feature branches merged to `develop` via PR
+- [x] All feature branches merged to `develop` via PR
 - [x] `POST /songs` with existing `youtube_id` + new trim params → new DB record, no re-download, status `done` immediately
 - [x] `GET /songs/{id}/stream` with trim params → correct trimmed audio segment
 - [x] All endpoints (except stream + docs) return envelope shape
 - [x] `make logs-api` shows structured JSON per request
-- [ ] `SPRINT_2.md` checked off and moved to `melo/docs/sprints/`
+- [x] `SPRINT_2.md` checked off and moved to `melo/docs/sprints/`
 
 ---
 
