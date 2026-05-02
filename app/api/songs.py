@@ -1,5 +1,6 @@
 # app/api/songs.py
 import re
+from collections.abc import Generator
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID
@@ -28,10 +29,10 @@ YOUTUBE_DOMAINS = {
 
 YOUTUBE_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
-_TMP_DIR = Path("/tmp/melo")
+_TMP_DIR = Path("/tmp/melo") # nosec B108
 
 
-def _serialize(song: Song) -> dict:
+def _serialize(song: Song) -> dict[str, object]:
     return SongResponse(
         id=song.id,
         title=song.title,
@@ -283,7 +284,7 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
         # Capture for closure (list is mutable, safe across generator boundary)
         paths_to_cleanup = list(created_paths)
 
-        def _iter_and_cleanup():
+        def _iter_and_cleanup() -> Generator[bytes, None, None]:
             try:
                 with final_path.open("rb") as f:
                     while chunk := f.read(32 * 1024):

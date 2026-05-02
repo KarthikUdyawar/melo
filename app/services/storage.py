@@ -32,28 +32,28 @@ def ensure_bucket_exists() -> None:
     """
     s = get_settings()
     client = _client()
-    
+
     logger.info(
         "ensure_bucket_start",
         bucket=s.minio_bucket,
         endpoint=s.minio_endpoint,
     )
-    
+
     try:
         exists = client.bucket_exists(s.minio_bucket)
-        
+
         logger.debug(
             "bucket_exists_check",
             bucket=s.minio_bucket,
             exists=exists,
         )
-        
+
         if not exists:
             client.make_bucket(s.minio_bucket)
             logger.info("bucket_created", bucket=s.minio_bucket)
         else:
             logger.debug("bucket_exists", bucket=s.minio_bucket)
-            
+
     except S3Error as exc:
         logger.error(
             "ensure_bucket_failed",
@@ -81,7 +81,7 @@ def upload_file(local_path: Path, object_key: str) -> str:
     """
     s = get_settings()
     client = _client()
-    
+
     if not local_path.exists():
         logger.error(
             "upload_file_missing",
@@ -125,7 +125,7 @@ def upload_file(local_path: Path, object_key: str) -> str:
         raise StorageError(
             f"Upload failed for {local_path!r} → {object_key!r}: {exc}"
         ) from exc
-        
+
     except Exception:
         logger.exception(
             "upload_failed_unexpected",
@@ -157,7 +157,7 @@ def get_presigned_url(object_key: str, expires_seconds: int = 3600) -> str:
 
     s = get_settings()
     client = _client()
-    
+
     logger.debug(
         "presigned_url_start",
         bucket=s.minio_bucket,
@@ -171,25 +171,25 @@ def get_presigned_url(object_key: str, expires_seconds: int = 3600) -> str:
             object_name=object_key,
             expires=timedelta(seconds=expires_seconds),
         )
-        
+
         logger.debug(
             "presigned_url_generated_internal",
             key=object_key,
             url=url,
         )
-         
+
         # Rewrite internal Docker hostname → externally accessible host
         if s.minio_public_url:
             parsed = urlparse(url)
             public = urlparse(s.minio_public_url)
-            
+
             rewritten_url = urlunparse(
                 parsed._replace(
                     scheme=public.scheme,
                     netloc=public.netloc,
                 )
             )
-            
+
             logger.debug(
                 "presigned_url_rewritten",
                 original=url,
@@ -198,13 +198,13 @@ def get_presigned_url(object_key: str, expires_seconds: int = 3600) -> str:
             )
 
             url = rewritten_url
-            
+
         logger.info(
             "presigned_url_ready",
             key=object_key,
             expires_seconds=expires_seconds,
         )
-        return url
+        return str(url)
     except S3Error as exc:
         logger.error(
             "presigned_url_failed",
@@ -214,7 +214,7 @@ def get_presigned_url(object_key: str, expires_seconds: int = 3600) -> str:
         raise StorageError(
             f"Could not generate presigned URL for {object_key!r}: {exc}"
         ) from exc
-        
+
     except Exception:
         logger.exception(
             "presigned_url_failed_unexpected",

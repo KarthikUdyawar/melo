@@ -1,6 +1,7 @@
 # app/core/config.py
 import os
 from functools import lru_cache
+from typing import Any
 
 from dotenv import dotenv_values
 from pydantic import Field, computed_field, model_validator
@@ -90,7 +91,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="before")
     @classmethod
-    def force_env_file_priority(cls, values):
+    def force_env_file_priority(cls, values: dict[str, Any]) -> dict[str, Any]:
         env_values = dotenv_values(_env_file())
 
         # normalize keys to lowercase

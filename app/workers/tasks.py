@@ -9,14 +9,15 @@ import time
 from uuid import UUID
 
 from celery import Task
+from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
+from app.models.song import Song
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
 
-
-class _BaseTask(Task):
+class _BaseTask(Task): # type: ignore[type-arg]
     """
     Shared base that holds one SQLAlchemy session per worker process.
 
@@ -28,14 +29,14 @@ class _BaseTask(Task):
     _db = None
 
     @property
-    def db(self):
+    def db(self) -> Session:
         if self._db is None:
             from app.core.db import get_session_factory
 
             self._db = get_session_factory()()
         return self._db
 
-    def after_return(self, *args, **kwargs):
+    def after_return(self, *args: object, **kwargs: object) -> None:
         if self._db is not None:
             self._db.close()
             self._db = None
@@ -50,8 +51,13 @@ class _BaseTask(Task):
     acks_late=True,
 )
 def process_song_task(
-    self, song_id: str, url: str, start: float | None, end: float | None, speed: float
-) -> dict:
+    self: _BaseTask,
+    song_id: str,
+    url: str,
+    start: float | None,
+    end: float | None,
+    speed: float,
+) -> dict[str, object]:
     """
     Full ingest pipeline for a single song.
 
@@ -326,7 +332,7 @@ def process_song_task(
                 )
 
 
-def _mark_failed(db, song) -> None:
+def _mark_failed(db: Session, song: Song) -> None:
     """Best-effort status update to failed; swallows DB errors
     to avoid masking the original."""
     try:

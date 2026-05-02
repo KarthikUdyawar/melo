@@ -369,4 +369,3 @@ offset
 | Computed `effective_duration`    | Reflects real playback             |
 | No caching of processed streams  | Keep system simple                 |
 | Optional Redis preview cache     | Reduce yt-dlp overhead             |
-

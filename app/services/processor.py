@@ -3,14 +3,14 @@
 Audio processor — FFmpeg trim + speed for Melo.
 """
 
-import subprocess
+import subprocess  # nosec B404
 from pathlib import Path
 
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-_TMP_DIR = Path("/tmp/melo")
+_TMP_DIR = Path("/tmp/melo") # nosec B108
 
 
 class ProcessingError(Exception):
@@ -72,7 +72,7 @@ def trim_audio(
 
     logger.debug("ffmpeg_stream_copy", cmd=" ".join(cmd_copy))
 
-    result = subprocess.run(cmd_copy, capture_output=True, text=True)
+    result = subprocess.run(cmd_copy, capture_output=True, text=True) # nosec B603
 
     if (
         result.returncode == 0
@@ -112,7 +112,7 @@ def trim_audio(
 
     logger.debug("ffmpeg_reencode", cmd=" ".join(cmd_reencode))
 
-    result = subprocess.run(cmd_reencode, capture_output=True, text=True)
+    result = subprocess.run(cmd_reencode, capture_output=True, text=True) # nosec B603
 
     if result.returncode != 0:
         output_path.unlink(missing_ok=True)
@@ -122,7 +122,7 @@ def trim_audio(
             stderr=result.stderr[-500:] if result.stderr else "",
         )
         raise ProcessingError(
-            f"FFmpeg re-encode failed (exit {result.returncode}): {result.stderr[-300:]}"
+            f"FFmpeg re-encode failed (exit {result.returncode}):{result.stderr[-300:]}"
         )
 
     if not output_path.exists() or output_path.stat().st_size == 0:
@@ -215,7 +215,7 @@ def apply_speed(input_path: Path, output_path: Path, speed: float) -> Path:
 
     logger.debug("ffmpeg_speed", cmd=" ".join(cmd))
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True) # nosec B603
 
     if result.returncode != 0:
         output_path.unlink(missing_ok=True)

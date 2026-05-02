@@ -12,7 +12,7 @@ class Base(DeclarativeBase):
 
 # Lazy singletons — built on first access so tests can set env vars first.
 _engine: Engine | None = None
-_SessionLocal: sessionmaker[Session] | None = None  # type: ignore[type-arg]
+_SessionLocal: sessionmaker[Session] | None = None
 
 
 def get_engine() -> Engine:

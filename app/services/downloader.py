@@ -4,7 +4,7 @@ Audio downloader — wraps yt-dlp for Melo.
 """
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 import yt_dlp
 from yt_dlp.utils import DownloadError as YtDlpDownloadError
@@ -14,8 +14,14 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 # Worker container writes downloads here; volume `worker_tmp` is mounted at /tmp/melo
-_DOWNLOAD_DIR = Path("/tmp/melo")
+_DOWNLOAD_DIR = Path("/tmp/melo") # nosec B108
 
+class SongMeta(TypedDict, total=False):
+    title: str | None
+    duration: float | None
+    thumbnail_url: str | None
+    channel: str | None
+    upload_date: str | None
 
 class DownloadError(Exception):
     """Raised when yt-dlp fails to download or extract audio."""
@@ -26,7 +32,7 @@ class DownloadError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def probe_metadata(url: str) -> dict:
+def probe_metadata(url: str) -> SongMeta:
     """
     Extract metadata for *url* without downloading any media.
 
@@ -65,7 +71,7 @@ def probe_metadata(url: str) -> dict:
     if not info:
         raise DownloadError(f"yt-dlp returned no info for {url!r}")
 
-    result = {
+    result: SongMeta = {
         "title": info.get("title"),
         "duration": info.get("duration"),
         "thumbnail_url": info.get("thumbnail"),

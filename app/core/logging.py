@@ -19,7 +19,9 @@ Every log line carries: timestamp · level · logger · message · env
 import logging
 import logging.handlers
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -108,7 +110,7 @@ def setup_logging() -> None:
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     """Return a bound structlog logger. Use instead of ``logging.getLogger``."""
-    return structlog.get_logger(name)  # type: ignore[return-value]
+    return structlog.get_logger(name)
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +118,10 @@ def get_logger(name: str) -> structlog.stdlib.BoundLogger:
 # ---------------------------------------------------------------------------
 
 
-def _add_env(env: str):
-    def processor(logger, method, event_dict):  # noqa: ANN001
+def _add_env(env: str) -> Callable[..., Any]:
+    def processor(
+        logger: Any, method: str, event_dict: dict[str, Any]
+    ) -> dict[str, Any]:  # noqa: ANN001
         event_dict["env"] = env
         return event_dict
 

@@ -1,4 +1,5 @@
-.PHONY: up down down-v logs logs-api logs-worker ps test lint shell-api shell-worker health songs
+.PHONY: up down down-v logs logs-api logs-worker ps test lint shell-api shell-worker health songs \
+        pre-commit-install pre-commit pre-commit-all
 
 # ── Docker ────────────────────────────────────────────────────────────────────
 up:
@@ -40,3 +41,14 @@ health:
 
 songs:
 	@curl -s http://localhost:8000/songs | python3 -m json.tool
+
+# ── Pre-commit ────────────────────────────────────────────────────────────────
+pre-commit-install:
+	uv run pre-commit install
+	uv run pre-commit install --hook-type commit-msg
+	@echo "✅  pre-commit hooks installed"
+
+pre-commit:
+	uv run pre-commit run --all-files
+
+pre-commit-all: pre-commit

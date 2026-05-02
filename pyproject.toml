@@ -24,6 +24,7 @@ dev = [
     "httpx>=0.27.0",
     "factory-boy>=3.3.0",
     "faker>=30.0.0",
+    "pre-commit>=4.6.0",
 ]
 
 [build-system]
@@ -44,6 +45,18 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
+
+[[tool.mypy.overrides]]
+module = [
+    "celery.*",
+    "minio.*",
+    "yt_dlp.*",
+    "structlog.*",
+    "pydantic_settings.*",
+]
+ignore_missing_imports = true
+disable_error_code = ["misc"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
