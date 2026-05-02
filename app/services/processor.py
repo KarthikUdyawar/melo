@@ -1,6 +1,6 @@
 # app/services/processor.py
 """
-Audio processor — FFmpeg trim for Melo.
+Audio processor — FFmpeg trim + speed for Melo.
 """
 
 import subprocess
@@ -134,5 +134,110 @@ def trim_audio(
         method="reencode",
         output=str(output_path),
         size_bytes=output_path.stat().st_size,
+    )
+    return output_path
+
+
+def _build_atempo_filters(speed: float) -> str:
+    """
+    Build a comma-separated atempo filter chain for the given speed.
+
+    FFmpeg's atempo filter is limited to 0.5–2.0 per stage.
+    Chain multiple stages for speeds outside that range:
+        speed=4.0  → "atempo=2.0,atempo=2.0"
+        speed=0.25 → "atempo=0.5,atempo=0.5"
+        speed=1.5  → "atempo=1.5"
+
+    Args:
+        speed: Target playback speed. Must be > 0. 1.0 = no change.
+
+    Returns:
+        Filter string suitable for -filter:a. Empty string if speed == 1.0.
+    """
+    filters: list[str] = []
+
+    if speed > 1.0:
+        while speed > 2.0 + 1e-9:
+            filters.append("atempo=2.0")
+            speed /= 2.0
+        filters.append(f"atempo={speed:.6f}")
+    elif speed < 1.0:
+        while speed < 0.5 - 1e-9:
+            filters.append("atempo=0.5")
+            speed /= 0.5
+        filters.append(f"atempo={speed:.6f}")
+    # speed == 1.0 → empty list, caller skips processing
+
+    return ",".join(filters)
+
+
+def apply_speed(input_path: Path, output_path: Path, speed: float) -> Path:
+    """
+    Apply atempo speed adjustment to *input_path*, write to *output_path*.
+
+    Callers should guard with `speed != 1.0` before calling — this fn
+    will still work at 1.0 but wastes a re-encode.
+
+    Args:
+        input_path:  Source mp3.
+        output_path: Destination path for speed-adjusted mp3.
+        speed:       Playback multiplier (e.g. 2.0 = double speed).
+
+    Returns:
+        output_path on success.
+
+    Raises:
+        ProcessingError: FFmpeg non-zero exit or empty output.
+                         Cleans up output_path before raising.
+    """
+    _TMP_DIR.mkdir(parents=True, exist_ok=True)
+
+    filter_str = _build_atempo_filters(speed)
+
+    logger.info(
+        "speed_start",
+        input=str(input_path),
+        output=str(output_path),
+        speed=speed,
+        filter=filter_str,
+    )
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-filter:a",
+        filter_str,
+        "-vn",
+        str(output_path),
+    ]
+
+    logger.debug("ffmpeg_speed", cmd=" ".join(cmd))
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        output_path.unlink(missing_ok=True)
+        logger.error(
+            "speed_failed",
+            returncode=result.returncode,
+            stderr=result.stderr[-500:] if result.stderr else "",
+        )
+        raise ProcessingError(
+            f"FFmpeg atempo failed (exit {result.returncode}): {result.stderr[-300:]}"
+        )
+
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        output_path.unlink(missing_ok=True)
+        raise ProcessingError(
+            f"FFmpeg speed produced empty/missing output: {output_path}"
+        )
+
+    logger.info(
+        "speed_complete",
+        output=str(output_path),
+        size_bytes=output_path.stat().st_size,
+        speed=speed,
     )
     return output_path

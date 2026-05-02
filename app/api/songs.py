@@ -132,12 +132,19 @@ def get_song(song_id: UUID, db: DbDep) -> JSONResponse:
 @router.get("/{song_id}/stream")
 def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
     """
-    Stream the audio for a done song.
+    Stream audio for a done song, applying trim and/or speed on-the-fly.
 
-    Trim-on-stream logic
-    --------------------
-    - No trim params (start=None, end=None): stream raw MinIO object directly.
-    - Trim params set: fetch to /tmp/melo, run FFmpeg trim, stream result, cleanup.
+    Case matrix
+    -----------
+    | has_trim | has_speed | behaviour                          |
+    |----------|-----------|------------------------------------|
+    | False    | False     | direct MinIO proxy (fastest)       |
+    | True     | False     | fetch → trim → stream              |
+    | False    | True      | fetch → speed → stream             |
+    | True     | True      | fetch → trim → speed → stream      |
+
+    Temp files are always cleaned up in generator finally block (streaming
+    cases) or on HTTPException (pre-stream errors).
 
     NOTE: StreamingResponse intentionally skips envelope (binary stream).
     """
@@ -167,8 +174,11 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
     client = _client()
     filename = f"{song.title or song_id}.mp3"
 
-    # ── No trim: stream directly from MinIO ──────────────────────────────────
-    if song.start is None and song.end is None:
+    has_trim = song.start is not None or song.end is not None
+    has_speed = song.speed is not None and song.speed != 1.0
+
+    # ── Case 1: No trim, no speed — direct MinIO proxy ───────────────────────
+    if not has_trim and not has_speed:
         try:
             logger.debug(
                 "stream_direct",
@@ -190,61 +200,98 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    # ── Trim: fetch → FFmpeg → stream → cleanup ──────────────────────────────
-    from app.services.processor import ProcessingError, trim_audio
+    # ── Cases 2–4: fetch → [trim] → [speed] → stream → cleanup ──────────────
+    from app.services.processor import ProcessingError, apply_speed, trim_audio
 
     original_path = _TMP_DIR / f"{song_id}_original.mp3"
     trimmed_path = _TMP_DIR / f"{song_id}_trimmed.mp3"
+    speed_path = _TMP_DIR / f"{song_id}_speed.mp3"
+
+    # Track which paths actually get created for guaranteed cleanup
+    created_paths: list[Path] = []
 
     try:
-        # 1. Fetch from MinIO to local tmp
         _TMP_DIR.mkdir(parents=True, exist_ok=True)
+
+        # 1. Fetch from MinIO ─────────────────────────────────────────────────
         logger.debug(
-            "stream_fetch_for_trim",
+            "stream_fetch",
             song_id=str(song_id),
-            start=song.start,
-            end=song.end,
+            has_trim=has_trim,
+            has_speed=has_speed,
         )
         try:
             minio_response = client.get_object(s.minio_bucket, song.file_url)
             with original_path.open("wb") as f:
                 for chunk in minio_response.stream(32 * 1024):
                     f.write(chunk)
+            created_paths.append(original_path)
         except Exception as exc:
             logger.error("stream_fetch_error", song_id=str(song_id), error=str(exc))
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        # 2. Trim
-        try:
-            trim_audio(
-                input_path=original_path,
-                output_path=trimmed_path,
-                start=song.start,
-                end=song.end,
-            )
-        except ProcessingError as exc:
-            logger.error("trim_error", song_id=str(song_id), error=str(exc))
-            raise HTTPException(status_code=502, detail=f"Trim failed: {exc}") from exc
+        # 2. Trim (if needed) ─────────────────────────────────────────────────
+        post_trim_path = original_path  # default: pass original through
+        if has_trim:
+            try:
+                trim_audio(
+                    input_path=original_path,
+                    output_path=trimmed_path,
+                    start=song.start,
+                    end=song.end,
+                )
+                created_paths.append(trimmed_path)
+                post_trim_path = trimmed_path
+            except ProcessingError as exc:
+                logger.error("trim_error", song_id=str(song_id), error=str(exc))
+                raise HTTPException(
+                    status_code=502, detail=f"Trim failed: {exc}"
+                ) from exc
 
-        # 3. Stream trimmed file, cleanup in generator finally block
+        # 3. Speed (if needed) ────────────────────────────────────────────────
+        final_path = post_trim_path  # default: pass trim result through
+        if has_speed:
+            try:
+                apply_speed(
+                    input_path=post_trim_path,
+                    output_path=speed_path,
+                    speed=song.speed,
+                )
+                created_paths.append(speed_path)
+                final_path = speed_path
+            except ProcessingError as exc:
+                logger.error("speed_error", song_id=str(song_id), error=str(exc))
+                raise HTTPException(
+                    status_code=502, detail=f"Speed processing failed: {exc}"
+                ) from exc
+
+        # 4. Stream + cleanup in generator ────────────────────────────────────
+        mode = (
+            "trim+speed" if has_trim and has_speed else "trim" if has_trim else "speed"
+        )
+
         logger.info(
             "stream_started",
             song_id=str(song_id),
             filename=filename,
-            mode="trimmed",
+            mode=mode,
             start=song.start,
             end=song.end,
+            speed=song.speed,
         )
+
+        # Capture for closure (list is mutable, safe across generator boundary)
+        paths_to_cleanup = list(created_paths)
 
         def _iter_and_cleanup():
             try:
-                with trimmed_path.open("rb") as f:
+                with final_path.open("rb") as f:
                     while chunk := f.read(32 * 1024):
                         yield chunk
             finally:
-                original_path.unlink(missing_ok=True)
-                trimmed_path.unlink(missing_ok=True)
-                logger.debug("stream_trim_cleanup", song_id=str(song_id))
+                for p in paths_to_cleanup:
+                    p.unlink(missing_ok=True)
+                logger.debug("stream_cleanup", song_id=str(song_id), mode=mode)
 
         return StreamingResponse(
             _iter_and_cleanup(),
@@ -253,9 +300,9 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
         )
 
     except HTTPException:
-        # Cleanup on error before streaming starts
-        original_path.unlink(missing_ok=True)
-        trimmed_path.unlink(missing_ok=True)
+        # Pre-stream error: cleanup synchronously before raising
+        for p in created_paths:
+            p.unlink(missing_ok=True)
         raise
 
 
