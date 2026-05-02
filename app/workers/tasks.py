@@ -57,7 +57,7 @@ def process_song_task(
     url: str,
     start: float | None,
     end: float | None,
-    speed: float,
+    speed: float = 1.0,
 ) -> dict[str, object]:
     """
     Full ingest pipeline for a single song.
