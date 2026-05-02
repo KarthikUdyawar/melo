@@ -40,6 +40,7 @@ class _BaseTask(Task): # type: ignore[type-arg]
         if self._db is not None:
             self._db.close()
             self._db = None
+        super().after_return(*args, **kwargs)
 
 
 @celery_app.task(
