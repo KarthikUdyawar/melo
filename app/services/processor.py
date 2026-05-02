@@ -215,7 +215,11 @@ def apply_speed(input_path: Path, output_path: Path, speed: float) -> Path:
 
     logger.debug("ffmpeg_speed", cmd=" ".join(cmd))
 
-    result = subprocess.run(cmd, capture_output=True, text=True) # nosec B603
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)  # nosec B603
+    except OSError as exc:
+        output_path.unlink(missing_ok=True)
+        raise ProcessingError(f"FFmpeg launch failed: {exc}") from exc
 
     if result.returncode != 0:
         output_path.unlink(missing_ok=True)
