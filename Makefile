@@ -1,6 +1,6 @@
 .PHONY: up down down-v logs logs-api logs-worker ps shell-api shell-worker \
         health songs pre-commit-install pre-commit pre-commit-all \
-        test test-unit test-integration test-cov smoke
+        test test-unit test-integration test-cov test-smoke
 
 # ── Docker ────────────────────────────────────────────────────────────────────
 up:

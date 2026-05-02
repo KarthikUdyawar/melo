@@ -80,7 +80,7 @@ sequenceDiagram
 
 Speed uses FFmpeg `atempo` filter, chained for values outside `[0.5, 2.0]`:
 
-```
+```text
 speed=4.0  → atempo=2.0,atempo=2.0
 speed=0.25 → atempo=0.5,atempo=0.5
 ```

@@ -26,6 +26,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.db import reset_db
+
 # ── Postgres connection details (mirrors docker-compose test service) ─────────
 PG_USER = "melo_test"
 PG_PASSWORD = "melo_test"
@@ -80,20 +82,21 @@ def db_engine(postgres_url: str) -> Any:
     """Session-scoped SQLAlchemy engine pointing at the test Postgres."""
     # Point settings at test DB before importing anything that calls get_settings()
     os.environ["DATABASE_URL"] = postgres_url
-    os.environ["APP_ENV"] = "development"
+    os.environ["APP_ENV"] = "test"
 
     # Reset module-level singleton so it picks up the test DATABASE_URL
     import app.core.db as db_module
     import app.models  # noqa: F401 — register all models
-    from app.core.db import Base, get_engine
+    from app.core.db import get_engine
 
     db_module._engine = None
     db_module._SessionLocal = None
 
+    reset_db()
     engine = get_engine()
-    Base.metadata.create_all(bind=engine)
+
     yield engine
-    Base.metadata.drop_all(bind=engine)
+    reset_db()
     engine.dispose()
 
 

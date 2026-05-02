@@ -6,8 +6,10 @@ Worker logs emit structured JSON with fields: task_name, song_id, status, durati
 """
 
 import time
+from typing import Any, cast
 from uuid import UUID
 
+from billiard.einfo import ExceptionInfo
 from celery import Task
 from sqlalchemy.orm import Session
 
@@ -17,7 +19,8 @@ from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
 
-class _BaseTask(Task): # type: ignore[type-arg]
+
+class _BaseTask(Task):  # type: ignore[type-arg]
     """
     Shared base that holds one SQLAlchemy session per worker process.
 
@@ -36,11 +39,27 @@ class _BaseTask(Task): # type: ignore[type-arg]
             self._db = get_session_factory()()
         return self._db
 
-    def after_return(self, *args: object, **kwargs: object) -> None:
+    def after_return(
+        self,
+        status: str,
+        retval: Any,
+        task_id: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        einfo: ExceptionInfo | None,
+    ) -> None:
         if self._db is not None:
             self._db.close()
             self._db = None
-        super().after_return(*args, **kwargs)
+
+        super().after_return(
+            status,
+            retval,
+            task_id,
+            args,
+            kwargs,
+            cast(ExceptionInfo, einfo),
+        )
 
 
 @celery_app.task(
@@ -55,9 +74,6 @@ def process_song_task(
     self: _BaseTask,
     song_id: str,
     url: str,
-    start: float | None,
-    end: float | None,
-    speed: float = 1.0,
 ) -> dict[str, object]:
     """
     Full ingest pipeline for a single song.
@@ -73,8 +89,12 @@ def process_song_task(
     6. Update DB: file_url, duration, status → ``done``
     7. Clean up the local tmp file
 
-    Dedup (same youtube_id, different trim)
-    ----------------------------------------
+    Note: trim (start/end) and speed are stored on the Song record and applied
+    on-the-fly at stream time (GET /songs/{id}/stream). The worker only handles
+    download + upload of the raw audio.
+
+    Dedup (same youtube_id, different trim/speed)
+    -----------------------------------------------
     If a ``done`` record already exists for the same youtube_id, reuse its
     file_url and metadata — no re-download, no re-upload, status → done immediately.
 

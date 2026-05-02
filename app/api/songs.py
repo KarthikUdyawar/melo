@@ -2,7 +2,7 @@
 import re
 from collections.abc import Generator
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -51,6 +51,16 @@ def _serialize(song: Song) -> dict[str, object]:
     ).model_dump(mode="json")
 
 
+def build_content_disposition(filename: str) -> str:
+    """
+    RFC 5987 compliant Content-Disposition header supporting UTF-8 filenames.
+    """
+    ascii_fallback = filename.encode("latin-1", "ignore").decode()
+    utf8_encoded = quote(filename)
+
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
+
+
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
     """
@@ -90,9 +100,6 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
         process_song_task.delay(
             str(song.id),
             payload.url,
-            payload.start,
-            payload.end,
-            payload.speed,
         )
         logger.info("song_processing_dispatched", song_id=str(song.id))
     except Exception as exc:
@@ -199,7 +206,7 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
         return StreamingResponse(
             response.stream(32 * 1024),
             media_type="audio/mpeg",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": build_content_disposition(filename)},
         )
 
     # ── Cases 2–4: fetch → [trim] → [speed] → stream → cleanup ──────────────
@@ -222,9 +229,15 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
         )
         try:
             minio_response = client.get_object(s.minio_bucket, song.file_url)
-            with original_path.open("wb") as f:
-                for chunk in minio_response.stream(32 * 1024):
-                    f.write(chunk)
+
+            try:
+                with original_path.open("wb") as f:
+                    for chunk in minio_response.stream(32 * 1024):
+                        f.write(chunk)
+            finally:
+                minio_response.close()
+                minio_response.release_conn()
+
             created_paths.append(original_path)
         except Exception as exc:
             logger.error("stream_fetch_error", song_id=str(song_id), error=str(exc))
@@ -296,7 +309,7 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
         return StreamingResponse(
             _iter_and_cleanup(),
             media_type="audio/mpeg",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": build_content_disposition(filename)},
         )
 
     except HTTPException:
