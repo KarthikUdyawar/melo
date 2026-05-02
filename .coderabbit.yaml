@@ -179,9 +179,9 @@ reviews:
     drafts: false
     auto_incremental_review: true
     base_branches:
-      - main
+      - master
       - develop
-      - "release/*"
+      - "release/.*"
 
   # ── Path-based review instructions ──────────────────────────────────────────
   path_instructions:
