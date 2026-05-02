@@ -31,14 +31,14 @@ celery_app.conf.update(
 
 
 @worker_init.connect
-def on_worker_init(**kwargs):
+def on_worker_init(**kwargs: object) -> None:
     """Re-run setup_logging on worker fork so file handler is open in child process."""
     setup_logging()
     logger.info("worker_logging_ready")
 
 
 @worker_ready.connect
-def on_worker_ready(**kwargs):
+def on_worker_ready(**kwargs: object) -> None:
     """
     Runs once in each worker process after it connects to the broker.
     Ensures the MinIO bucket exists before any task is executed.

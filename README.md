@@ -1,6 +1,6 @@
 # 🎵 Melo
 
-> Personal self-hosted audio library. Paste a YouTube URL → trimmed, playable mp3 stored in MinIO.
+> Personal self-hosted audio library. Paste a YouTube URL → trimmed, speed-adjusted, playable mp3 stored in MinIO.
 
 ---
 
@@ -27,12 +27,11 @@ graph TD
     API -->|create record status=pending| PG[(PostgreSQL)]
     API -->|enqueue task| Redis[(Redis)]
     Redis -->|consume| Worker
-    Worker -->|probe_metadata yt-dlp| YT[YouTube]
-    Worker -->|yt-dlp download| YT
+    Worker -->|yt-dlp download| YT[YouTube]
     Worker -->|upload mp3| MinIO[(MinIO)]
     Worker -->|update status=done| PG
     Client -->|GET /songs/id/stream| API
-    API -->|fetch + FFmpeg trim| MinIO
+    API -->|fetch + trim + speed| MinIO
     API -->|StreamingResponse| Client
 ```
 
@@ -56,49 +55,34 @@ sequenceDiagram
 
     R->>W: dequeue task
     W->>D: UPDATE status=processing
-    W->>W: probe_metadata (yt-dlp, download=False)
-    W->>D: UPDATE title, duration, thumbnail_url, channel, upload_date
+    W->>W: probe_metadata (yt-dlp, no download)
     W->>W: yt-dlp download → /tmp/melo/<id>.mp3
     W->>M: upload songs/<id>.mp3
     W->>D: UPDATE file_url, duration, status=done
 
-    C->>A: GET /songs/{id}/stream
+    C->>A: GET /songs/{id}/stream?
     A->>D: SELECT song WHERE id=...
-    alt no trim params
-        A->>M: get_object(songs/<id>.mp3)
-        A-->>C: StreamingResponse audio/mpeg (direct)
-    else trim params set
-        A->>M: get_object → write /tmp/melo/<id>_original.mp3
-        A->>A: FFmpeg trim → /tmp/melo/<id>_trimmed.mp3
-        A-->>C: StreamingResponse audio/mpeg (trimmed)
-        A->>A: cleanup tmp files
-    end
+    A->>M: get_object(songs/<id>.mp3)
+    note over A: trim and/or speed applied on-the-fly
+    A-->>C: StreamingResponse audio/mpeg
 ```
 
 ---
 
-## Dedup Flow (same youtube_id, different trim)
+## Stream Case Matrix
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant A as API
-    participant R as Redis
-    participant W as Worker
-    participant D as DB
+| has_trim | has_speed | Behaviour                     |
+| -------- | --------- | ----------------------------- |
+| ❌        | ❌         | Direct MinIO proxy (fastest)  |
+| ✅        | ❌         | Fetch → trim → stream         |
+| ❌        | ✅         | Fetch → speed → stream        |
+| ✅        | ✅         | Fetch → trim → speed → stream |
 
-    C->>A: POST /songs {url, start=30, end=90}
-    A->>D: INSERT new song record status=pending
-    A->>R: enqueue process_song_task
-    A-->>C: 202 {id, status=pending}
+Speed uses FFmpeg `atempo` filter, chained for values outside `[0.5, 2.0]`:
 
-    R->>W: dequeue task
-    W->>D: UPDATE status=processing
-    W->>W: probe_metadata
-    W->>D: UPDATE metadata fields
-    W->>D: SELECT existing done song WHERE youtube_id matches
-    W->>D: UPDATE new song: copy file_url + metadata, status=done
-    Note over W: No download. No MinIO upload.
+```text
+speed=4.0  → atempo=2.0,atempo=2.0
+speed=0.25 → atempo=0.5,atempo=0.5
 ```
 
 ---
@@ -109,8 +93,7 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> pending: POST /songs
     pending --> processing: worker picks up task
-    processing --> done: probe + download + upload success
-    processing --> done: dedup hit (existing file reused)
+    processing --> done: download + upload success
     processing --> failed: DownloadError / StorageError
     processing --> processing: retry (max 3×, unknown errors only)
     processing --> failed: MaxRetriesExceeded
@@ -149,7 +132,7 @@ graph LR
 
 ```bash
 # 1. Clone
-git clone https://github.com/yourname/melo && cd melo
+git clone https://github.com/KarthikUdyawar/melo && cd melo
 
 # 2. Configure
 cp example.env .env.staging   # already set for Docker Compose
@@ -157,71 +140,59 @@ cp example.env .env.staging   # already set for Docker Compose
 # 3. Run
 make up
 
-# 4. Submit a song
+# 4. Submit a song (with optional trim + speed)
 curl -X POST http://localhost:8000/songs \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "speed": 1.0}'
+  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "start": 10, "end": 60, "speed": 1.5}'
 
-# 5. Submit same song with trim (no re-download — dedup kicks in)
-curl -X POST http://localhost:8000/songs \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "start": 30, "end": 90}'
-
-# 6. Check status
+# 5. Check status
 curl http://localhost:8000/songs/<id>
 
-# 7. Stream when done (trim applied on-the-fly if start/end set)
+# 6. Stream when done
 curl -OJ http://localhost:8000/songs/<id>/stream
+
+# 7. Run smoke test
+make smoke
 ```
 
 ---
 
 ## Make Targets
 
-| Target              | Description                         |
-| ------------------- | ----------------------------------- |
-| `make up`           | Build + start all services detached |
-| `make down`         | Stop all services                   |
-| `make down-v`       | Stop + delete all volumes           |
-| `make logs`         | Tail all logs                       |
-| `make logs-api`     | Tail API logs only                  |
-| `make logs-worker`  | Tail worker logs only               |
-| `make ps`           | Show service status                 |
-| `make shell-api`    | Bash into api container             |
-| `make shell-worker` | Bash into worker container          |
-| `make health`       | Hit /health endpoint                |
-| `make songs`        | List all songs                      |
+| Target                    | Description                           |
+| ------------------------- | ------------------------------------- |
+| `make up`                 | Build + start all services detached   |
+| `make down`               | Stop all services                     |
+| `make down-v`             | Stop + delete all volumes             |
+| `make logs`               | Tail all logs                         |
+| `make logs-api`           | Tail API logs only                    |
+| `make logs-worker`        | Tail worker logs only                 |
+| `make ps`                 | Show service status                   |
+| `make shell-api`          | Bash into api container               |
+| `make shell-worker`       | Bash into worker container            |
+| `make health`             | Hit /health endpoint                  |
+| `make songs`              | List all songs                        |
+| `make test-smoke`              | End-to-end smoke test (curl + jq)     |
+| `make test`               | Run full test suite + coverage report |
+| `make test-unit`          | Unit tests only (no Docker needed)    |
+| `make test-integration`   | Integration tests (requires Docker)   |
+| `make test-cov`           | Tests + HTML coverage report          |
+| `make pre-commit`         | Run all pre-commit hooks on all files |
+| `make pre-commit-install` | Install pre-commit hooks (run once)   |
 
 ---
 
 ## API
 
-| Method | Path                 | Description                                                                                                                    |
-| ------ | -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `POST` | `/songs`             | Submit YouTube URL → async job. Supports `start`, `end`, `speed` params. Same `youtube_id` + new trim → dedup, no re-download. |
-| `GET`  | `/songs`             | List all songs with metadata                                                                                                   |
-| `GET`  | `/songs/{id}`        | Get song detail + status + metadata                                                                                            |
-| `GET`  | `/songs/{id}/stream` | Stream mp3. No trim params → direct from MinIO. `start`/`end` set → FFmpeg trim applied on-the-fly, ephemerally.               |
-| `GET`  | `/health`            | Health check                                                                                                                   |
+| Method | Path                 | Description                       |
+| ------ | -------------------- | --------------------------------- |
+| `POST` | `/songs`             | Submit YouTube URL → async job    |
+| `GET`  | `/songs`             | List all songs                    |
+| `GET`  | `/songs/{id}`        | Get song detail + status          |
+| `GET`  | `/songs/{id}/stream` | Stream mp3 (trim + speed applied) |
+| `GET`  | `/health`            | Health check                      |
 
 Interactive docs: **http://localhost:8000/docs**
-
-### Song fields
-
-| Field           | Type           | Notes                                                       |
-| --------------- | -------------- | ----------------------------------------------------------- |
-| `id`            | UUID           |                                                             |
-| `youtube_id`    | string         | Extracted from URL                                          |
-| `title`         | string \| null | Populated by probe before download completes                |
-| `duration`      | float \| null  | Seconds. Probe estimate, overwritten post-download          |
-| `thumbnail_url` | string \| null | YouTube thumbnail                                           |
-| `channel`       | string \| null | Uploader channel name                                       |
-| `upload_date`   | string \| null | YYYYMMDD                                                    |
-| `start`         | float \| null  | Trim start in seconds — applied at stream time by FFmpeg    |
-| `end`           | float \| null  | Trim end in seconds — applied at stream time by FFmpeg      |
-| `speed`         | float          | Playback speed (0.5–4.0), applied in Sprint 3               |
-| `status`        | enum           | `pending` → `processing` → `done` / `failed`                |
-| `file_url`      | string \| null | MinIO object key (full-length source file), set when `done` |
 
 ---
 
@@ -236,12 +207,21 @@ melo/
 │   ├── schemas/      # Pydantic schemas
 │   ├── services/     # downloader, processor, storage
 │   └── workers/      # Celery app + tasks
+├── tests/
+│   ├── conftest.py
+│   ├── docker-compose.test.yml
+│   ├── smoke_test.sh
+│   ├── unit/
+│   └── integration/
 ├── docs/
+│   ├── PRD.md
 │   └── sprints/
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile
 ├── pyproject.toml
+├── .pre-commit-config.yaml
+├── .coderabbit.yaml
 └── example.env
 ```
 
@@ -260,31 +240,58 @@ melo/
 
 ---
 
+## Testing
+
+```bash
+# Unit tests only — no Docker needed, fast
+make test-unit
+
+# Full suite — spins up Postgres via pytest-docker
+make test
+
+# HTML coverage report → htmlcov/index.html
+make test-cov
+```
+
+Coverage target: **80%** (currently 85.74%).
+
+Test layout:
+
+| Module                                | Type        | Coverage |
+| ------------------------------------- | ----------- | -------- |
+| `tests/unit/test_schemas.py`          | Unit        | 100%     |
+| `tests/unit/test_processor.py`        | Unit        | 100%     |
+| `tests/unit/test_storage.py`          | Unit        | 97%      |
+| `tests/unit/test_downloader.py`       | Unit        | 94%      |
+| `tests/integration/test_db.py`        | Integration | —        |
+| `tests/integration/test_songs_api.py` | Integration | —        |
+
+---
+
 ## Decision Log
 
-| Decision                               | Reason                                                                                                                             |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| No Alembic                             | Solo project; `create_all()` on startup sufficient                                                                                 |
-| `APP_ENV`-driven env files             | Clean separation: dev (localhost) / staging (Docker) / prod                                                                        |
-| Pinned yt-dlp format selector          | `bestaudio` needs JS runtime; explicit IDs (`140/251/…`) use plain HTTPS                                                           |
-| Same format selector on probe          | `download=False` still triggers JS-runtime format checks; pinned IDs + `skip:[hls,dash]` suppress 5min hang and warning            |
-| `noplaylist: True` on probe + download | Playlist URLs must resolve to single `?v=` video; without this yt-dlp picks wrong video from playlist context                      |
-| `worker_ready` signal for MinIO bucket | Create once per process, not per task                                                                                              |
-| Proxy stream via FastAPI               | Presigned URLs signed to internal hostname break on host rewrite; API proxies bytes directly                                       |
-| `expire_on_commit=False`               | Avoids lazy-load errors post-commit in Celery context                                                                              |
-| Removed `unique=True` on `youtube_id`  | Dedup-with-trim requires multiple DB rows per video; uniqueness enforced at task level                                             |
-| Dedup at task level, not router level  | Router inserts new record for every submission; worker detects existing `done` record and fast-paths to `done` without re-download |
-| `probe_metadata` before download       | Populates title, thumbnail, channel immediately — `GET /songs/{id}` returns useful data while still `processing`                   |
-| All new `SongResponse` fields nullable | Record serialized at creation (pre-probe); fields populated async — cannot be required                                             |
-| FFmpeg trim on stream, not on ingest   | One source file in MinIO; trim applied ephemerally per request. No N trimmed variants stored.                                      |
-| Stream copy first, re-encode fallback  | `-c copy` is instant and lossless; libmp3lame re-encode only fires on codec mismatch. `-q:a 2` matches ~192kbps download quality.  |
-| Cleanup in generator `finally` block   | Ensures `/tmp/melo` files deleted after last byte sent, even on client disconnect.                                                 |
+| Decision                                | Reason                                                                                       |
+| --------------------------------------- | -------------------------------------------------------------------------------------------- |
+| No Alembic                              | Solo project; `create_all()` on startup sufficient                                           |
+| `APP_ENV`-driven env files              | Clean separation: dev (localhost) / staging (Docker) / prod                                  |
+| Pinned yt-dlp format selector           | `bestaudio` needs JS runtime; explicit IDs (`140/251/…`) use plain HTTPS                     |
+| `worker_ready` signal for MinIO bucket  | Create once per process, not per task                                                        |
+| Proxy stream via FastAPI                | Presigned URLs signed to internal hostname break on host rewrite; API proxies bytes directly |
+| `expire_on_commit=False`                | Avoids lazy-load errors post-commit in Celery context                                        |
+| Speed applied at stream time            | Avoid storing per-speed variants in MinIO                                                    |
+| Chain `atempo` filters                  | FFmpeg atempo limited to 0.5–2.0 per stage                                                   |
+| Trim before speed                       | Correct processing order — trim reduces data before re-encoding                              |
+| `created_paths` list in stream endpoint | Guarantees cleanup of all temp files regardless of which pipeline steps ran                  |
+| Root `conftest.py` for env setup        | `pytest_configure` runs before collection — only reliable hook for early env vars            |
+| Savepoint pattern in `db_session`       | Per-test rollback without truncation; compatible with SQLAlchemy nested transactions         |
+| `tasks.py` excluded from coverage       | Celery internals require live worker; covered by `make smoke` instead                        |
+| `# nosec B108/B603/B607` in processor   | `/tmp/melo` intentional; subprocess args are internal constants only, never user input       |
 
 ---
 
 ## Out of Scope (v1)
 
-- Speed processing (`atempo`) → Sprint 3
-- Favorites + playlists endpoints → Sprint 3
-- Frontend UI → Sprint 3
+- Favorites + playlists endpoints → Sprint 3 (in progress)
+- Metadata preview endpoint → Sprint 3 (in progress)
+- Frontend UI → Sprint 4
 - Multi-user auth, lyrics, waveforms → never (personal tool)

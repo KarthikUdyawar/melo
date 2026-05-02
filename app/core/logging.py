@@ -12,14 +12,14 @@ Console output:
 File output (always JSON, production-level):
   Written to LOG_FILE_PATH (default: /var/log/melo/app.log)
   Rotated at 100 MB, 5 backups kept.
-
-Every log line carries: timestamp · level · logger · message · env
 """
 
 import logging
 import logging.handlers
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -74,33 +74,45 @@ def setup_logging() -> None:
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(console_formatter)
 
-    # ── File handler (always JSON, always production level) ──────────────────
-    log_file = Path(settings.log_file_path)
-    log_file.parent.mkdir(parents=True, exist_ok=True)
+    # Start with just the console handler
+    handlers: list[logging.Handler] = [console_handler]
 
-    file_formatter = structlog.stdlib.ProcessorFormatter(
-        foreign_pre_chain=shared_processors,
-        processors=[
-            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            structlog.processors.JSONRenderer(),
-        ],
-    )
-    file_handler = logging.handlers.RotatingFileHandler(
-        filename=log_file,
-        maxBytes=100 * 1024 * 1024,  # 100 MB
-        backupCount=5,
-        encoding="utf-8",
-    )
-    file_handler.setFormatter(file_formatter)
-    file_handler.setLevel(logging.INFO)  # always INFO+ in file
+    # ── File handler (Defensive directory creation) ──────────────────────────
+    log_file = Path(settings.log_file_path)
+
+    try:
+        # Attempt to create the log directory (e.g., /var/log/melo)
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+
+        file_formatter = structlog.stdlib.ProcessorFormatter(
+            foreign_pre_chain=shared_processors,
+            processors=[
+                structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+                structlog.processors.JSONRenderer(),
+            ],
+        )
+        file_handler = logging.handlers.RotatingFileHandler(
+            filename=log_file,
+            maxBytes=100 * 1024 * 1024,  # 100 MB
+            backupCount=5,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(file_formatter)
+        file_handler.setLevel(logging.INFO)
+        handlers.append(file_handler)
+
+    except (PermissionError, OSError) as e:
+        # Fallback for local dev/WSL/CI where /var/log is restricted.
+        # We use a simple print here because the logger isn't fully set up yet.
+        print(f"--- ⚠️ Logging to file disabled: {e} ---")
 
     # ── Root logger ──────────────────────────────────────────────────────────
     root = logging.getLogger()
-    root.handlers = [console_handler, file_handler]
+    root.handlers = handlers
     root.setLevel(settings.log_level.upper())
 
     # Silence noisy third-party loggers
-    logging.getLogger("uvicorn.access").disabled = True  # middleware covers this
+    logging.getLogger("uvicorn.access").disabled = True
     logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
     logging.getLogger("celery").setLevel(logging.WARNING)
     logging.getLogger("yt_dlp").setLevel(logging.WARNING)
@@ -108,16 +120,13 @@ def setup_logging() -> None:
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     """Return a bound structlog logger. Use instead of ``logging.getLogger``."""
-    return structlog.get_logger(name)  # type: ignore[return-value]
+    return structlog.get_logger(name)
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _add_env(env: str):
-    def processor(logger, method, event_dict):  # noqa: ANN001
+def _add_env(env: str) -> Callable[..., Any]:
+    def processor(
+        logger: Any, method: str, event_dict: dict[str, Any]
+    ) -> dict[str, Any]:
         event_dict["env"] = env
         return event_dict
 
@@ -125,7 +134,4 @@ def _add_env(env: str):
 
 
 # ── Configure immediately on import ─────────────────────────────────────────
-# This ensures all modules that do `get_logger(__name__)` at import time
-# (routers, services, workers) receive a fully configured structlog logger
-# regardless of whether FastAPI lifespan has fired yet.
 setup_logging()

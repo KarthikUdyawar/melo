@@ -1,7 +1,8 @@
 # app/api/songs.py
 import re
+from collections.abc import Generator
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -13,6 +14,7 @@ from app.core.deps import DbDep
 from app.core.logging import get_logger
 from app.models.song import Song, SongStatus
 from app.schemas.song import SongCreate, SongResponse
+from app.services.processor import ProcessingError, apply_speed, trim_audio
 from app.services.storage import _client
 
 logger = get_logger(__name__)
@@ -28,10 +30,10 @@ YOUTUBE_DOMAINS = {
 
 YOUTUBE_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
-_TMP_DIR = Path("/tmp/melo")
+_TMP_DIR = Path("/tmp/melo")  # nosec B108
 
 
-def _serialize(song: Song) -> dict:
+def _serialize(song: Song) -> dict[str, object]:
     return SongResponse(
         id=song.id,
         title=song.title,
@@ -47,6 +49,16 @@ def _serialize(song: Song) -> dict:
         upload_date=song.upload_date,
         created_at=song.created_at.isoformat(),
     ).model_dump(mode="json")
+
+
+def build_content_disposition(filename: str) -> str:
+    """
+    RFC 5987 compliant Content-Disposition header supporting UTF-8 filenames.
+    """
+    ascii_fallback = filename.encode("latin-1", "ignore").decode()
+    utf8_encoded = quote(filename)
+
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
 
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
@@ -88,9 +100,6 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
         process_song_task.delay(
             str(song.id),
             payload.url,
-            payload.start,
-            payload.end,
-            payload.speed,
         )
         logger.info("song_processing_dispatched", song_id=str(song.id))
     except Exception as exc:
@@ -132,12 +141,19 @@ def get_song(song_id: UUID, db: DbDep) -> JSONResponse:
 @router.get("/{song_id}/stream")
 def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
     """
-    Stream the audio for a done song.
+    Stream audio for a done song, applying trim and/or speed on-the-fly.
 
-    Trim-on-stream logic
-    --------------------
-    - No trim params (start=None, end=None): stream raw MinIO object directly.
-    - Trim params set: fetch to /tmp/melo, run FFmpeg trim, stream result, cleanup.
+    Case matrix
+    -----------
+    | has_trim | has_speed | behaviour                          |
+    |----------|-----------|------------------------------------|
+    | False    | False     | direct MinIO proxy (fastest)       |
+    | True     | False     | fetch → trim → stream              |
+    | False    | True      | fetch → speed → stream             |
+    | True     | True      | fetch → trim → speed → stream      |
+
+    Temp files are always cleaned up in generator finally block (streaming
+    cases) or on HTTPException (pre-stream errors).
 
     NOTE: StreamingResponse intentionally skips envelope (binary stream).
     """
@@ -167,8 +183,11 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
     client = _client()
     filename = f"{song.title or song_id}.mp3"
 
-    # ── No trim: stream directly from MinIO ──────────────────────────────────
-    if song.start is None and song.end is None:
+    has_trim = song.start is not None or song.end is not None
+    has_speed = song.speed is not None and song.speed != 1.0
+
+    # ── Case 1: No trim, no speed — direct MinIO proxy ───────────────────────
+    if not has_trim and not has_speed:
         try:
             logger.debug(
                 "stream_direct",
@@ -187,75 +206,116 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
         return StreamingResponse(
             response.stream(32 * 1024),
             media_type="audio/mpeg",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": build_content_disposition(filename)},
         )
 
-    # ── Trim: fetch → FFmpeg → stream → cleanup ──────────────────────────────
-    from app.services.processor import ProcessingError, trim_audio
-
+    # ── Cases 2–4: fetch → [trim] → [speed] → stream → cleanup ──────────────
     original_path = _TMP_DIR / f"{song_id}_original.mp3"
     trimmed_path = _TMP_DIR / f"{song_id}_trimmed.mp3"
+    speed_path = _TMP_DIR / f"{song_id}_speed.mp3"
+
+    # Track which paths actually get created for guaranteed cleanup
+    created_paths: list[Path] = []
 
     try:
-        # 1. Fetch from MinIO to local tmp
         _TMP_DIR.mkdir(parents=True, exist_ok=True)
+
+        # 1. Fetch from MinIO ─────────────────────────────────────────────────
         logger.debug(
-            "stream_fetch_for_trim",
+            "stream_fetch",
             song_id=str(song_id),
-            start=song.start,
-            end=song.end,
+            has_trim=has_trim,
+            has_speed=has_speed,
         )
         try:
             minio_response = client.get_object(s.minio_bucket, song.file_url)
-            with original_path.open("wb") as f:
-                for chunk in minio_response.stream(32 * 1024):
-                    f.write(chunk)
+
+            try:
+                with original_path.open("wb") as f:
+                    for chunk in minio_response.stream(32 * 1024):
+                        f.write(chunk)
+            finally:
+                minio_response.close()
+                minio_response.release_conn()
+
+            created_paths.append(original_path)
         except Exception as exc:
             logger.error("stream_fetch_error", song_id=str(song_id), error=str(exc))
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        # 2. Trim
-        try:
-            trim_audio(
-                input_path=original_path,
-                output_path=trimmed_path,
-                start=song.start,
-                end=song.end,
-            )
-        except ProcessingError as exc:
-            logger.error("trim_error", song_id=str(song_id), error=str(exc))
-            raise HTTPException(status_code=502, detail=f"Trim failed: {exc}") from exc
+        # 2. Trim (if needed) ─────────────────────────────────────────────────
+        post_trim_path = original_path  # default: pass original through
+        if has_trim:
+            try:
+                trim_audio(
+                    input_path=original_path,
+                    output_path=trimmed_path,
+                    start=song.start,
+                    end=song.end,
+                )
+                created_paths.append(trimmed_path)
+                post_trim_path = trimmed_path
+            except ProcessingError as exc:
+                logger.error("trim_error", song_id=str(song_id), error=str(exc))
+                raise HTTPException(
+                    status_code=502, detail=f"Trim failed: {exc}"
+                ) from exc
 
-        # 3. Stream trimmed file, cleanup in generator finally block
+        # 3. Speed (if needed) ────────────────────────────────────────────────
+        final_path = post_trim_path  # default: pass trim result through
+        if has_speed:
+            try:
+                apply_speed(
+                    input_path=post_trim_path,
+                    output_path=speed_path,
+                    speed=song.speed,
+                )
+                created_paths.append(speed_path)
+                final_path = speed_path
+            except ProcessingError as exc:
+                logger.error("speed_error", song_id=str(song_id), error=str(exc))
+                raise HTTPException(
+                    status_code=502, detail=f"Speed processing failed: {exc}"
+                ) from exc
+
+        # 4. Stream + cleanup in generator ────────────────────────────────────
+        mode = (
+            "trim+speed" if has_trim and has_speed else "trim" if has_trim else "speed"
+        )
+
         logger.info(
             "stream_started",
             song_id=str(song_id),
             filename=filename,
-            mode="trimmed",
+            mode=mode,
             start=song.start,
             end=song.end,
+            speed=song.speed,
         )
 
-        def _iter_and_cleanup():
+        # Capture for closure (list is mutable, safe across generator boundary)
+        paths_to_cleanup = list(created_paths)
+
+        def _iter_and_cleanup() -> Generator[bytes, None, None]:
             try:
-                with trimmed_path.open("rb") as f:
+                with final_path.open("rb") as f:
                     while chunk := f.read(32 * 1024):
                         yield chunk
             finally:
-                original_path.unlink(missing_ok=True)
-                trimmed_path.unlink(missing_ok=True)
-                logger.debug("stream_trim_cleanup", song_id=str(song_id))
+                for p in paths_to_cleanup:
+                    p.unlink(missing_ok=True)
+                logger.debug("stream_cleanup", song_id=str(song_id), mode=mode)
 
         return StreamingResponse(
             _iter_and_cleanup(),
             media_type="audio/mpeg",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": build_content_disposition(filename)},
         )
 
     except HTTPException:
-        # Cleanup on error before streaming starts
-        original_path.unlink(missing_ok=True)
-        trimmed_path.unlink(missing_ok=True)
+        # Pre-stream error: cleanup synchronously before raising
+        for p in created_paths:
+            p.unlink(missing_ok=True)
         raise
 
 
@@ -270,23 +330,26 @@ def _extract_youtube_id(url: str) -> str:
     if domain not in YOUTUBE_DOMAINS:
         raise ValueError(f"Invalid YouTube domain: {domain}")
 
-    # --- 1. Query param (?v=...) → MOST IMPORTANT (covers playlists)
+    # 1. Query param (?v=...)
     query = parse_qs(parsed.query)
-    video_ids = query.get("v")
-    if video_ids:
-        vid = video_ids[0]
+    if "v" in query:
+        vid = query["v"][0]
         if YOUTUBE_ID_REGEX.match(vid):
             return vid
 
-    # --- 2. Short URL (youtu.be/<id>)
-    if domain == "youtu.be":
-        vid = parsed.path.lstrip("/").split("/")[0]
-        if YOUTUBE_ID_REGEX.match(vid):
-            return vid
+    # 2. Path-based formats (/shorts/, /embed/, /live/, /v/)
+    # Ensure we look for the ID immediately following the keyword
+    path_match = re.search(r"/(?:shorts|embed|live|v)/([A-Za-z0-9_-]{11})", parsed.path)
+    if path_match:
+        return path_match.group(1)
 
-    # --- 3. Path-based formats (/shorts/, /embed/, /live/)
-    match = re.search(r"/(shorts|embed|live)/([\w\-]{11})", parsed.path)
-    if match:
-        return match.group(2)
+    # 3. Short URL or direct path segment (youtu.be/ID or [youtube.com/v/ID](https://youtube.com/v/ID))
+    # Filter out empty strings from split to handle leading/trailing slashes
+    path_segments = [s for s in parsed.path.split("/") if s]
+    if path_segments:
+        # Check the last segment (works for youtu.be/ID)
+        last_segment = path_segments[-1]
+        if YOUTUBE_ID_REGEX.match(last_segment):
+            return last_segment
 
-    raise ValueError("Could not extract valid YouTube video ID")
+    raise ValueError(f"Could not extract valid YouTube video ID from: {url}")

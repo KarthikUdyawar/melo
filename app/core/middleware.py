@@ -10,6 +10,7 @@ Fields logged:
 """
 
 import time
+from collections.abc import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -23,7 +24,9 @@ _SKIP_PATHS = frozenset({"/health"})
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next) -> Response:  # noqa: ANN001
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response: # noqa: ANN001
         path = request.url.path
         skip = path in _SKIP_PATHS
 
