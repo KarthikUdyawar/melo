@@ -1,5 +1,6 @@
-.PHONY: up down down-v logs logs-api logs-worker ps test lint shell-api shell-worker health songs \
-        pre-commit-install pre-commit pre-commit-all
+.PHONY: up down down-v logs logs-api logs-worker ps shell-api shell-worker \
+        health songs pre-commit-install pre-commit pre-commit-all \
+        test test-unit test-integration test-cov smoke
 
 # ── Docker ────────────────────────────────────────────────────────────────────
 up:
@@ -52,3 +53,21 @@ pre-commit:
 	uv run pre-commit run --all-files
 
 pre-commit-all: pre-commit
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+test:
+	uv run pytest
+
+test-unit:
+	uv run pytest tests/unit -v
+
+test-integration:
+	uv run pytest tests/integration -v
+
+test-cov:
+	uv run pytest --cov=app --cov-report=html:htmlcov --cov-report=term-missing
+	@echo "\n📊  Coverage report: htmlcov/index.html"
+
+test-smoke:
+	chmod +x tests/smoke_test.sh
+	@bash tests/smoke_test.sh $(if $(URL),--url "$(URL)",)

@@ -6,7 +6,7 @@ from pydantic import BaseModel, field_validator, model_validator
 
 YOUTUBE_REGEX = re.compile(
     r"^(https?://)?(www\.)?"
-    r"(youtube\.com/(watch\?v=|shorts/|embed/)|youtu\.be/)"
+    r"(youtube\.com/(watch\?v=|shorts/|embed/|live/)|youtu\.be/)"
     r"[\w\-]{11}"
 )
 

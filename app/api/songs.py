@@ -14,6 +14,7 @@ from app.core.deps import DbDep
 from app.core.logging import get_logger
 from app.models.song import Song, SongStatus
 from app.schemas.song import SongCreate, SongResponse
+from app.services.processor import ProcessingError, apply_speed, trim_audio
 from app.services.storage import _client
 
 logger = get_logger(__name__)
@@ -29,7 +30,7 @@ YOUTUBE_DOMAINS = {
 
 YOUTUBE_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
-_TMP_DIR = Path("/tmp/melo") # nosec B108
+_TMP_DIR = Path("/tmp/melo")  # nosec B108
 
 
 def _serialize(song: Song) -> dict[str, object]:
@@ -202,8 +203,6 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
         )
 
     # ── Cases 2–4: fetch → [trim] → [speed] → stream → cleanup ──────────────
-    from app.services.processor import ProcessingError, apply_speed, trim_audio
-
     original_path = _TMP_DIR / f"{song_id}_original.mp3"
     trimmed_path = _TMP_DIR / f"{song_id}_trimmed.mp3"
     speed_path = _TMP_DIR / f"{song_id}_speed.mp3"
@@ -318,23 +317,26 @@ def _extract_youtube_id(url: str) -> str:
     if domain not in YOUTUBE_DOMAINS:
         raise ValueError(f"Invalid YouTube domain: {domain}")
 
-    # --- 1. Query param (?v=...) → MOST IMPORTANT (covers playlists)
+    # 1. Query param (?v=...)
     query = parse_qs(parsed.query)
-    video_ids = query.get("v")
-    if video_ids:
-        vid = video_ids[0]
+    if "v" in query:
+        vid = query["v"][0]
         if YOUTUBE_ID_REGEX.match(vid):
             return vid
 
-    # --- 2. Short URL (youtu.be/<id>)
-    if domain == "youtu.be":
-        vid = parsed.path.lstrip("/").split("/")[0]
-        if YOUTUBE_ID_REGEX.match(vid):
-            return vid
+    # 2. Path-based formats (/shorts/, /embed/, /live/, /v/)
+    # Ensure we look for the ID immediately following the keyword
+    path_match = re.search(r"/(?:shorts|embed|live|v)/([A-Za-z0-9_-]{11})", parsed.path)
+    if path_match:
+        return path_match.group(1)
 
-    # --- 3. Path-based formats (/shorts/, /embed/, /live/)
-    match = re.search(r"/(shorts|embed|live)/([\w\-]{11})", parsed.path)
-    if match:
-        return match.group(2)
+    # 3. Short URL or direct path segment (youtu.be/ID or [youtube.com/v/ID](https://youtube.com/v/ID))
+    # Filter out empty strings from split to handle leading/trailing slashes
+    path_segments = [s for s in parsed.path.split("/") if s]
+    if path_segments:
+        # Check the last segment (works for youtu.be/ID)
+        last_segment = path_segments[-1]
+        if YOUTUBE_ID_REGEX.match(last_segment):
+            return last_segment
 
-    raise ValueError("Could not extract valid YouTube video ID")
+    raise ValueError(f"Could not extract valid YouTube video ID from: {url}")
