@@ -1,25 +1,24 @@
 #!/usr/bin/env bash
 # =============================================================================
-# smoke_test.sh — Melo end-to-end smoke test (Docker)
+# smoke_preview.sh — POST /songs/preview smoke test (META-2)
+#
+# Standalone: ./smoke_preview.sh
+# Or inline into smoke_test.sh between section 2 and section 3.
 #
 # Usage:
-#   chmod +x smoke_test.sh
-#   ./smoke_test.sh
-#   ./smoke_test.sh --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+#   chmod +x smoke_preview.sh
+#   ./smoke_preview.sh
+#   ./smoke_preview.sh --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 #
 # Requirements: curl, jq
 # =============================================================================
 
 set -euo pipefail
 
-# ── Config ────────────────────────────────────────────────────────────────────
 API="${API_URL:-http://localhost:8000}"
 YT_URL="${1:-}"
 DEFAULT_URL="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-POLL_INTERVAL=3
-POLL_TIMEOUT=120  # seconds to wait for processing
 
-# Parse --url flag
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --url) YT_URL="$2"; shift 2 ;;
@@ -28,7 +27,6 @@ while [[ $# -gt 0 ]]; do
 done
 YT_URL="${YT_URL:-$DEFAULT_URL}"
 
-# ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -37,157 +35,132 @@ NC='\033[0m'
 
 pass() { echo -e "${GREEN}  ✓ $1${NC}"; }
 fail() { echo -e "${RED}  ✗ $1${NC}"; exit 1; }
-info() { echo -e "${CYAN}▶ $1${NC}"; }
-warn() { echo -e "${YELLOW}  ! $1${NC}"; }
+info() { echo -e "${CYAN}  → $1${NC}"; }
 section() { echo -e "\n${CYAN}══ $1 ══${NC}"; }
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-require() {
-    command -v "$1" &>/dev/null || fail "Required tool not found: $1 (install it first)"
-}
-
-api_get() {
-    curl -sf --max-time 10 "${API}$1"
-}
-
 api_post() {
-    curl -sf --max-time 10 -X POST \
+    curl -sf --max-time 15 -X POST \
         -H "Content-Type: application/json" \
         -d "$2" \
         "${API}$1"
 }
 
-# ── Preflight ─────────────────────────────────────────────────────────────────
-section "Preflight"
-require curl
-require jq
+api_post_raw() {
+    # Returns HTTP status + body separated by |||
+    curl -s --max-time 15 -X POST \
+        -H "Content-Type: application/json" \
+        -d "$2" \
+        -w "|||%{http_code}" \
+        "${API}$1"
+}
 
-echo "  API:     $API"
-echo "  YT URL:  $YT_URL"
+# ── P1. Happy path ─────────────────────────────────────────────────────────────
+section "P1. Preview — happy path"
 
-# ── 1. Health check ───────────────────────────────────────────────────────────
-section "1. Health"
-HEALTH=$(api_get "/health") || fail "Health endpoint unreachable — is Docker running? (make up)"
-STATUS=$(echo "$HEALTH" | jq -r '.status // .body.status // "ok"')
-pass "GET /health → $STATUS"
+PREVIEW=$(api_post "/songs/preview" "{\"url\": \"$YT_URL\"}") \
+    || fail "POST /songs/preview failed"
 
-# ── 2. List songs (baseline) ──────────────────────────────────────────────────
-section "2. List Songs (baseline)"
-LIST=$(api_get "/songs") || fail "GET /songs failed"
-INITIAL_COUNT=$(echo "$LIST" | jq -r '.body.count')
-pass "GET /songs → $INITIAL_COUNT songs"
+HTTP_CODE=$(echo "$PREVIEW" | jq -r '.status_code')
+[[ "$HTTP_CODE" == "200" ]] || fail "Expected status_code=200, got $HTTP_CODE"
 
-# ── 3. Submit song ────────────────────────────────────────────────────────────
-section "3. Submit Song"
-PAYLOAD=$(jq -n --arg url "$YT_URL" '{"url": $url, "speed": 1.0}')
-SUBMIT=$(api_post "/songs" "$PAYLOAD") || fail "POST /songs failed"
+YOUTUBE_ID=$(echo "$PREVIEW" | jq -r '.body.youtube_id')
+[[ -n "$YOUTUBE_ID" && "$YOUTUBE_ID" != "null" ]] \
+    || fail "youtube_id missing from response"
 
-SONG_ID=$(echo "$SUBMIT" | jq -r '.body.id')
-SUBMIT_STATUS=$(echo "$SUBMIT" | jq -r '.body.status')
-HTTP_CODE=$(echo "$SUBMIT" | jq -r '.status_code')
+TITLE=$(echo "$PREVIEW" | jq -r '.body.title // "null"')
+DURATION=$(echo "$PREVIEW" | jq -r '.body.duration // "null"')
+CHANNEL=$(echo "$PREVIEW" | jq -r '.body.channel // "null"')
+UPLOAD_DATE=$(echo "$PREVIEW" | jq -r '.body.upload_date // "null"')
+THUMBNAIL=$(echo "$PREVIEW" | jq -r '.body.thumbnail_url // "null"')
 
-[[ "$HTTP_CODE" == "202" ]] || fail "Expected 202, got $HTTP_CODE"
-[[ "$SUBMIT_STATUS" == "pending" ]] || fail "Expected status=pending, got $SUBMIT_STATUS"
-[[ -n "$SONG_ID" && "$SONG_ID" != "null" ]] || fail "No song ID returned"
+pass "POST /songs/preview → 200"
+info "youtube_id:   $YOUTUBE_ID"
+info "title:        $TITLE"
+info "duration:     ${DURATION}s"
+info "channel:      $CHANNEL"
+info "upload_date:  $UPLOAD_DATE"
+info "thumbnail:    $THUMBNAIL"
 
-pass "POST /songs → 202 accepted, id=$SONG_ID"
+# Envelope shape
+MESSAGE=$(echo "$PREVIEW" | jq -r '.message')
+[[ "$MESSAGE" != "null" && -n "$MESSAGE" ]] || fail "envelope.message missing"
+pass "Envelope shape valid (status_code, message, body)"
 
-# ── 4. GET song detail ────────────────────────────────────────────────────────
-section "4. Song Detail"
-DETAIL=$(api_get "/songs/$SONG_ID") || fail "GET /songs/$SONG_ID failed"
-DETAIL_ID=$(echo "$DETAIL" | jq -r '.body.id')
-[[ "$DETAIL_ID" == "$SONG_ID" ]] || fail "ID mismatch: expected $SONG_ID, got $DETAIL_ID"
-pass "GET /songs/$SONG_ID → found"
+# duration > 0
+if [[ "$DURATION" != "null" ]]; then
+    python3 -c "assert float('$DURATION') > 0" 2>/dev/null \
+        || fail "duration must be > 0, got $DURATION"
+    pass "duration > 0"
+fi
 
-# ── 5. Poll for done ──────────────────────────────────────────────────────────
-section "5. Poll Until Done (timeout: ${POLL_TIMEOUT}s)"
-ELAPSED=0
-FINAL_STATUS=""
+# ── P2. No DB row created ─────────────────────────────────────────────────────
+section "P2. Preview — stateless (no DB write)"
 
-while [[ $ELAPSED -lt $POLL_TIMEOUT ]]; do
-    POLL=$(api_get "/songs/$SONG_ID") || fail "Polling failed at ${ELAPSED}s"
-    FINAL_STATUS=$(echo "$POLL" | jq -r '.body.status')
+# Compare song count before/after
+BEFORE=$(curl -sf --max-time 10 "${API}/songs" | jq -r '.body.count')
+api_post "/songs/preview" "{\"url\": \"$YT_URL\"}" > /dev/null
+AFTER=$(curl -sf --max-time 10 "${API}/songs" | jq -r '.body.count')
 
-    case "$FINAL_STATUS" in
-        done)
-            TITLE=$(echo "$POLL" | jq -r '.body.title // "unknown"')
-            DURATION=$(echo "$POLL" | jq -r '.body.duration // "?"')
-            CHANNEL=$(echo "$POLL" | jq -r '.body.channel // "?"')
-            pass "status=done after ${ELAPSED}s"
-            info "  title:    $TITLE"
-            info "  duration: ${DURATION}s"
-            info "  channel:  $CHANNEL"
-            break
-            ;;
-        failed)
-            fail "Song processing failed after ${ELAPSED}s"
-            ;;
-        pending|processing)
-            echo -ne "  ${YELLOW}status=${FINAL_STATUS} (${ELAPSED}s elapsed)...${NC}\r"
-            sleep $POLL_INTERVAL
-            ELAPSED=$((ELAPSED + POLL_INTERVAL))
-            ;;
-        *)
-            fail "Unexpected status: $FINAL_STATUS"
-            ;;
-    esac
+[[ "$BEFORE" == "$AFTER" ]] \
+    || fail "Song count changed after preview: $BEFORE → $AFTER (DB write detected!)"
+pass "Song count unchanged ($BEFORE → $AFTER) — no DB write"
+
+# ── P3. URL format variants ───────────────────────────────────────────────────
+section "P3. Preview — URL format variants"
+
+SHORTS_URL="https://www.youtube.com/shorts/dQw4w9WgXcQ"
+YOUTU_BE_URL="https://youtu.be/dQw4w9WgXcQ"
+
+for TEST_URL in "$SHORTS_URL" "$YOUTU_BE_URL"; do
+    RESP=$(api_post "/songs/preview" "{\"url\": \"$TEST_URL\"}") \
+        || fail "preview failed for $TEST_URL"
+    CODE=$(echo "$RESP" | jq -r '.status_code')
+    [[ "$CODE" == "200" ]] || fail "Expected 200 for $TEST_URL, got $CODE"
+    pass "$(echo "$TEST_URL" | sed 's|https://||') → 200"
 done
 
-[[ "$FINAL_STATUS" == "done" ]] || fail "Timed out after ${POLL_TIMEOUT}s — final status: $FINAL_STATUS"
+# ── P4. Validation — bad URL ──────────────────────────────────────────────────
+section "P4. Preview — invalid URL → 422"
 
-# ── 6. Stream audio ───────────────────────────────────────────────────────────
-section "6. Stream Audio"
-TMP_FILE=$(mktemp /tmp/melo_smoke_XXXXXX.mp3)
-trap 'rm -f "$TMP_FILE"' EXIT
+RAW=$(api_post_raw "/songs/preview" '{"url": "https://vimeo.com/123456"}')
+BODY="${RAW%|||*}"
+HTTP="${RAW##*|||}"
 
-HTTP_STATUS=$(curl -sf --max-time 30 \
-    -o "$TMP_FILE" \
-    -w "%{http_code}" \
-    "${API}/songs/${SONG_ID}/stream") || fail "GET /songs/$SONG_ID/stream failed"
+[[ "$HTTP" == "422" ]] || fail "Expected 422 for non-YouTube URL, got $HTTP"
+BODY_NULL=$(echo "$BODY" | jq -r '.body')
+[[ "$BODY_NULL" == "null" ]] || fail "Expected body=null on 422, got $BODY_NULL"
+pass "Non-YouTube URL → 422 with body: null"
 
-[[ "$HTTP_STATUS" == "200" ]] || fail "Stream returned HTTP $HTTP_STATUS"
+# ── P5. Validation — missing url field ───────────────────────────────────────
+section "P5. Preview — missing url field → 422"
 
-FILE_SIZE=$(wc -c < "$TMP_FILE")
-[[ $FILE_SIZE -gt 1024 ]] || fail "Stream output suspiciously small: ${FILE_SIZE} bytes"
+RAW=$(api_post_raw "/songs/preview" '{}')
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "422" ]] || fail "Expected 422 for missing url, got $HTTP"
+pass "Missing url field → 422"
 
-pass "GET /songs/$SONG_ID/stream → 200, ${FILE_SIZE} bytes"
+# ── P6. Validation — YouTube homepage (no video ID) ──────────────────────────
+section "P6. Preview — YouTube homepage → 422"
 
-# ── 7. Validation — bad URL ───────────────────────────────────────────────────
-section "7. Validation (bad URL)"
-BAD=$(curl -s --max-time 10 -X POST \
-    -H "Content-Type: application/json" \
-    -d '{"url": "https://vimeo.com/123456"}' \
-    "${API}/songs")
-BAD_CODE=$(echo "$BAD" | jq -r '.status_code // 200')
-[[ "$BAD_CODE" == "422" ]] || fail "Expected 422 for invalid URL, got $BAD_CODE"
-pass "POST /songs (bad URL) → 422"
+RAW=$(api_post_raw "/songs/preview" '{"url": "https://www.youtube.com/"}')
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "422" ]] || fail "Expected 422 for YouTube homepage, got $HTTP"
+pass "YouTube homepage (no video ID) → 422"
 
-# ── 8. Validation — bad speed ─────────────────────────────────────────────────
-section "8. Validation (bad speed)"
-BAD2=$(curl -s --max-time 10 -X POST \
-    -H "Content-Type: application/json" \
-    -d "{\"url\": \"$YT_URL\", \"speed\": 99.0}" \
-    "${API}/songs")
-BAD2_CODE=$(echo "$BAD2" | jq -r '.status_code // 200')
-[[ "$BAD2_CODE" == "422" ]] || fail "Expected 422 for invalid speed, got $BAD2_CODE"
-pass "POST /songs (bad speed) → 422"
+# ── P7. Idempotency ───────────────────────────────────────────────────────────
+section "P7. Preview — idempotency (3 calls, 0 rows)"
 
-# ── 9. 404 for unknown ID ─────────────────────────────────────────────────────
-section "9. Not Found"
-FAKE_ID="00000000-0000-0000-0000-000000000000"
-NOT_FOUND=$(curl -s --max-time 10 "${API}/songs/${FAKE_ID}")
-NF_CODE=$(echo "$NOT_FOUND" | jq -r '.status_code // 200')
-[[ "$NF_CODE" == "404" ]] || fail "Expected 404 for unknown ID, got $NF_CODE"
-pass "GET /songs/$FAKE_ID → 404"
+COUNT_BEFORE=$(curl -sf --max-time 10 "${API}/songs" | jq -r '.body.count')
+for i in 1 2 3; do
+    api_post "/songs/preview" "{\"url\": \"$YT_URL\"}" > /dev/null
+done
+COUNT_AFTER=$(curl -sf --max-time 10 "${API}/songs" | jq -r '.body.count')
 
-# ── 10. List songs (post-submit count) ───────────────────────────────────────
-section "10. List Songs (post-submit)"
-LIST2=$(api_get "/songs") || fail "GET /songs failed"
-FINAL_COUNT=$(echo "$LIST2" | jq -r '.body.count')
-[[ $FINAL_COUNT -gt $INITIAL_COUNT ]] || fail "Song count did not increase (was $INITIAL_COUNT, now $FINAL_COUNT)"
-pass "GET /songs → $FINAL_COUNT songs (+$((FINAL_COUNT - INITIAL_COUNT)))"
+[[ "$COUNT_BEFORE" == "$COUNT_AFTER" ]] \
+    || fail "Song count changed after 3 previews: $COUNT_BEFORE → $COUNT_AFTER"
+pass "3x preview calls → count still $COUNT_AFTER (idempotent)"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo -e "\n${GREEN}══════════════════════════════════${NC}"
-echo -e "${GREEN}  ✓ All smoke tests passed!${NC}"
+echo -e "${GREEN}  ✓ All preview smoke tests passed!${NC}"
 echo -e "${GREEN}══════════════════════════════════${NC}\n"

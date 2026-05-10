@@ -3,8 +3,10 @@
 Audio downloader — wraps yt-dlp for Melo.
 """
 
+import re
 from pathlib import Path
 from typing import Any, TypedDict, cast
+from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 from yt_dlp.utils import DownloadError as YtDlpDownloadError
@@ -14,7 +16,16 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 # Worker container writes downloads here; volume `worker_tmp` is mounted at /tmp/melo
-_DOWNLOAD_DIR = Path("/tmp/melo") # nosec B108
+_DOWNLOAD_DIR = Path("/tmp/melo")  # nosec B108
+
+YOUTUBE_DOMAINS = {
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "youtu.be",
+}
+_YOUTUBE_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
 
 class SongMeta(TypedDict, total=False):
     title: str | None
@@ -23,8 +34,51 @@ class SongMeta(TypedDict, total=False):
     channel: str | None
     upload_date: str | None
 
+
 class DownloadError(Exception):
     """Raised when yt-dlp fails to download or extract audio."""
+
+
+# ---------------------------------------------------------------------------
+# YouTube ID extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_youtube_id(url: str) -> str:
+    """
+    Extract YouTube video ID from any supported URL format.
+
+    Supports: ?v=, youtu.be, /shorts/, /embed/, /live/, playlist URLs.
+
+    Raises:
+        ValueError: if no valid 11-char video ID can be extracted.
+    """
+    parsed = urlparse(url)
+    domain = parsed.netloc.lower()
+
+    if domain not in YOUTUBE_DOMAINS:
+        raise ValueError(f"Invalid YouTube domain: {domain!r}")
+
+    # 1. Query param (?v=...)
+    query = parse_qs(parsed.query)
+    if "v" in query:
+        vid = query["v"][0]
+        if _YOUTUBE_ID_REGEX.match(vid):
+            return vid
+
+    # 2. Path-based formats (/shorts/, /embed/, /live/, /v/)
+    path_match = re.search(r"/(?:shorts|embed|live|v)/([A-Za-z0-9_-]{11})", parsed.path)
+    if path_match:
+        return path_match.group(1)
+
+    # 3. Short URL direct path segment (youtu.be/ID)
+    path_segments = [s for s in parsed.path.split("/") if s]
+    if path_segments:
+        last_segment = path_segments[-1]
+        if _YOUTUBE_ID_REGEX.match(last_segment):
+            return last_segment
+
+    raise ValueError(f"Could not extract valid YouTube video ID from: {url!r}")
 
 
 # ---------------------------------------------------------------------------

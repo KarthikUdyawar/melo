@@ -13,7 +13,12 @@ from app.core.config import get_settings
 from app.core.deps import DbDep
 from app.core.logging import get_logger
 from app.models.song import Song, SongStatus
-from app.schemas.song import SongCreate, SongResponse
+from app.schemas.song import (
+    PreviewRequest,
+    SongCreate,
+    SongPreviewResponse,
+    SongResponse,
+)
 from app.services.processor import ProcessingError, apply_speed, trim_audio
 from app.services.storage import _client
 
@@ -108,6 +113,59 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
 
     return envelope_response(
         _serialize(song), "Song submitted.", status.HTTP_202_ACCEPTED
+    )
+
+
+@router.post("/preview")
+def preview_song(payload: PreviewRequest) -> JSONResponse:
+    """
+    Fetch YouTube metadata without creating a DB record or enqueuing a task.
+
+    Stateless — pure yt-dlp probe. Use before POST /songs to show the user
+    what they're about to ingest (title, duration, thumbnail, channel).
+
+    Response time target: <2s (no download, metadata only).
+    """
+    from app.services.downloader import (
+        DownloadError,
+        extract_youtube_id,
+        probe_metadata,
+    )
+
+    logger.info("preview_request", url=payload.url)
+
+    try:
+        youtube_id = extract_youtube_id(payload.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        meta = probe_metadata(payload.url)
+    except DownloadError as exc:
+        logger.error("preview_probe_failed", url=payload.url, error=str(exc))
+        raise HTTPException(
+            status_code=502, detail=f"Failed to fetch metadata: {exc}"
+        ) from exc
+
+    preview = SongPreviewResponse(
+        youtube_id=youtube_id,
+        title=meta.get("title"),
+        duration=meta.get("duration"),
+        thumbnail_url=meta.get("thumbnail_url"),
+        channel=meta.get("channel"),
+        upload_date=meta.get("upload_date"),
+    )
+
+    logger.info(
+        "preview_complete",
+        youtube_id=youtube_id,
+        title=preview.title,
+        duration=preview.duration,
+    )
+
+    return envelope_response(
+        preview.model_dump(mode="json"),
+        "Metadata fetched successfully.",
     )
 
 
@@ -343,7 +401,7 @@ def _extract_youtube_id(url: str) -> str:
     if path_match:
         return path_match.group(1)
 
-    # 3. Short URL or direct path segment (youtu.be/ID or [youtube.com/v/ID](https://youtube.com/v/ID))
+    # 3. Short URL or direct path segment (youtu.be/ID or youtube.com/v/ID)
     # Filter out empty strings from split to handle leading/trailing slashes
     path_segments = [s for s in parsed.path.split("/") if s]
     if path_segments:

@@ -45,6 +45,29 @@ class SongCreate(BaseModel):
         return self
 
 
+class PreviewRequest(BaseModel):
+    url: str
+
+    @field_validator("url")
+    @classmethod
+    def validate_youtube_url(cls, v: str) -> str:
+        if not YOUTUBE_REGEX.match(v.strip()):
+            raise ValueError(
+                "url must be a valid YouTube URL "
+                "(youtube.com/watch?v=..., youtu.be/..., or shorts/)"
+            )
+        return v.strip()
+
+
+class SongPreviewResponse(BaseModel):
+    youtube_id: str
+    title: str | None = None
+    duration: float | None = None
+    thumbnail_url: str | None = None
+    channel: str | None = None
+    upload_date: str | None = None  # YYYYMMDD string from yt-dlp
+
+
 class SongResponse(BaseModel):
     id: UUID
     title: str | None = None
