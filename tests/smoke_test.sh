@@ -254,11 +254,11 @@ IS_FAV=$(echo "$FAVS" | jq -r --arg id "$SONG_ID" '.body.records[] | select(.id=
 [[ "$IS_FAV" == "true" ]] || fail "Song not marked is_favorite=true in GET /favorites"
 pass "GET /favorites → count=$FAV_COUNT, is_favorite=true"
 
-# GET /songs — is_favorite reflected
-SONGS=$(api_get "/songs") || fail "GET /songs failed"
-IS_FAV_SONGS=$(echo "$SONGS" | jq -r --arg id "$SONG_ID" '.body.records[] | select(.id==$id) | .is_favorite')
-[[ "$IS_FAV_SONGS" == "true" ]] || fail "is_favorite not true in GET /songs"
-pass "GET /songs — is_favorite=true reflected"
+# GET /songs/{id} — is_favorite reflected (pagination-safe)
+SONG_ONE=$(api_get "/songs/$SONG_ID") || fail "GET /songs/$SONG_ID failed"
+IS_FAV_SONG=$(echo "$SONG_ONE" | jq -r '.body.is_favorite')
+[[ "$IS_FAV_SONG" == "true" ]] || fail "is_favorite not true in GET /songs/{id}"
+pass "GET /songs/{id} — is_favorite=true reflected"
 
 # DELETE → 204
 DEL_RAW=$(api_delete_raw "/favorites/$SONG_ID")
@@ -274,11 +274,11 @@ IS_PRESENT_AFTER=$(echo "$FAVS_AFTER" | jq -r --arg id "$SONG_ID" '[.body.record
 [[ "$IS_PRESENT_AFTER" -eq 0 ]] || fail "Deleted song still present in GET /favorites"
 pass "GET /favorites after delete → count=$COUNT_AFTER"
 
-# is_favorite=false in /songs after delete
-SONGS_AFTER=$(api_get "/songs") || fail "GET /songs after delete failed"
-IS_FAV_AFTER=$(echo "$SONGS_AFTER" | jq -r --arg id "$SONG_ID" '.body.records[] | select(.id==$id) | .is_favorite')
+# is_favorite=false in /songs/{id} after delete (pagination-safe)
+SONG_ONE_AFTER=$(api_get "/songs/$SONG_ID") || fail "GET /songs/$SONG_ID after delete failed"
+IS_FAV_AFTER=$(echo "$SONG_ONE_AFTER" | jq -r '.body.is_favorite')
 [[ "$IS_FAV_AFTER" == "false" ]] || fail "is_favorite still true after DELETE"
-pass "GET /songs — is_favorite=false after delete"
+pass "GET /songs/{id} — is_favorite=false after delete"
 
 # =============================================================================
 # S10. Favorites — error paths

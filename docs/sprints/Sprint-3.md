@@ -422,26 +422,26 @@ offset
 
 ## Decision Log
 
-| Decision                                       | Reason                                                                                                                                              |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Metadata preview endpoint                      | Enables better UX before async job                                                                                                                  |
-| Preview is stateless                           | No DB writes, simpler system                                                                                                                        |
-| Still probe in worker                          | Preview not source of truth                                                                                                                         |
-| Speed applied at stream time                   | Avoid storing variants                                                                                                                              |
-| Chain `atempo` filters                         | FFmpeg limitation: single stage capped at 0.5–2.0                                                                                                   |
-| Trim before speed                              | Correct processing order                                                                                                                            |
-| Favorites idempotent (check-then-insert)       | Clean UX; race condition acceptable for solo user; avoids upsert complexity                                                                         |
-| `unique=True` on `favorites.song_id`           | DB-level dedup guarantee regardless of app logic                                                                                                    |
-| `is_favorite` queried per song in `_serialize` | N+1 acceptable at MVP scale; batch subquery deferred to API-2                                                                                       |
-| `DELETE /favorites` returns 204                | No body on delete; 404 if not favorited for explicit error feedback                                                                                 |
-| Playlist ordering via `position`               | Predictable playback                                                                                                                                |
-| Filtering at DB level                          | Scalability                                                                                                                                         |
-| Computed `effective_duration`                  | Reflects real playback                                                                                                                              |
-| No caching of processed streams                | Keep system simple                                                                                                                                  |
-| Optional Redis preview cache                   | Reduce yt-dlp overhead                                                                                                                              |
-| `class Envelope[T]` requires Python 3.12       | PEP 695 syntax — confirmed `requires-python = ">=3.12"` in pyproject                                                                                |
-| `# nosec B108/B603/B607` in processor          | `/tmp/melo` is intentional; subprocess args are internal constants only                                                                             |
-| `tasks.py` excluded from coverage              | Celery task internals require running worker — covered by smoke test                                                                                |
-| Unit test isolation via `_truncate_all()`      | Savepoint rollback unreliable when endpoints call `db.commit()` (releases savepoint); truncate-after-test is simpler and reliable                   |
-| Ordering test omitted from unit suite          | SQLite `func.now()` resolves once per transaction — timestamps identical, order nondeterministic; ordering verified in integration tests (Postgres) |
-| Root `conftest.py` for env setup               | `pytest_configure` at root runs before collection — only reliable hook                                                                              |
+| Decision                                                                | Reason                                                                                                                                              |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Metadata preview endpoint                                               | Enables better UX before async job                                                                                                                  |
+| Preview is stateless                                                    | No DB writes, simpler system                                                                                                                        |
+| Still probe in worker                                                   | Preview not source of truth                                                                                                                         |
+| Speed applied at stream time                                            | Avoid storing variants                                                                                                                              |
+| Chain `atempo` filters                                                  | FFmpeg limitation: single stage capped at 0.5–2.0                                                                                                   |
+| Trim before speed                                                       | Correct processing order                                                                                                                            |
+| Favorites idempotent (check-then-insert + IntegrityError handling)      | Clean UX with DB-backed dedup and safe behavior under concurrent requests                                                                           |
+| `unique=True` on `favorites.song_id`                                    | DB-level dedup guarantee regardless of app logic                                                                                                    |
+| `is_favorite` populated with prefetched favorites in list serialization | Avoid N+1 in `/songs`; keep single-record paths simple                                                                                              |
+| `DELETE /favorites` returns 204                                         | No body on delete; 404 if not favorited for explicit error feedback                                                                                 |
+| Playlist ordering via `position`                                        | Predictable playback                                                                                                                                |
+| Filtering at DB level                                                   | Scalability                                                                                                                                         |
+| Computed `effective_duration`                                           | Reflects real playback                                                                                                                              |
+| No caching of processed streams                                         | Keep system simple                                                                                                                                  |
+| Optional Redis preview cache                                            | Reduce yt-dlp overhead                                                                                                                              |
+| `class Envelope[T]` requires Python 3.12                                | PEP 695 syntax — confirmed `requires-python = ">=3.12"` in pyproject                                                                                |
+| `# nosec B108/B603/B607` in processor                                   | `/tmp/melo` is intentional; subprocess args are internal constants only                                                                             |
+| `tasks.py` excluded from coverage                                       | Celery task internals require running worker — covered by smoke test                                                                                |
+| Unit test isolation via `_truncate_all()`                               | Savepoint rollback unreliable when endpoints call `db.commit()` (releases savepoint); truncate-after-test is simpler and reliable                   |
+| Ordering test omitted from unit suite                                   | SQLite `func.now()` resolves once per transaction — timestamps identical, order nondeterministic; ordering verified in integration tests (Postgres) |
+| Root `conftest.py` for env setup                                        | `pytest_configure` at root runs before collection — only reliable hook                                                                              |
