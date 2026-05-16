@@ -92,7 +92,7 @@ pass "Envelope shape valid (status_code, message, body)"
 
 # duration > 0
 if [[ "$DURATION" != "null" ]]; then
-    python3 -c "assert float('$DURATION') > 0" 2>/dev/null \
+    jq -ne --argjson d "$DURATION" '$d > 0' >/dev/null \
         || fail "duration must be > 0, got $DURATION"
     pass "duration > 0"
 fi
