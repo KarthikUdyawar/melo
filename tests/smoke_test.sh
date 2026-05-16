@@ -2,13 +2,13 @@
 # =============================================================================
 # smoke_preview.sh — POST /songs/preview smoke test (META-2)
 #
-# Standalone: ./smoke_preview.sh
+# Standalone: ./tests/smoke_test.sh
 # Or inline into smoke_test.sh between section 2 and section 3.
 #
 # Usage:
 #   chmod +x smoke_preview.sh
-#   ./smoke_preview.sh
-#   ./smoke_preview.sh --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+#   ./tests/smoke_test.sh
+#   ./tests/smoke_test.sh --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 #
 # Requirements: curl, jq
 # =============================================================================
@@ -21,7 +21,11 @@ DEFAULT_URL="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --url) YT_URL="$2"; shift 2 ;;
+        --url)
+            [[ $# -ge 2 ]] || fail "Missing value for --url"
+            YT_URL="$2"
+            shift 2
+            ;;
         *) shift ;;
     esac
 done
