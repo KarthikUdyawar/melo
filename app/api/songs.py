@@ -11,6 +11,7 @@ from app.api.responses import envelope_response, paginated_response
 from app.core.config import get_settings
 from app.core.deps import DbDep
 from app.core.logging import get_logger
+from app.models.favorite import Favorite
 from app.models.song import Song, SongStatus
 from app.schemas.song import (
     PreviewRequest,
@@ -30,7 +31,17 @@ router = APIRouter(prefix="/songs", tags=["songs"])
 _TMP_DIR = Path("/tmp/melo")  # nosec B108
 
 
-def _serialize(song: Song) -> dict[str, object]:
+def _is_favorited(song_id: UUID, db: DbDep) -> bool:
+    return db.query(Favorite).filter(Favorite.song_id == song_id).first() is not None
+
+
+def _serialize(
+    song: Song, db: DbDep, *, is_favorite: bool | None = None
+) -> dict[str, object]:
+    """Serialize a song. Pass `is_favorite` to avoid per-song DB hits."""
+    if is_favorite is None:
+        is_favorite = _is_favorited(song.id, db)
+
     return SongResponse(
         id=song.id,
         title=song.title,
@@ -45,13 +56,12 @@ def _serialize(song: Song) -> dict[str, object]:
         channel=song.channel,
         upload_date=song.upload_date,
         created_at=song.created_at.isoformat(),
+        is_favorite=is_favorite,
     ).model_dump(mode="json")
 
 
 def build_content_disposition(filename: str) -> str:
-    """
-    RFC 5987 compliant Content-Disposition header supporting UTF-8 filenames.
-    """
+    """RFC 5987 compliant Content-Disposition header supporting UTF-8 filenames."""
     ascii_fallback = filename.encode("latin-1", "ignore").decode()
     utf8_encoded = quote(filename)
 
@@ -108,7 +118,7 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
         raise
 
     return envelope_response(
-        _serialize(song), "Song submitted.", status.HTTP_202_ACCEPTED
+        _serialize(song, db), "Song submitted.", status.HTTP_202_ACCEPTED
     )
 
 
@@ -170,8 +180,19 @@ def list_songs(db: DbDep) -> JSONResponse:
     """List all songs with their current processing status."""
     logger.debug("list_songs_request")
     songs = db.query(Song).order_by(Song.created_at.desc()).all()
-    logger.info("songs_retrieved", count=len(songs))
-    records = [_serialize(s) for s in songs]
+
+    # Prefetch all favorites in one query → eliminates N+1
+    song_ids = [s.id for s in songs]
+    favorite_ids: set[UUID] = set()
+    if song_ids:
+        favorite_ids = {
+            sid
+            for (sid,) in db.query(Favorite.song_id)
+            .filter(Favorite.song_id.in_(song_ids))
+            .all()
+        }
+
+    records = [_serialize(s, db, is_favorite=(s.id in favorite_ids)) for s in songs]
     return paginated_response(records, len(records), "Songs retrieved.")
 
 
@@ -189,7 +210,7 @@ def get_song(song_id: UUID, db: DbDep) -> JSONResponse:
         )
 
     logger.info("song_retrieved", song_id=str(song_id))
-    return envelope_response(_serialize(song), "Song retrieved.")
+    return envelope_response(_serialize(song, db), "Song retrieved.")
 
 
 @router.get("/{song_id}/stream")

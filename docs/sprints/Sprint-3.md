@@ -45,7 +45,7 @@
     4. **Trim + speed** → trim → then speed
   * Temp pipeline:
 
-    ```
+    ```text
     original → trimmed → speed-adjusted → stream
     ```
 
@@ -98,10 +98,15 @@
 * [x] `tests/unit/test_processor.py` — 18 tests: `_build_atempo_filters` chain correctness, `trim_audio` stream-copy/fallback/cleanup, `apply_speed` success/failure/cleanup
 * [x] `tests/unit/test_storage.py` — 10 tests: `ensure_bucket_exists`, `upload_file`, `get_presigned_url` (all with mocked Minio)
 * [x] `tests/unit/test_downloader.py` — 11 tests: `probe_metadata`, `download_audio` (mocked yt-dlp)
+* [x] `tests/unit/test_preview.py` — 17 tests: `extract_youtube_id` URL formats, `/songs/preview` endpoint (success, 502, 422, stateless, sparse metadata)
+* [x] `tests/unit/test_favorites.py` — 18 tests: POST/DELETE/GET favorites, idempotency, 404 paths, `is_favorite` in song responses
 * [x] `tests/integration/test_db.py` — 14 tests: Song CRUD, status transitions, dedup query, multi-record scenarios
 * [x] `tests/integration/test_songs_api.py` — 31 tests: all `/songs` endpoints, stream cases, validation, 404/409/500/502 error paths
-* [x] Coverage: **85.74%** (threshold: 80%) — `tasks.py` and `celery_app.py` excluded (Celery internals)
+* [x] `tests/integration/test_preview_api.py` — 25 tests: happy path, URL variants, validation, error paths, stateless guarantee
+* [x] `tests/integration/test_favorites_api.py` — 17 tests: lifecycle, idempotency, error paths, `is_favorite` reflected in `/songs`
+* [x] Coverage: **94.77%** (threshold: 80%) — `tasks.py` and `celery_app.py` excluded (Celery internals)
 * [x] Makefile targets: `test`, `test-unit`, `test-integration`, `test-cov`
+* [x] Unit test isolation: switched from savepoint rollback to `_truncate_all()` (PRAGMA FK OFF → delete all tables → FK ON) — savepoint unreliable when endpoints call `db.commit()`
 
 ---
 
@@ -111,17 +116,19 @@
 
 > Sprint addition — not originally planned but completed this week.
 
-* [x] `smoke_test.sh` — 10-step end-to-end bash script (requires `curl` + `jq`):
+* [x] `smoke_test.sh` — 12-section end-to-end bash script (requires `curl` + `jq`):
   1. `GET /health`
-  2. `GET /songs` baseline count
-  3. `POST /songs` → 202 + song ID
-  4. `GET /songs/{id}` → detail
-  5. Poll until `status=done` (120s timeout)
-  6. `GET /songs/{id}/stream` → 200 + file size check
-  7. Bad URL → 422
-  8. Bad speed → 422
-  9. Unknown ID → 404
-  10. `GET /songs` → count increased
+  2. `POST /songs/preview` → happy path (youtube_id, title, duration, envelope shape)
+  3. Preview stateless (song count unchanged)
+  4. Preview URL format variants (shorts, youtu.be)
+  5. Preview validation errors (non-YouTube, missing url, homepage → 422)
+  6. `POST /songs` → 202 + song ID
+  7. Poll until `status=done` (120s timeout)
+  8. `GET /songs/{id}/stream` → 200 + file size check
+  9. Favorites lifecycle (POST 201 → POST 200 idempotent → GET list → DELETE 204 → is_favorite toggles)
+  10. Favorites error paths (unknown song → 404, not-favorited → 404)
+  11. Songs validation (bad URL → 422, bad speed → 422, unknown ID → 404)
+  12. `GET /songs` → count increased
 * [x] `make smoke` / `make smoke URL="..."` Makefile target
 
 ---
@@ -139,7 +146,7 @@
 
 ---
 
-### 🧠 META-2 — Metadata Preview (Pre-Ingest UX)
+### ✅ META-2 — Metadata Preview (Pre-Ingest UX)
 
 **Branch:** `feature/metadata-preview`
 
@@ -147,7 +154,7 @@
 
 #### 📡 Endpoint
 
-```
+```text
 POST /songs/preview
 ```
 
@@ -171,7 +178,7 @@ POST /songs/preview
     "duration": 213.4,
     "thumbnail_url": "...",
     "channel": "Channel name",
-    "upload_date": "2023-10-01"
+    "upload_date": "20231001"
   }
 }
 ```
@@ -180,38 +187,15 @@ POST /songs/preview
 
 #### Implementation
 
-* [ ] `app/services/downloader.py`
+* [x] `app/services/downloader.py`
 
   * Reuse `probe_metadata(url)`
-  * Ensure:
+  * `download=False`, `noplaylist=True`, pinned format selector, raises `DownloadError`
+  * `extract_youtube_id(url: str) -> str` — supports `?v=`, `youtu.be`, `/shorts/`, `/embed/`, `/live/`
 
-    * `download=False`
-    * `noplaylist=True`
-    * pinned format selector
-    * raises `DownloadError`
+* [x] `app/schemas/song.py` — `SongPreviewResponse`, `PreviewRequest`
 
-* [ ] Add helper:
-
-  ```python
-  def extract_youtube_id(url: str) -> str:
-      ...
-  ```
-
-* [ ] `app/schemas/song.py`
-
-  ```python
-  class SongPreviewResponse(BaseModel):
-      youtube_id: str
-      title: str | None = None
-      duration: float | None = None
-      thumbnail_url: str | None = None
-      channel: str | None = None
-      upload_date: str | None = None
-  ```
-
-* [ ] `app/api/songs.py`
-
-  * Add `/songs/preview` endpoint using `envelope_response`
+* [x] `app/api/songs.py` — `/songs/preview` before `/{song_id}` (route ordering)
 
 ---
 
@@ -226,9 +210,9 @@ POST /songs/preview
 
 #### Validation
 
-* [ ] Invalid URL → 422
-* [ ] Playlist URL resolves to single video
-* [ ] `duration > 0`
+* [x] Invalid URL → 422
+* [x] Playlist URL resolves to single video (`noplaylist=True`)
+* [x] `duration > 0` verified in smoke test
 
 ---
 
@@ -236,7 +220,7 @@ POST /songs/preview
 
 * [ ] Redis cache (TTL 5–10 min):
 
-  ```
+  ```text
   key: preview:{youtube_id}
   ```
 
@@ -244,7 +228,7 @@ POST /songs/preview
 
 #### Updated Flow
 
-```
+```text
 POST /songs/preview → get metadata
         ↓
 User decides trim/speed
@@ -254,32 +238,39 @@ POST /songs → async processing
 
 ---
 
-### ❤️ LIB-1 — Favorites
+### ✅ LIB-1 — Favorites
 
 **Branch:** `feature/favorites`
 
-* [ ] `favorites(id, song_id, created_at)`
+* [x] `favorites(id, song_id, created_at)` — `unique=True` on `song_id` (one row per song)
 
-* [ ] `POST /favorites/{song_id}`
+* [x] `POST /favorites/{song_id}`
 
-  * Idempotent
+  * 201 on create, 200 if already favorited (idempotent)
+  * 404 if song not found
 
-* [ ] `DELETE /favorites/{song_id}`
+* [x] `DELETE /favorites/{song_id}`
 
-* [ ] `GET /favorites`
+  * 204 on success
+  * 404 if song not found or not favorited
 
-  * Join with songs
+* [x] `GET /favorites`
 
-* [ ] Update `SongResponse`:
+  * Join `Favorite → Song`, ordered by `favorite.created_at DESC`
+  * Returns `paginated_response` with `is_favorite=True` on all records
 
-  ```python
-  is_favorite: bool = False
-  ```
+* [x] `SongResponse.is_favorite: bool = False`
 
-* [ ] Verify:
+  * Populated via `_is_favorited()` query in `_serialize()`
+  * Reflected in `GET /songs` and `GET /songs/{id}`
 
-  * No duplicate rows
-  * Reflects in `/songs`
+* [x] Verify:
+
+  * [x] No duplicate rows (DB `unique=True` + check-then-insert)
+  * [x] `is_favorite` reflects in `/songs` and `/songs/{id}`
+  * [x] Toggle: POST → True, DELETE → False
+
+* [x] `app/api/favorites.py` — new router registered in `app/main.py`
 
 ---
 
@@ -289,7 +280,7 @@ POST /songs → async processing
 
 * [ ] Models:
 
-  ```
+  ```text
   playlists(id, name, created_at)
   playlist_songs(playlist_id, song_id, position)
   ```
@@ -321,7 +312,7 @@ POST /songs → async processing
 
 Query params:
 
-```
+```text
 status
 favorite=true/false
 search
@@ -387,18 +378,17 @@ offset
 
 * [ ] `make clean-tmp` → clear `/tmp/melo`
 
-* [ ] Update README:
+* [x] Update README:
 
-  * preview endpoint
-  * favorites
-  * playlists
-  * speed streaming
+  * [x] preview endpoint
+  * [x] favorites
+  * speed streaming (existing)
 
 * [ ] Optional:
 
   * Basic integration test:
 
-    ```
+    ```text
     preview → create → process → stream
     ```
 
@@ -406,10 +396,10 @@ offset
 
 ## Definition of Done
 
-* [ ] `/songs/preview` works reliably (<2s)
+* [x] `/songs/preview` works reliably (<2s)
 * [x] Speed processing works (0.5–4.0)
 * [x] Trim + speed combination streams correctly
-* [ ] Favorites endpoints idempotent and correct
+* [x] Favorites endpoints idempotent and correct
 * [ ] Playlists support ordering + CRUD
 * [ ] `/songs` supports filtering, sorting, pagination
 * [x] All responses follow envelope format
@@ -432,22 +422,26 @@ offset
 
 ## Decision Log
 
-| Decision                                 | Reason                                                                  |
-| ---------------------------------------- | ----------------------------------------------------------------------- |
-| Metadata preview endpoint                | Enables better UX before async job                                      |
-| Preview is stateless                     | No DB writes, simpler system                                            |
-| Still probe in worker                    | Preview not source of truth                                             |
-| Speed applied at stream time             | Avoid storing variants                                                  |
-| Chain `atempo` filters                   | FFmpeg limitation: single stage capped at 0.5–2.0                       |
-| Trim before speed                        | Correct processing order                                                |
-| Favorites idempotent                     | Clean UX                                                                |
-| Playlist ordering via `position`         | Predictable playback                                                    |
-| Filtering at DB level                    | Scalability                                                             |
-| Computed `effective_duration`            | Reflects real playback                                                  |
-| No caching of processed streams          | Keep system simple                                                      |
-| Optional Redis preview cache             | Reduce yt-dlp overhead                                                  |
-| `class Envelope[T]` requires Python 3.12 | PEP 695 syntax — confirmed `requires-python = ">=3.12"` in pyproject    |
-| `# nosec B108/B603/B607` in processor    | `/tmp/melo` is intentional; subprocess args are internal constants only |
-| `tasks.py` excluded from coverage        | Celery task internals require running worker — covered by smoke test    |
-| Savepoint pattern in test `db_session`   | Rolls back per-test without truncation; works with SQLAlchemy nested tx |
-| Root `conftest.py` for env setup         | `pytest_configure` at root runs before collection — only reliable hook  |
+| Decision                                                                | Reason                                                                                                                                              |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Metadata preview endpoint                                               | Enables better UX before async job                                                                                                                  |
+| Preview is stateless                                                    | No DB writes, simpler system                                                                                                                        |
+| Still probe in worker                                                   | Preview not source of truth                                                                                                                         |
+| Speed applied at stream time                                            | Avoid storing variants                                                                                                                              |
+| Chain `atempo` filters                                                  | FFmpeg limitation: single stage capped at 0.5–2.0                                                                                                   |
+| Trim before speed                                                       | Correct processing order                                                                                                                            |
+| Favorites idempotent (check-then-insert + IntegrityError handling)      | Clean UX with DB-backed dedup and safe behavior under concurrent requests                                                                           |
+| `unique=True` on `favorites.song_id`                                    | DB-level dedup guarantee regardless of app logic                                                                                                    |
+| `is_favorite` populated with prefetched favorites in list serialization | Avoid N+1 in `/songs`; keep single-record paths simple                                                                                              |
+| `DELETE /favorites` returns 204                                         | No body on delete; 404 if not favorited for explicit error feedback                                                                                 |
+| Playlist ordering via `position`                                        | Predictable playback                                                                                                                                |
+| Filtering at DB level                                                   | Scalability                                                                                                                                         |
+| Computed `effective_duration`                                           | Reflects real playback                                                                                                                              |
+| No caching of processed streams                                         | Keep system simple                                                                                                                                  |
+| Optional Redis preview cache                                            | Reduce yt-dlp overhead                                                                                                                              |
+| `class Envelope[T]` requires Python 3.12                                | PEP 695 syntax — confirmed `requires-python = ">=3.12"` in pyproject                                                                                |
+| `# nosec B108/B603/B607` in processor                                   | `/tmp/melo` is intentional; subprocess args are internal constants only                                                                             |
+| `tasks.py` excluded from coverage                                       | Celery task internals require running worker — covered by smoke test                                                                                |
+| Unit test isolation via `_truncate_all()`                               | Savepoint rollback unreliable when endpoints call `db.commit()` (releases savepoint); truncate-after-test is simpler and reliable                   |
+| Ordering test omitted from unit suite                                   | SQLite `func.now()` resolves once per transaction — timestamps identical, order nondeterministic; ordering verified in integration tests (Postgres) |
+| Root `conftest.py` for env setup                                        | `pytest_configure` at root runs before collection — only reliable hook                                                                              |

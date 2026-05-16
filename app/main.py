@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.exceptions import HTTPException, RequestValidationError
 
+from app.api.favorites import router as favorites_router
 from app.api.songs import router as songs_router
 from app.core.config import get_settings
 from app.core.db import init_db, ping_db
@@ -47,6 +48,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, unhandled_exception_handler)
 
     app.include_router(songs_router)
+    app.include_router(favorites_router)
 
     return app
 

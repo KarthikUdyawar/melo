@@ -83,5 +83,6 @@ class SongResponse(BaseModel):
     channel: str | None = None
     upload_date: str | None = None  # YYYYMMDD string from yt-dlp
     created_at: str
+    is_favorite: bool = False
 
     model_config = {"from_attributes": True}

@@ -23,6 +23,7 @@
 
 ```mermaid
 graph TD
+    Client -->|POST /songs/preview| API
     Client -->|POST /songs| API
     API -->|create record status=pending| PG[(PostgreSQL)]
     API -->|enqueue task| Redis[(Redis)]
@@ -33,6 +34,8 @@ graph TD
     Client -->|GET /songs/id/stream| API
     API -->|fetch + trim + speed| MinIO
     API -->|StreamingResponse| Client
+    Client -->|POST /favorites/id| API
+    API -->|INSERT favorites| PG
 ```
 
 ---
@@ -48,6 +51,9 @@ sequenceDiagram
     participant M as MinIO
     participant D as DB
 
+    C->>A: POST /songs/preview {url}
+    A-->>C: 200 {youtube_id, title, duration, channel, thumbnail_url}
+
     C->>A: POST /songs {url, start, end, speed}
     A->>D: INSERT song status=pending
     A->>R: enqueue process_song_task
@@ -60,7 +66,7 @@ sequenceDiagram
     W->>M: upload songs/<id>.mp3
     W->>D: UPDATE file_url, duration, status=done
 
-    C->>A: GET /songs/{id}/stream?
+    C->>A: GET /songs/{id}/stream
     A->>D: SELECT song WHERE id=...
     A->>M: get_object(songs/<id>.mp3)
     note over A: trim and/or speed applied on-the-fly
@@ -140,18 +146,29 @@ cp example.env .env.staging   # already set for Docker Compose
 # 3. Run
 make up
 
-# 4. Submit a song (with optional trim + speed)
+# 4. Preview metadata before ingest
+curl -X POST http://localhost:8000/songs/preview \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
+
+# 5. Submit a song (with optional trim + speed)
 curl -X POST http://localhost:8000/songs \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "start": 10, "end": 60, "speed": 1.5}'
 
-# 5. Check status
+# 6. Check status
 curl http://localhost:8000/songs/<id>
 
-# 6. Stream when done
+# 7. Stream when done
 curl -OJ http://localhost:8000/songs/<id>/stream
 
-# 7. Run smoke test
+# 8. Favorite a song
+curl -X POST http://localhost:8000/favorites/<id>
+
+# 9. List favorites
+curl http://localhost:8000/favorites
+
+# 10. Run smoke test
 make smoke
 ```
 
@@ -172,7 +189,7 @@ make smoke
 | `make shell-worker`       | Bash into worker container            |
 | `make health`             | Hit /health endpoint                  |
 | `make songs`              | List all songs                        |
-| `make test-smoke`              | End-to-end smoke test (curl + jq)     |
+| `make smoke`              | End-to-end smoke test (curl + jq)     |
 | `make test`               | Run full test suite + coverage report |
 | `make test-unit`          | Unit tests only (no Docker needed)    |
 | `make test-integration`   | Integration tests (requires Docker)   |
@@ -184,29 +201,69 @@ make smoke
 
 ## API
 
-| Method | Path                 | Description                       |
-| ------ | -------------------- | --------------------------------- |
-| `POST` | `/songs`             | Submit YouTube URL → async job    |
-| `GET`  | `/songs`             | List all songs                    |
-| `GET`  | `/songs/{id}`        | Get song detail + status          |
-| `GET`  | `/songs/{id}/stream` | Stream mp3 (trim + speed applied) |
-| `GET`  | `/health`            | Health check                      |
+| Method   | Path                   | Status | Description                          |
+| -------- | ---------------------- | ------ | ------------------------------------ |
+| `POST`   | `/songs/preview`       | ✅      | Fetch YouTube metadata (no DB write) |
+| `POST`   | `/songs`               | ✅      | Submit YouTube URL → async job       |
+| `GET`    | `/songs`               | ✅      | List all songs (with `is_favorite`)  |
+| `GET`    | `/songs/{id}`          | ✅      | Get song detail + status             |
+| `GET`    | `/songs/{id}/stream`   | ✅      | Stream mp3 (trim + speed applied)    |
+| `POST`   | `/favorites/{song_id}` | ✅      | Favorite a song (idempotent)         |
+| `DELETE` | `/favorites/{song_id}` | ✅      | Unfavorite a song                    |
+| `GET`    | `/favorites`           | ✅      | List favorited songs                 |
+| `GET`    | `/health`              | ✅      | Health check                         |
 
 Interactive docs: **http://localhost:8000/docs**
+
+### Preview Flow
+
+```text
+POST /songs/preview → inspect title, duration, thumbnail
+        ↓
+User decides trim/speed params
+        ↓
+POST /songs → async download + processing
+        ↓
+GET /songs/{id}/stream → playback
+```
+
+### Favorites
+
+```bash
+# Favorite
+curl -X POST http://localhost:8000/favorites/<song_id>
+# → 201 first time, 200 if already favorited (idempotent)
+
+# Unfavorite
+curl -X DELETE http://localhost:8000/favorites/<song_id>
+# → 204
+
+# List
+curl http://localhost:8000/favorites
+# → {records: [...songs with is_favorite=true], count: N}
+```
+
+`is_favorite` is also reflected in `GET /songs` and `GET /songs/{id}`.
 
 ---
 
 ## Folder Structure
 
-```
+```text
 melo/
 ├── app/
-│   ├── api/          # FastAPI routers
-│   ├── core/         # config, db, deps
-│   ├── models/       # SQLAlchemy models
-│   ├── schemas/      # Pydantic schemas
-│   ├── services/     # downloader, processor, storage
-│   └── workers/      # Celery app + tasks
+│   ├── api/
+│   │   ├── favorites.py   # POST/DELETE/GET /favorites
+│   │   ├── songs.py       # songs router incl. /preview
+│   │   └── responses.py   # envelope_response, paginated_response
+│   ├── core/              # config, db, deps, logging, middleware
+│   ├── models/
+│   │   ├── song.py
+│   │   ├── favorite.py
+│   │   └── playlist.py
+│   ├── schemas/           # Pydantic schemas
+│   ├── services/          # downloader, processor, storage
+│   └── workers/           # Celery app + tasks
 ├── tests/
 │   ├── conftest.py
 │   ├── docker-compose.test.yml
@@ -253,45 +310,53 @@ make test
 make test-cov
 ```
 
-Coverage target: **80%** (currently 85.74%).
+Coverage target: **80%** (currently **94.77%**).
 
 Test layout:
 
-| Module                                | Type        | Coverage |
-| ------------------------------------- | ----------- | -------- |
-| `tests/unit/test_schemas.py`          | Unit        | 100%     |
-| `tests/unit/test_processor.py`        | Unit        | 100%     |
-| `tests/unit/test_storage.py`          | Unit        | 97%      |
-| `tests/unit/test_downloader.py`       | Unit        | 94%      |
-| `tests/integration/test_db.py`        | Integration | —        |
-| `tests/integration/test_songs_api.py` | Integration | —        |
+| Module                                    | Type        |
+| ----------------------------------------- | ----------- |
+| `tests/unit/test_schemas.py`              | Unit        |
+| `tests/unit/test_processor.py`            | Unit        |
+| `tests/unit/test_storage.py`              | Unit        |
+| `tests/unit/test_downloader.py`           | Unit        |
+| `tests/unit/test_preview.py`              | Unit        |
+| `tests/unit/test_favorites.py`            | Unit        |
+| `tests/integration/test_db.py`            | Integration |
+| `tests/integration/test_songs_api.py`     | Integration |
+| `tests/integration/test_preview_api.py`   | Integration |
+| `tests/integration/test_favorites_api.py` | Integration |
 
 ---
 
 ## Decision Log
 
-| Decision                                | Reason                                                                                       |
-| --------------------------------------- | -------------------------------------------------------------------------------------------- |
-| No Alembic                              | Solo project; `create_all()` on startup sufficient                                           |
-| `APP_ENV`-driven env files              | Clean separation: dev (localhost) / staging (Docker) / prod                                  |
-| Pinned yt-dlp format selector           | `bestaudio` needs JS runtime; explicit IDs (`140/251/…`) use plain HTTPS                     |
-| `worker_ready` signal for MinIO bucket  | Create once per process, not per task                                                        |
-| Proxy stream via FastAPI                | Presigned URLs signed to internal hostname break on host rewrite; API proxies bytes directly |
-| `expire_on_commit=False`                | Avoids lazy-load errors post-commit in Celery context                                        |
-| Speed applied at stream time            | Avoid storing per-speed variants in MinIO                                                    |
-| Chain `atempo` filters                  | FFmpeg atempo limited to 0.5–2.0 per stage                                                   |
-| Trim before speed                       | Correct processing order — trim reduces data before re-encoding                              |
-| `created_paths` list in stream endpoint | Guarantees cleanup of all temp files regardless of which pipeline steps ran                  |
-| Root `conftest.py` for env setup        | `pytest_configure` runs before collection — only reliable hook for early env vars            |
-| Savepoint pattern in `db_session`       | Per-test rollback without truncation; compatible with SQLAlchemy nested transactions         |
-| `tasks.py` excluded from coverage       | Celery internals require live worker; covered by `make smoke` instead                        |
-| `# nosec B108/B603/B607` in processor   | `/tmp/melo` intentional; subprocess args are internal constants only, never user input       |
+| Decision                                  | Reason                                                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------- |
+| No Alembic                                | Solo project; `create_all()` on startup sufficient                                           |
+| `APP_ENV`-driven env files                | Clean separation: dev (localhost) / staging (Docker) / prod                                  |
+| Pinned yt-dlp format selector             | `bestaudio` needs JS runtime; explicit IDs (`140/251/…`) use plain HTTPS                     |
+| `worker_ready` signal for MinIO bucket    | Create once per process, not per task                                                        |
+| Proxy stream via FastAPI                  | Presigned URLs signed to internal hostname break on host rewrite; API proxies bytes directly |
+| `expire_on_commit=False`                  | Avoids lazy-load errors post-commit in Celery context                                        |
+| Speed applied at stream time              | Avoid storing per-speed variants in MinIO                                                    |
+| Chain `atempo` filters                    | FFmpeg atempo limited to 0.5–2.0 per stage                                                   |
+| Trim before speed                         | Correct processing order — trim reduces data before re-encoding                              |
+| `created_paths` list in stream endpoint   | Guarantees cleanup of all temp files regardless of which pipeline steps ran                  |
+| Preview endpoint is stateless             | No DB writes; simpler system; worker re-probes as source of truth                            |
+| Favorites idempotent (check-then-insert)  | Solo user; race condition acceptable; avoids upsert complexity                               |
+| `is_favorite` queried per song            | N+1 acceptable at MVP scale; batch subquery deferred to API-2                                |
+| `DELETE /favorites` returns 204           | No body on delete; 404 if not favorited for explicit error feedback                          |
+| SQLite truncation for unit test isolation | Savepoint rollback unreliable when endpoint calls `db.commit()` release the savepoint        |
+| Root `conftest.py` for env setup          | `pytest_configure` runs before collection — only reliable hook for early env vars            |
+| `tasks.py` excluded from coverage         | Celery internals require live worker; covered by `make smoke` instead                        |
+| `# nosec B108/B603/B607` in processor     | `/tmp/melo` intentional; subprocess args are internal constants only, never user input       |
 
 ---
 
 ## Out of Scope (v1)
 
-- Favorites + playlists endpoints → Sprint 3 (in progress)
-- Metadata preview endpoint → Sprint 3 (in progress)
+- Playlists → Sprint 3 (in progress)
+- Filtering, sorting, search → Sprint 3 (in progress)
 - Frontend UI → Sprint 4
 - Multi-user auth, lyrics, waveforms → never (personal tool)
