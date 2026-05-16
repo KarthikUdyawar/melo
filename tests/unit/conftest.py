@@ -8,6 +8,10 @@ and blows up.
 
 Fix: patch app.core.db.get_engine at import time so it returns our SQLite
 engine, AND set DATABASE_URL to sqlite before importing app.main.
+
+Isolation strategy: truncate all tables after each test. Transaction rollback
+is unreliable with SQLite StaticPool because endpoint commits release the
+savepoint, making outer rollback a no-op for already-committed rows.
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -40,17 +44,23 @@ def sqlite_engine():
     engine.dispose()
 
 
+def _truncate_all(engine) -> None:
+    """Delete all rows from every table after each test."""
+    with engine.begin() as conn:
+        # Disable FK checks for SQLite so order doesn't matter
+        conn.execute(text("PRAGMA foreign_keys = OFF"))
+        for table in reversed(Base.metadata.sorted_tables):
+            conn.execute(table.delete())
+        conn.execute(text("PRAGMA foreign_keys = ON"))
+
+
 @pytest.fixture()
 def db_session(sqlite_engine) -> Generator[Session, None, None]:
-    """Per-test session wrapped in a transaction that rolls back on teardown."""
-    connection = sqlite_engine.connect()
-    transaction = connection.begin()
-    session = Session(bind=connection, expire_on_commit=False)
-    session.begin_nested()
+    """Per-test session. Truncates all tables on teardown for clean isolation."""
+    session = Session(bind=sqlite_engine, expire_on_commit=False)
     yield session
     session.close()
-    transaction.rollback()
-    connection.close()
+    _truncate_all(sqlite_engine)
 
 
 @pytest.fixture()
