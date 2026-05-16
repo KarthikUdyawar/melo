@@ -69,10 +69,11 @@ def client(db_session: Session, sqlite_engine) -> Generator[TestClient, None, No
 
     app.dependency_overrides[get_db] = _override_get_db
 
-    with (
-        patch("app.core.db.get_engine", return_value=sqlite_engine),
-        TestClient(app, raise_server_exceptions=True) as c,
-    ):
-        yield c
-
-    app.dependency_overrides.clear()
+    try:
+        with (
+            patch("app.core.db.get_engine", return_value=sqlite_engine),
+            TestClient(app, raise_server_exceptions=True) as c,
+        ):
+            yield c
+    finally:
+        app.dependency_overrides.clear()
