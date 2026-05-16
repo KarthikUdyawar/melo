@@ -76,4 +76,4 @@ def client(db_session: Session, sqlite_engine) -> Generator[TestClient, None, No
         ):
             yield c
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_db, None)
