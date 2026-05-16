@@ -270,6 +270,8 @@ pass "DELETE /favorites/{id} → 204"
 FAVS_AFTER=$(api_get "/favorites") || fail "GET /favorites after delete failed"
 COUNT_AFTER=$(echo "$FAVS_AFTER" | jq -r '.body.count')
 [[ "$COUNT_AFTER" -eq 0 ]] || warn "Expected 0 favorites after delete, got $COUNT_AFTER (may have pre-existing)"
+IS_PRESENT_AFTER=$(echo "$FAVS_AFTER" | jq -r --arg id "$SONG_ID" '[.body.records[] | select(.id==$id)] | length')
+[[ "$IS_PRESENT_AFTER" -eq 0 ]] || fail "Deleted song still present in GET /favorites"
 pass "GET /favorites after delete → count=$COUNT_AFTER"
 
 # is_favorite=false in /songs after delete

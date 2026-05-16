@@ -217,7 +217,7 @@ Interactive docs: **http://localhost:8000/docs**
 
 ### Preview Flow
 
-```
+```text
 POST /songs/preview → inspect title, duration, thumbnail
         ↓
 User decides trim/speed params
@@ -249,7 +249,7 @@ curl http://localhost:8000/favorites
 
 ## Folder Structure
 
-```
+```text
 melo/
 ├── app/
 │   ├── api/

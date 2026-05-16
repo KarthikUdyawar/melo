@@ -45,7 +45,7 @@
     4. **Trim + speed** → trim → then speed
   * Temp pipeline:
 
-    ```
+    ```text
     original → trimmed → speed-adjusted → stream
     ```
 
@@ -154,7 +154,7 @@
 
 #### 📡 Endpoint
 
-```
+```text
 POST /songs/preview
 ```
 
@@ -220,7 +220,7 @@ POST /songs/preview
 
 * [ ] Redis cache (TTL 5–10 min):
 
-  ```
+  ```text
   key: preview:{youtube_id}
   ```
 
@@ -228,7 +228,7 @@ POST /songs/preview
 
 #### Updated Flow
 
-```
+```text
 POST /songs/preview → get metadata
         ↓
 User decides trim/speed
@@ -280,7 +280,7 @@ POST /songs → async processing
 
 * [ ] Models:
 
-  ```
+  ```text
   playlists(id, name, created_at)
   playlist_songs(playlist_id, song_id, position)
   ```
@@ -312,7 +312,7 @@ POST /songs → async processing
 
 Query params:
 
-```
+```text
 status
 favorite=true/false
 search
@@ -388,7 +388,7 @@ offset
 
   * Basic integration test:
 
-    ```
+    ```text
     preview → create → process → stream
     ```
 

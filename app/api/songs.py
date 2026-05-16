@@ -35,7 +35,13 @@ def _is_favorited(song_id: UUID, db: DbDep) -> bool:
     return db.query(Favorite).filter(Favorite.song_id == song_id).first() is not None
 
 
-def _serialize(song: Song, db: DbDep) -> dict[str, object]:
+def _serialize(
+    song: Song, db: DbDep, *, is_favorite: bool | None = None
+) -> dict[str, object]:
+    """Serialize a song. Pass `is_favorite` to avoid per-song DB hits."""
+    if is_favorite is None:
+        is_favorite = _is_favorited(song.id, db)
+
     return SongResponse(
         id=song.id,
         title=song.title,
@@ -50,7 +56,7 @@ def _serialize(song: Song, db: DbDep) -> dict[str, object]:
         channel=song.channel,
         upload_date=song.upload_date,
         created_at=song.created_at.isoformat(),
-        is_favorite=_is_favorited(song.id, db),
+        is_favorite=is_favorite,
     ).model_dump(mode="json")
 
 
@@ -174,8 +180,19 @@ def list_songs(db: DbDep) -> JSONResponse:
     """List all songs with their current processing status."""
     logger.debug("list_songs_request")
     songs = db.query(Song).order_by(Song.created_at.desc()).all()
-    logger.info("songs_retrieved", count=len(songs))
-    records = [_serialize(s, db) for s in songs]
+
+    # Prefetch all favorites in one query → eliminates N+1
+    song_ids = [s.id for s in songs]
+    favorite_ids: set[UUID] = set()
+    if song_ids:
+        favorite_ids = {
+            sid
+            for (sid,) in db.query(Favorite.song_id)
+            .filter(Favorite.song_id.in_(song_ids))
+            .all()
+        }
+
+    records = [_serialize(s, db, is_favorite=(s.id in favorite_ids)) for s in songs]
     return paginated_response(records, len(records), "Songs retrieved.")
 
 
