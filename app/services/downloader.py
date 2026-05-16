@@ -53,7 +53,8 @@ def extract_youtube_id(url: str) -> str:
     Raises:
         ValueError: if no valid 11-char video ID can be extracted.
     """
-    parsed = urlparse(url)
+    normalized_url = url if "://" in url else f"https://{url}"
+    parsed = urlparse(normalized_url)
     domain = parsed.netloc.lower()
 
     if domain not in YOUTUBE_DOMAINS:
