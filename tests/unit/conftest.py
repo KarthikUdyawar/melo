@@ -46,6 +46,7 @@ def db_session(sqlite_engine) -> Generator[Session, None, None]:
     connection = sqlite_engine.connect()
     transaction = connection.begin()
     session = Session(bind=connection, expire_on_commit=False)
+    session.begin_nested()
     yield session
     session.close()
     transaction.rollback()
