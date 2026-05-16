@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# smoke_preview.sh — POST /songs/preview smoke test (META-2)
+# smoke_test.sh — POST /songs/preview smoke test (META-2)
 #
 # Standalone: ./tests/smoke_test.sh
-# Or inline into smoke_test.sh between section 2 and section 3.
 #
 # Usage:
-#   chmod +x smoke_preview.sh
+#   chmod +x smoke_test.sh
 #   ./tests/smoke_test.sh
 #   ./tests/smoke_test.sh --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 #
