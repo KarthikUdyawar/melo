@@ -397,7 +397,10 @@ def _extract_youtube_id(url: str) -> str:
 
     # 2. Path-based formats (/shorts/, /embed/, /live/, /v/)
     # Ensure we look for the ID immediately following the keyword
-    path_match = re.search(r"/(?:shorts|embed|live|v)/([A-Za-z0-9_-]{11})", parsed.path)
+    path_match = re.search(
+        r"/(?:shorts|embed|live|v)/([A-Za-z0-9_-]{11})(?:$|[/?#&])",
+        parsed.path,
+    )
     if path_match:
         return path_match.group(1)
 
