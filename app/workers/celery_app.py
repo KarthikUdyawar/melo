@@ -1,3 +1,9 @@
+"""Celery application setup for the Melo project.
+
+This module creates and configures the Celery application instance with Redis
+as both broker and backend. It also registers signal handlers for worker
+lifecycle events (`worker_init` and `worker_ready`).
+"""
 # app/workers/celery_app.py
 import os
 
@@ -19,6 +25,8 @@ celery_app = Celery(
     include=["app.workers.tasks"],
 )
 
+# Main Celery application instance
+
 celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
@@ -32,16 +40,29 @@ celery_app.conf.update(
 
 @worker_init.connect
 def on_worker_init(**kwargs: object) -> None:
-    """Re-run setup_logging on worker fork so file handler is open in child process."""
+    """Re-run logging setup after worker process fork.
+
+    This ensures the file handler is properly opened in the child worker
+    process.
+
+    Args:
+        **kwargs: Celery signal arguments (unused).
+    """
     setup_logging()
     logger.info("worker_logging_ready")
 
 
 @worker_ready.connect
 def on_worker_ready(**kwargs: object) -> None:
-    """
-    Runs once in each worker process after it connects to the broker.
-    Ensures the MinIO bucket exists before any task is executed.
+    """Execute once per worker after it successfully connects to the broker.
+
+    Ensures the MinIO bucket exists before any tasks are executed.
+
+    Args:
+        **kwargs: Celery signal arguments (unused).
+
+    Raises:
+        StorageError: If bucket creation/check fails (logged but not re-raised).
     """
     from app.services.storage import StorageError, ensure_bucket_exists
 

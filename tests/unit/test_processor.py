@@ -1,5 +1,4 @@
-"""
-Unit tests for app/services/processor.py
+"""Unit tests for app/services/processor.py
 
 Tests cover:
 - _build_atempo_filters: correct filter chains for all speed ranges
@@ -87,7 +86,7 @@ def _mock_run_failure():
     return result
 
 
-@pytest.fixture()
+@pytest.fixture
 def tmp_audio(tmp_path: Path) -> Path:
     p = tmp_path / "input.mp3"
     _make_fake_mp3(p)
@@ -103,7 +102,7 @@ class TestTrimAudio:
         assert out.exists()
 
     def test_fallback_to_reencode_on_stream_copy_fail(
-        self, tmp_path: Path, tmp_audio: Path
+        self, tmp_path: Path, tmp_audio: Path,
     ) -> None:
         out = tmp_path / "out.mp3"
         call_count = 0
@@ -117,13 +116,12 @@ class TestTrimAudio:
                 r.returncode = 1
                 r.stderr = "stream copy error"
                 return r
-            else:
-                # Second call (reencode) succeeds
-                out.write_bytes(b"\xff\xfb" * 512)
-                r = MagicMock()
-                r.returncode = 0
-                r.stderr = ""
-                return r
+            # Second call (reencode) succeeds
+            out.write_bytes(b"\xff\xfb" * 512)
+            r = MagicMock()
+            r.returncode = 0
+            r.stderr = ""
+            return r
 
         with patch("subprocess.run", side_effect=_side_effect):
             result = trim_audio(tmp_audio, out, start=None, end=30.0)
@@ -132,7 +130,7 @@ class TestTrimAudio:
         assert result == out
 
     def test_raises_processing_error_on_both_fail(
-        self, tmp_path: Path, tmp_audio: Path
+        self, tmp_path: Path, tmp_audio: Path,
     ) -> None:
         out = tmp_path / "out.mp3"
         with (
@@ -261,7 +259,7 @@ class TestApplySpeed:
 
     @pytest.mark.parametrize("speed", [0.5, 0.75, 1.5, 2.0, 4.0])
     def test_various_speeds_succeed(
-        self, tmp_path: Path, tmp_audio: Path, speed: float
+        self, tmp_path: Path, tmp_audio: Path, speed: float,
     ) -> None:
         out = tmp_path / f"speed_{speed}.mp3"
         with patch("subprocess.run", side_effect=_mock_run_success(out)):

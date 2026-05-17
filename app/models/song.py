@@ -1,3 +1,8 @@
+"""SQLAlchemy models for songs and related enums.
+
+This module defines the database models and enums used for managing
+YouTube audio processing jobs (download, trimming, speed adjustment, etc.).
+"""
 # app/models/song.py
 import enum
 import uuid
@@ -11,6 +16,7 @@ from app.core.db import Base
 
 
 class SongStatus(enum.StrEnum):
+    """Enum representing the processing status of a song."""
     pending = "pending"
     processing = "processing"
     done = "done"
@@ -18,10 +24,16 @@ class SongStatus(enum.StrEnum):
 
 
 class Song(Base):
+    """SQLAlchemy model representing a song / audio processing job.
+
+    Each row corresponds to a YouTube video that needs to be downloaded,
+    optionally trimmed and speed-adjusted, then stored.
+    """
+
     __tablename__ = "songs"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
     )
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     youtube_id: Mapped[str] = mapped_column(

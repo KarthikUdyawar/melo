@@ -1,3 +1,9 @@
+"""Application settings and configuration.
+
+This module defines the centralized settings management using Pydantic Settings.
+It automatically loads environment-specific `.env.{development|staging|production}`
+files and provides type-safe, validated configuration for the entire application.
+"""
 # app/core/config.py
 import os
 from functools import lru_cache
@@ -12,24 +18,33 @@ APP_ENVS = {"development", "staging", "production"}
 
 
 def _env_file() -> str:
-    """
-    Resolve which .env file to load.
+    """Determine which .env file should be loaded based on APP_ENV.
 
     Priority:
-      1. APP_ENV from the real OS environment (not yet parsed by pydantic).
-      2. Falls back to "development".
+        1. `APP_ENV` environment variable (real OS env).
+        2. Falls back to "development".
 
-    Returns the path: .env.development / .env.staging / .env.production
+    Returns:
+        Path to the environment file (e.g. `.env.development`, `.env.staging`).
+
+    Raises:
+        ValueError: If APP_ENV is set to an invalid value.
     """
     app_env = os.environ.get("APP_ENV", "development").lower()
     if app_env not in APP_ENVS:
         raise ValueError(
-            f"APP_ENV={app_env!r} is not valid. Choose from: {sorted(APP_ENVS)}"
+            f"APP_ENV={app_env!r} is not valid. Choose from: {sorted(APP_ENVS)}",
         )
     return f".env.{app_env}"
 
 
 class Settings(BaseSettings):
+    """Main application settings using Pydantic.
+
+    Loads configuration from environment variables and `.env.*` files with
+    proper priority and validation. Provides computed environment flags
+    and runtime checks.
+    """
     model_config = SettingsConfigDict(
         env_file=_env_file(),
         env_file_encoding="utf-8",
@@ -66,20 +81,27 @@ class Settings(BaseSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def is_production(self) -> bool:
+        """Return True if the current environment is production."""
         return self.app_env == "production"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def is_staging(self) -> bool:
+        """Return True if the current environment is staging."""
         return self.app_env == "staging"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def is_development(self) -> bool:
+        """Return True if the current environment is development."""
         return self.app_env == "development"
 
     @model_validator(mode="after")
     def _validate_minio_secure_in_prod(self) -> "Settings":
+        """Validate that MinIO is using secure connection in production.
+
+        Warns if `MINIO_SECURE=false` is used in production environment.
+        """
         if self.is_production and not self.minio_secure:
             import warnings
 
@@ -92,6 +114,14 @@ class Settings(BaseSettings):
     @model_validator(mode="before")
     @classmethod
     def force_env_file_priority(cls, values: dict[str, Any]) -> dict[str, Any]:
+        """Force values from the selected .env file to have highest priority.
+
+        This validator runs before normal field validation to ensure that
+        settings from `.env.{env}` override both defaults and any passed values.
+
+        Note:
+            This is a classmethod that receives raw input values.
+        """
         env_values = dotenv_values(_env_file())
 
         # normalize keys to lowercase
@@ -103,17 +133,25 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    """Return the cached Settings instance.
+
+    The settings are parsed only once per process thanks to `lru_cache`.
+
+    Returns:
+        Settings: The application settings object.
+    """
     return Settings()
 
 
 def reset_settings() -> None:
-    """
-    Clear the cached Settings instance.
+    """Clear the cached Settings instance.
 
-    Use in tests when you need to swap APP_ENV or override env vars:
+    Useful in tests when you need to change `APP_ENV` or other environment
+    variables after the settings have already been loaded.
 
+    Example:
         monkeypatch.setenv("APP_ENV", "production")
         reset_settings()
-        s = get_settings()   # re-reads .env.production
+        settings = get_settings()  # will reload with new environment
     """
     get_settings.cache_clear()

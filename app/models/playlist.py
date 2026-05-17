@@ -1,3 +1,11 @@
+"""Models for playlist and playlist-song association.
+
+This module defines the SQLAlchemy ORM models for managing playlists and the
+many-to-many relationship between playlists and songs, including song ordering
+within a playlist.
+"""
+# app/models/playlist.py
+
 import uuid
 from datetime import datetime
 
@@ -10,6 +18,11 @@ from app.models.song import Song
 
 
 class PlaylistSong(Base):
+    """Association model for the many-to-many relationship between Playlist and Song.
+
+    This is a join table with an additional `position` column to maintain the
+    order of songs within each playlist.
+    """
     __tablename__ = "playlist_songs"
     __table_args__ = (
         UniqueConstraint("playlist_id", "song_id", name="uq_playlist_song"),
@@ -29,10 +42,19 @@ class PlaylistSong(Base):
 
 
 class Playlist(Base):
+    """Represents a user playlist containing an ordered collection of songs.
+
+    Attributes:
+        id: Unique identifier for the playlist.
+        name: Name of the playlist.
+        created_at: Timestamp when the playlist was created.
+        songs: List of Song objects associated with this playlist, ordered by
+            the position defined in the PlaylistSong association table.
+    """
     __tablename__ = "playlists"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -41,7 +63,7 @@ class Playlist(Base):
         server_default=func.now(),
     )
 
-    songs: Mapped[list["Song"]] = relationship(  # noqa: F821
+    songs: Mapped[list["Song"]] = relationship(
         "Song",
         secondary="playlist_songs",
         backref="playlists",

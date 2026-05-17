@@ -1,5 +1,4 @@
-"""
-Integration tests for Song model + DB layer.
+"""Integration tests for Song model + DB layer.
 
 Uses a real Postgres container (via pytest-docker).
 Each test runs in a rolled-back transaction.
@@ -217,10 +216,10 @@ class TestSongQueries:
 
     def test_filter_by_status(self, db_session: Session) -> None:
         db_session.add(
-            _make_song(status=SongStatus.done, youtube_id="done1", file_url="x.mp3")
+            _make_song(status=SongStatus.done, youtube_id="done1", file_url="x.mp3"),
         )
         db_session.add(
-            _make_song(status=SongStatus.done, youtube_id="done2", file_url="y.mp3")
+            _make_song(status=SongStatus.done, youtube_id="done2", file_url="y.mp3"),
         )
         db_session.add(_make_song(status=SongStatus.pending, youtube_id="pend1"))
         db_session.flush()

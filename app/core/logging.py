@@ -1,19 +1,17 @@
-"""
-Structured logging configuration for Melo.
+"""Structured logging configuration for Melo using structlog.
 
-``setup_logging()`` is called at MODULE IMPORT TIME (bottom of this file)
-so every logger — including those in workers, routers, and services that
-import before FastAPI lifespan fires — gets the correct configuration.
+``setup_logging()`` is called at **module import time** (bottom of this file)
+so every logger gets the correct configuration immediately.
 
 Console output:
-  development  → colourised ConsoleRenderer (human-readable)
-  staging/prod → JSONRenderer (one object per line)
+    - Development → colourised ``ConsoleRenderer`` (human-readable)
+    - Staging/Prod → ``JSONRenderer`` (one JSON object per line)
 
-File output (always JSON, production-level):
-  Written to LOG_FILE_PATH (default: /var/log/melo/app.log)
-  Rotated at 100 MB, 5 backups kept.
+File output (always JSON):
+    - Written to ``LOG_FILE_PATH`` (default: ``/var/log/melo/app.log``)
+    - Rotates at 100 MB, keeps 5 backups.
 """
-
+# app/core/logging.py
 import logging
 import logging.handlers
 import sys
@@ -27,6 +25,24 @@ _CONFIGURED = False
 
 
 def setup_logging() -> None:
+    """Configure structured logging for the entire application.
+
+    This function is called automatically at module import time. It sets up
+    structlog + standard library logging with environment-aware renderers.
+
+    - **Development**: Colourised human-readable console output using
+      ``ConsoleRenderer``.
+    - **Staging/Production**: JSON output on console + rotating JSON file.
+
+    The file handler writes to ``settings.log_file_path`` with 100 MB rotation
+    and 5 backups. It also silences noisy third-party loggers and ensures the
+    configuration runs only once.
+
+    Note:
+        This must be called early (hence the import-time call) so that loggers
+        used in workers, routers, and services get the correct configuration
+        before FastAPI lifespan events.
+    """
     global _CONFIGURED
     if _CONFIGURED:
         return
@@ -59,7 +75,7 @@ def setup_logging() -> None:
     # ── Console handler ──────────────────────────────────────────────────────
     if settings.is_development:
         console_renderer: structlog.types.Processor = structlog.dev.ConsoleRenderer(
-            colors=True
+            colors=True,
         )
     else:
         console_renderer = structlog.processors.JSONRenderer()
@@ -119,13 +135,33 @@ def setup_logging() -> None:
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
-    """Return a bound structlog logger. Use instead of ``logging.getLogger``."""
+    """Return a bound structlog logger for the given name.
+
+    Use this instead of ``logging.getLogger()`` to get a properly configured
+    structured logger.
+
+    Args:
+        name: The name of the logger (usually ``__name__`` or a descriptive
+            string).
+
+    Returns:
+        A structlog ``BoundLogger`` instance.
+    """
     return structlog.get_logger(name)
 
 
 def _add_env(env: str) -> Callable[..., Any]:
+    """Create a structlog processor that injects the current environment.
+
+    Args:
+        env: The application environment (e.g. 'development', 'staging',
+            'production').
+
+    Returns:
+        A structlog processor function that adds ``env`` to every log event.
+    """
     def processor(
-        logger: Any, method: str, event_dict: dict[str, Any]
+        logger: Any, method: str, event_dict: dict[str, Any],
     ) -> dict[str, Any]:
         event_dict["env"] = env
         return event_dict

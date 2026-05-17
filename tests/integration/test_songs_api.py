@@ -1,5 +1,4 @@
-"""
-Integration tests for GET/POST /songs endpoints.
+"""Integration tests for GET/POST /songs endpoints.
 
 Uses a real Postgres DB (via pytest-docker) and FastAPI TestClient.
 Celery tasks are mocked — no workers needed.
@@ -105,7 +104,7 @@ class TestCreateSong:
 
     def test_start_after_end_returns_422(self, client: TestClient) -> None:
         resp = client.post(
-            "/songs", json={"url": VALID_URL, "start": 60.0, "end": 10.0}
+            "/songs", json={"url": VALID_URL, "start": 60.0, "end": 10.0},
         )
         assert resp.status_code == 422
 
@@ -158,7 +157,7 @@ class TestListSongs:
         assert len(records) >= 2
 
     def test_envelope_paginated_shape(
-        self, client: TestClient, db_session: Session
+        self, client: TestClient, db_session: Session,
     ) -> None:
         _seed_done_song(db_session)
         resp = client.get("/songs")
@@ -168,7 +167,7 @@ class TestListSongs:
         assert isinstance(body["body"]["count"], int)
 
     def test_records_contain_expected_fields(
-        self, client: TestClient, db_session: Session
+        self, client: TestClient, db_session: Session,
     ) -> None:
         _seed_done_song(db_session)
         resp = client.get("/songs")
@@ -209,7 +208,7 @@ class TestStreamSong:
         assert resp.status_code == 404
 
     def test_pending_song_returns_409(
-        self, client: TestClient, db_session: Session
+        self, client: TestClient, db_session: Session,
     ) -> None:
         song = _seed_pending_song(db_session)
         resp = client.get(f"/songs/{song.id}/stream")
@@ -218,7 +217,7 @@ class TestStreamSong:
         assert "pending" in (body.get("message") or body.get("detail") or "").lower()
 
     def test_no_file_url_returns_500(
-        self, client: TestClient, db_session: Session
+        self, client: TestClient, db_session: Session,
     ) -> None:
         song = Song(youtube_id="dQw4w9WgXcQ", status=SongStatus.done, speed=1.0)
         db_session.add(song)
@@ -227,7 +226,7 @@ class TestStreamSong:
         assert resp.status_code == 500
 
     def test_direct_stream_no_trim_no_speed(
-        self, client: TestClient, db_session: Session
+        self, client: TestClient, db_session: Session,
     ) -> None:
         song = _seed_done_song(db_session)
 
@@ -247,7 +246,7 @@ class TestStreamSong:
         assert resp.content == fake_data
 
     def test_stream_processing_song_returns_409(
-        self, client: TestClient, db_session: Session
+        self, client: TestClient, db_session: Session,
     ) -> None:
         song = Song(
             youtube_id="dQw4w9WgXcQ",
@@ -291,7 +290,7 @@ class TestYoutubeExtraction:
 
 class TestStreamProcessing:
     def test_stream_with_trim_and_speed(
-        self, client: TestClient, db_session: Session, mock_processor
+        self, client: TestClient, db_session: Session, mock_processor,
     ):
         song = _seed_done_song(db_session, start=10.0, end=20.0, speed=1.5)
 
@@ -309,7 +308,7 @@ class TestSongEdgeCases:
         song = _seed_done_song(db_session)
         with patch("app.api.songs._client") as m_minio:
             m_minio.return_value.get_object.side_effect = Exception(
-                "S3 Connection Refused"
+                "S3 Connection Refused",
             )
             resp = client.get(f"/songs/{song.id}/stream")
 

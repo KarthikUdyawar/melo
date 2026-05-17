@@ -1,5 +1,4 @@
-"""
-Unit tests for app/services/storage.py
+"""Unit tests for app/services/storage.py
 
 All Minio calls are mocked — no real S3 connection.
 Tests cover:
@@ -35,13 +34,13 @@ def _make_s3_error() -> S3Error:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_client():
     with patch("app.services.storage._client") as mock:
         yield mock.return_value
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_settings():
     with patch("app.services.storage.get_settings") as mock:
         s = MagicMock()
@@ -57,21 +56,21 @@ def mock_settings():
 
 class TestEnsureBucketExists:
     def test_creates_bucket_when_missing(
-        self, mock_client: MagicMock, mock_settings: MagicMock
+        self, mock_client: MagicMock, mock_settings: MagicMock,
     ) -> None:
         mock_client.bucket_exists.return_value = False
         ensure_bucket_exists()
         mock_client.make_bucket.assert_called_once_with("songs")
 
     def test_skips_create_when_exists(
-        self, mock_client: MagicMock, mock_settings: MagicMock
+        self, mock_client: MagicMock, mock_settings: MagicMock,
     ) -> None:
         mock_client.bucket_exists.return_value = True
         ensure_bucket_exists()
         mock_client.make_bucket.assert_not_called()
 
     def test_raises_storage_error_on_s3_error(
-        self, mock_client: MagicMock, mock_settings: MagicMock
+        self, mock_client: MagicMock, mock_settings: MagicMock,
     ) -> None:
         mock_client.bucket_exists.side_effect = _make_s3_error()
         with pytest.raises(StorageError, match="Could not ensure bucket"):
@@ -83,7 +82,7 @@ class TestEnsureBucketExists:
 
 class TestUploadFile:
     def test_success(
-        self, tmp_path: Path, mock_client: MagicMock, mock_settings: MagicMock
+        self, tmp_path: Path, mock_client: MagicMock, mock_settings: MagicMock,
     ) -> None:
         mp3 = tmp_path / "song.mp3"
         mp3.write_bytes(b"\xff\xfb" * 100)
@@ -99,7 +98,7 @@ class TestUploadFile:
         )
 
     def test_raises_when_file_missing(
-        self, tmp_path: Path, mock_client: MagicMock, mock_settings: MagicMock
+        self, tmp_path: Path, mock_client: MagicMock, mock_settings: MagicMock,
     ) -> None:
         missing = tmp_path / "ghost.mp3"
         with pytest.raises(StorageError, match="does not exist"):
@@ -107,7 +106,7 @@ class TestUploadFile:
         mock_client.fput_object.assert_not_called()
 
     def test_raises_storage_error_on_s3_error(
-        self, tmp_path: Path, mock_client: MagicMock, mock_settings: MagicMock
+        self, tmp_path: Path, mock_client: MagicMock, mock_settings: MagicMock,
     ) -> None:
         mp3 = tmp_path / "song.mp3"
         mp3.write_bytes(b"\xff\xfb" * 100)
@@ -117,7 +116,7 @@ class TestUploadFile:
             upload_file(local_path=mp3, object_key="abc.mp3")
 
     def test_reraises_unexpected_exception(
-        self, tmp_path: Path, mock_client: MagicMock, mock_settings: MagicMock
+        self, tmp_path: Path, mock_client: MagicMock, mock_settings: MagicMock,
     ) -> None:
         mp3 = tmp_path / "song.mp3"
         mp3.write_bytes(b"\xff\xfb" * 100)
@@ -140,7 +139,7 @@ class TestGetPresignedUrl:
         assert url.startswith("http")
 
     def test_rewrites_url_when_public_url_set(
-        self, mock_client: MagicMock, mock_settings: MagicMock
+        self, mock_client: MagicMock, mock_settings: MagicMock,
     ) -> None:
         mock_settings.minio_public_url = "https://minio.example.com"
         mock_client.presigned_get_object.return_value = (
@@ -150,7 +149,7 @@ class TestGetPresignedUrl:
         assert url.startswith("https://minio.example.com")
 
     def test_no_rewrite_when_public_url_none(
-        self, mock_client: MagicMock, mock_settings: MagicMock
+        self, mock_client: MagicMock, mock_settings: MagicMock,
     ) -> None:
         mock_settings.minio_public_url = None
         internal = "http://minio:9000/songs/abc.mp3?sig=xxx"
@@ -159,14 +158,14 @@ class TestGetPresignedUrl:
         assert url == internal
 
     def test_raises_storage_error_on_s3_error(
-        self, mock_client: MagicMock, mock_settings: MagicMock
+        self, mock_client: MagicMock, mock_settings: MagicMock,
     ) -> None:
         mock_client.presigned_get_object.side_effect = _make_s3_error()
         with pytest.raises(StorageError, match="Could not generate presigned URL"):
             get_presigned_url("abc.mp3")
 
     def test_reraises_unexpected_exception(
-        self, mock_client: MagicMock, mock_settings: MagicMock
+        self, mock_client: MagicMock, mock_settings: MagicMock,
     ) -> None:
         mock_client.presigned_get_object.side_effect = ConnectionError("timeout")
         with pytest.raises(ConnectionError):

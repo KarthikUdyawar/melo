@@ -1,3 +1,9 @@
+"""Database configuration and session management for SQLAlchemy.
+
+This module provides lazy-initialized engine and session factory singletons,
+dependency injection helpers for FastAPI, and utility functions for database
+initialization and health checks.
+"""
 # app/core/db.py
 from collections.abc import Generator
 
@@ -7,7 +13,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
 class Base(DeclarativeBase):
-    """Shared declarative base for all SQLAlchemy models."""
+    """Shared declarative base for all SQLAlchemy models in the application."""
 
 
 # Lazy singletons — built on first access so tests can set env vars first.
@@ -16,6 +22,14 @@ _SessionLocal: sessionmaker[Session] | None = None
 
 
 def get_engine() -> Engine:
+    """Return the SQLAlchemy Engine instance (lazy singleton).
+
+    The engine is created on first access using the database URL from
+    application settings. Subsequent calls return the cached instance.
+
+    Returns:
+        SQLAlchemy Engine connected to the configured database.
+    """
     global _engine
     if _engine is None:
         from app.core.config import get_settings
@@ -34,6 +48,14 @@ def get_engine() -> Engine:
 
 
 def get_session_factory() -> "sessionmaker[Session]":
+    """Return the SQLAlchemy sessionmaker (lazy singleton).
+
+    The session factory is created on first access and bound to the engine
+    returned by ``get_engine()``.
+
+    Returns:
+        Configured sessionmaker instance.
+    """
     global _SessionLocal
     if _SessionLocal is None:
         _SessionLocal = sessionmaker(
@@ -46,7 +68,13 @@ def get_session_factory() -> "sessionmaker[Session]":
 
 
 def get_session() -> Generator[Session, None, None]:
-    """Yield a SQLAlchemy session and close it when done."""
+    """Provide a SQLAlchemy session for FastAPI dependency injection.
+
+    Yields a session and ensures it is closed after the request is completed.
+
+    Yields:
+        Active SQLAlchemy Session.
+    """
     session: Session = get_session_factory()()
     try:
         yield session
@@ -55,15 +83,15 @@ def get_session() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    """
-    Create all tables that are registered on Base.metadata.
+    """Create all tables defined by models inheriting from Base.
 
-    Called once at application startup (e.g. in the FastAPI lifespan handler).
-    Safe to call multiple times — CREATE TABLE IF NOT EXISTS semantics via
-    SQLAlchemy's checkfirst=True default.
+    Should be called once during application startup (typically in the
+    FastAPI lifespan handler). Safe to call multiple times due to
+    ``checkfirst=True``.
 
-    Models must be imported before this is called so SQLAlchemy knows about
-    them. Import them explicitly in the lifespan or in app/models/__init__.py.
+    Note:
+        All models must be imported before calling this function so that
+        SQLAlchemy registers them on ``Base.metadata``.
     """
     import app.models  # noqa: F401 — ensure all models are registered
 
@@ -71,15 +99,12 @@ def init_db() -> None:
 
 
 def reset_db() -> None:
-    """
-    Drop and recreate all tables. **Test-only** — never call in production.
+    """Drop and recreate all tables.
 
-    Typical usage in conftest.py:
+    **For testing purposes only.** Never use in production.
 
-        @pytest.fixture(autouse=True)
-        def fresh_db():
-            reset_db()
-            yield
+    This is typically used in pytest fixtures to ensure a clean database
+    state before each test.
     """
     global _engine, _SessionLocal
     import app.models  # noqa: F401
@@ -93,7 +118,11 @@ def reset_db() -> None:
 
 
 def ping_db() -> bool:
-    """Return True if the database is reachable."""
+    """Check if the database is reachable.
+
+    Returns:
+        True if the database responds to a simple query, False otherwise.
+    """
     try:
         with get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))

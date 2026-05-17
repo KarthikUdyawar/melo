@@ -1,3 +1,10 @@
+"""Main FastAPI application entry point.
+
+This module initializes and configures the Melo application,
+including routers, middleware, exception handlers, and lifespan management.
+"""
+
+# app/main.py
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -16,7 +23,7 @@ from app.core.exception_handlers import (
 
 # setup_logging() is called at import time inside app.core.logging —
 # importing it here ensures logging is ready before any other module loads.
-from app.core.logging import get_logger  # noqa: E402
+from app.core.logging import get_logger
 from app.core.middleware import RequestLoggingMiddleware
 
 logger = get_logger(__name__)
@@ -24,6 +31,23 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Fastapi lifespan context manager.
+
+    Handles application startup and shutdown events.
+
+    On startup:
+        - Initializes the database connection pool
+        - Logs startup information
+
+    On shutdown:
+        - Logs shutdown event
+
+    Args:
+        app: The FastAPI application instance.
+
+    Yields:
+        None
+    """
     settings = get_settings()
     init_db()
     logger.info("app_startup", env=settings.app_env, log_file=settings.log_file_path)
@@ -32,6 +56,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
+    """Create and configure the FastAPI application instance.
+
+    This is the main factory function that sets up the application with
+    title, description, middleware, exception handlers and routers.
+
+    Returns:
+        Configured FastAPI application instance.
+    """
     settings = get_settings()
     app = FastAPI(
         title="Melo",
@@ -58,6 +90,17 @@ app = create_app()
 
 @app.get("/health", tags=["system"])
 async def health() -> dict[str, object]:
+    """Health check endpoint.
+
+    Returns basic application and database status information.
+    Used by monitoring systems and load balancers.
+
+    Returns:
+        dict: Status information containing:
+            - status: "ok" or "degraded"
+            - db: "up" or "down"
+            - env: current environment name
+    """
     db_ok = ping_db()
     return {
         "status": "ok" if db_ok else "degraded",

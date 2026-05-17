@@ -1,4 +1,4 @@
-"""
+"""tests/unit/conftest.py
 Unit conftest — SQLite in-memory with proper nested transaction support.
 
 Uses the recommended pattern (outer transaction + auto-restarting savepoint)
@@ -50,7 +50,7 @@ def sqlite_engine():
     engine.dispose()
 
 
-@pytest.fixture()
+@pytest.fixture
 def db_session(sqlite_engine) -> Generator[Session, None, None]:
     """Per-test session with outer transaction + auto-restarting nested savepoint.
 
@@ -81,7 +81,7 @@ def db_session(sqlite_engine) -> Generator[Session, None, None]:
     connection.close()
 
 
-@pytest.fixture()
+@pytest.fixture
 def client(db_session: Session) -> Generator[TestClient, None, None]:
     """FastAPI TestClient using the test database session."""
     from app.core.deps import get_db
