@@ -126,8 +126,8 @@ def trim_audio(
             stderr=result.stderr[-500:] if result.stderr else "",
         )
         raise ProcessingError(
-            "FFmpeg re-encode failed ",
-            f"(exit {result.returncode}):{result.stderr[-300:]}",
+            f"FFmpeg re-encode failed (exit {result.returncode}): "
+            f"{result.stderr[-300:]}"
         )
 
     if not output_path.exists() or output_path.stat().st_size == 0:

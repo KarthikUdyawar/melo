@@ -136,7 +136,7 @@
   15. `POST /playlists/{id}/songs/{song_id}` → 201, ordering preserved
   16. `GET /playlists/{id}` → songs in correct position order
   17. `DELETE /playlists/{id}/songs/{song_id}` → 204, song removed
-  18. Playlist error paths (unknown playlist → 404, unknown song → 404, duplicate add)
+  18. Playlist error paths (unknown playlist → 404, unknown song → 404) + duplicate add idempotency (→ 200)
   19. Same song reusable across multiple playlists
 * [x] `make smoke` / `make smoke URL="..."` Makefile target
 

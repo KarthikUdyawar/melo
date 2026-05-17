@@ -68,6 +68,7 @@ repos:
     rev: 6.3.0          # Check latest stable version
     hooks:
       - id: pydocstyle
+        language_version: python3.12
         files: \.py$      # Only Python files (adjust if needed)
         exclude: ^tests/  # Optional: skip tests like your mypy hook
         args:

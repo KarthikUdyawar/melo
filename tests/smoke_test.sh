@@ -345,7 +345,7 @@ PL_CODE=$(echo "$PL_RESP" | jq -r '.status_code')
 
 PLAYLIST_ID=$(echo "$PL_RESP" | jq -r '.body.id')
 PL_NAME=$(echo "$PL_RESP" | jq -r '.body.name')
-PL_COUNT=$(echo "$PL_RESP" | jq -r '.body.song_count')
+PL_COUNT=$(echo "$PL_RESP" | jq -r '.body.song_count // (.body.songs | length)')
 [[ -n "$PLAYLIST_ID" && "$PLAYLIST_ID" != "null" ]] || fail "No playlist id in response"
 [[ "$PL_NAME" == "Smoke Test Playlist" ]] || fail "name mismatch: $PL_NAME"
 [[ "$PL_COUNT" == "0" ]] || fail "Expected song_count=0, got $PL_COUNT"

@@ -227,6 +227,7 @@ make smoke
 | `POST`   | `/playlists`                      | ✅      | Create a playlist                    |
 | `GET`    | `/playlists`                      | ✅      | List all playlists                   |
 | `GET`    | `/playlists/{id}`                 | ✅      | Get playlist detail with songs       |
+| `DELETE` | `/playlists/{id}`                 | ✅      | Delete a playlist                    |
 | `POST`   | `/playlists/{id}/songs/{song_id}` | ✅      | Add song to playlist (ordered)       |
 | `DELETE` | `/playlists/{id}/songs/{song_id}` | ✅      | Remove song from playlist            |
 | `GET`    | `/health`                         | ✅      | Health check                         |

@@ -13,6 +13,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
 from fastapi.responses import JSONResponse
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from app.api.responses import envelope_response, paginated_response
@@ -32,6 +33,8 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/playlists", tags=["playlists"])
 
+_MAX_POSITION_RETRIES = 3
+
 
 # ── Serializers ───────────────────────────────────────────────────────────────
 
@@ -47,7 +50,7 @@ def _favorite_ids_for_songs(song_ids: list[UUID], db: DbDep) -> set[UUID]:
     }
 
 
-def _serialize_song(song: Song, *, is_favorite: bool) -> dict[str, object]:
+def _serialize_song(song: Song, *, is_favorite: bool) -> SongResponse:
     return SongResponse(
         id=song.id,
         title=song.title,
@@ -63,7 +66,7 @@ def _serialize_song(song: Song, *, is_favorite: bool) -> dict[str, object]:
         upload_date=song.upload_date,
         created_at=song.created_at.isoformat(),
         is_favorite=is_favorite,
-    ).model_dump(mode="json")
+    )
 
 
 def _serialize_playlist(playlist: Playlist) -> dict[str, object]:
@@ -105,8 +108,6 @@ def _get_song_or_404(song_id: UUID, db: DbDep) -> Song:
 
 def _next_position(playlist_id: UUID, db: DbDep) -> int:
     """Return max(position) + 1 for a playlist, or 0 if empty."""
-    from sqlalchemy import func
-
     result = (
         db.query(func.max(PlaylistSong.position))
         .filter(PlaylistSong.playlist_id == playlist_id)
@@ -143,8 +144,22 @@ def create_playlist(payload: PlaylistCreate, db: DbDep) -> JSONResponse:
 @router.get("")
 def list_playlists(db: DbDep) -> JSONResponse:
     """List all playlists ordered by creation date descending."""
-    playlists = db.query(Playlist).order_by(Playlist.created_at.desc()).all()
-    records = [_serialize_playlist(p) for p in playlists]
+    rows = (
+        db.query(Playlist, func.count(PlaylistSong.song_id))
+        .outerjoin(PlaylistSong, PlaylistSong.playlist_id == Playlist.id)
+        .group_by(Playlist.id)
+        .order_by(Playlist.created_at.desc())
+        .all()
+    )
+    records = [
+        PlaylistResponse(
+            id=playlist.id,
+            name=playlist.name,
+            created_at=playlist.created_at.isoformat(),
+            song_count=song_count,
+        ).model_dump(mode="json")
+        for playlist, song_count in rows
+    ]
     logger.info("playlists_listed", count=len(records))
     return paginated_response(records, len(records), "Playlists retrieved.")
 
@@ -163,10 +178,12 @@ def get_playlist(playlist_id: UUID, db: DbDep) -> JSONResponse:
 def add_song_to_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> JSONResponse:
     """Add a song to a playlist.
 
-    Idempotent operation — calling it a second time with the same song returns 200 OK.
+    Idempotent — calling with the same song returns 200 OK.
 
-    Position is automatically assigned as max(position) + 1 unless the song is
-    already present in the playlist.
+    Position is assigned as max(position) + 1. If a concurrent request claims
+    the same position (race), we retry up to _MAX_POSITION_RETRIES times before
+    raising. The DB-level UniqueConstraint on (playlist_id, position) is the
+    authoritative guard; the retry loop keeps the conflict window small.
     """
     playlist = _get_playlist_or_404(playlist_id, db)
     _get_song_or_404(song_id, db)
@@ -191,23 +208,54 @@ def add_song_to_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> JSONRes
             status_code=200,
         )
 
-    position = _next_position(playlist_id, db)
-    entry = PlaylistSong(playlist_id=playlist_id, song_id=song_id, position=position)
-    db.add(entry)
-
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        logger.info(
-            "playlist_song_race_condition",
+    for attempt in range(_MAX_POSITION_RETRIES):
+        position = _next_position(playlist_id, db)
+        entry = PlaylistSong(
+            playlist_id=playlist_id, song_id=song_id, position=position
+        )
+        db.add(entry)
+        try:
+            db.commit()
+            break  # success
+        except IntegrityError as exc:
+            db.rollback()
+            constraint = getattr(
+                getattr(exc.orig, "diag", None), "constraint_name", None
+            )
+            if constraint == "uq_playlist_song":
+                # Duplicate (playlist_id, song_id) — lost race with identical request.
+                logger.info(
+                    "playlist_song_race_condition",
+                    playlist_id=str(playlist_id),
+                    song_id=str(song_id),
+                )
+                return envelope_response(
+                    _serialize_playlist(playlist),
+                    "Song already in playlist.",
+                    status_code=200,
+                )
+            if (
+                constraint == "uq_playlist_position"
+                and attempt < _MAX_POSITION_RETRIES - 1
+            ):
+                # Duplicate (playlist_id, position) — concurrent add claimed this slot.
+                logger.warning(
+                    "playlist_position_conflict_retry",
+                    playlist_id=str(playlist_id),
+                    attempt=attempt + 1,
+                )
+                continue
+            raise  # unknown constraint or retries exhausted → 500
+    else:
+        # All retries exhausted on position conflict.
+        logger.error(
+            "playlist_position_retries_exhausted",
             playlist_id=str(playlist_id),
             song_id=str(song_id),
         )
-        return envelope_response(
-            _serialize_playlist(playlist),
-            "Song already in playlist.",
-            status_code=200,
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Could not assign a unique position; please retry.",
         )
 
     db.refresh(playlist)
