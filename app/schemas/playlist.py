@@ -1,0 +1,79 @@
+"""Pydantic schemas for playlist-related request and response models."""
+#app/schemas/playlist.py
+
+from uuid import UUID
+
+from pydantic import BaseModel, field_validator
+
+from app.schemas.song import SongResponse
+
+
+class PlaylistCreate(BaseModel):
+    """Request schema for creating a new playlist."""
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """Validate and sanitize the playlist name.
+
+        Strips whitespace and enforces length and non-empty constraints.
+
+        Args:
+            v: The name value to validate.
+
+        Returns:
+            The cleaned name.
+
+        Raises:
+            ValueError: If name is empty or exceeds 255 characters.
+        """
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if len(v) > 255:
+            raise ValueError("name must be 255 characters or fewer")
+        return v
+
+
+class PlaylistSongAdd(BaseModel):
+    """Request schema for adding a song to a playlist (with optional position)."""
+    position: int | None = None
+
+    @field_validator("position")
+    @classmethod
+    def validate_position(cls, v: int | None) -> int | None:
+        """Validate the position when adding a song to a playlist.
+
+        Args:
+            v: The position value (can be None for append).
+
+        Returns:
+            The validated position or None.
+
+        Raises:
+            ValueError: If position is negative.
+        """
+        if v is not None and v < 0:
+            raise ValueError("position must be >= 0")
+        return v
+
+
+class PlaylistResponse(BaseModel):
+    """Response schema for basic playlist information."""
+    id: UUID
+    name: str
+    created_at: str
+    song_count: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class PlaylistDetailResponse(BaseModel):
+    """Detailed response schema for a playlist including its songs."""
+    id: UUID
+    name: str
+    created_at: str
+    songs: list[SongResponse] = []
+
+    model_config = {"from_attributes": True}

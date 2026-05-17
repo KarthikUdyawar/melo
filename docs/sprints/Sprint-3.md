@@ -100,10 +100,12 @@
 * [x] `tests/unit/test_downloader.py` — 11 tests: `probe_metadata`, `download_audio` (mocked yt-dlp)
 * [x] `tests/unit/test_preview.py` — 17 tests: `extract_youtube_id` URL formats, `/songs/preview` endpoint (success, 502, 422, stateless, sparse metadata)
 * [x] `tests/unit/test_favorites.py` — 18 tests: POST/DELETE/GET favorites, idempotency, 404 paths, `is_favorite` in song responses
+* [x] `tests/unit/test_playlist_schemas.py` — unit tests: schema validation for playlist create/response, position ordering
 * [x] `tests/integration/test_db.py` — 14 tests: Song CRUD, status transitions, dedup query, multi-record scenarios
 * [x] `tests/integration/test_songs_api.py` — 31 tests: all `/songs` endpoints, stream cases, validation, 404/409/500/502 error paths
 * [x] `tests/integration/test_preview_api.py` — 25 tests: happy path, URL variants, validation, error paths, stateless guarantee
 * [x] `tests/integration/test_favorites_api.py` — 17 tests: lifecycle, idempotency, error paths, `is_favorite` reflected in `/songs`
+* [x] `tests/integration/test_playlists_api.py` — integration tests: full playlist CRUD, ordering, multi-playlist reuse, edge cases
 * [x] Coverage: **94.77%** (threshold: 80%) — `tasks.py` and `celery_app.py` excluded (Celery internals)
 * [x] Makefile targets: `test`, `test-unit`, `test-integration`, `test-cov`
 * [x] Unit test isolation: switched from savepoint rollback to `_truncate_all()` (PRAGMA FK OFF → delete all tables → FK ON) — savepoint unreliable when endpoints call `db.commit()`
@@ -116,7 +118,7 @@
 
 > Sprint addition — not originally planned but completed this week.
 
-* [x] `smoke_test.sh` — 12-section end-to-end bash script (requires `curl` + `jq`):
+* [x] `smoke_test.sh` — 19-section end-to-end bash script (requires `curl` + `jq`):
   1. `GET /health`
   2. `POST /songs/preview` → happy path (youtube_id, title, duration, envelope shape)
   3. Preview stateless (song count unchanged)
@@ -129,6 +131,13 @@
   10. Favorites error paths (unknown song → 404, not-favorited → 404)
   11. Songs validation (bad URL → 422, bad speed → 422, unknown ID → 404)
   12. `GET /songs` → count increased
+  13. `POST /playlists` → 201 + playlist ID
+  14. `GET /playlists` → list includes new playlist
+  15. `POST /playlists/{id}/songs/{song_id}` → 201, ordering preserved
+  16. `GET /playlists/{id}` → songs in correct position order
+  17. `DELETE /playlists/{id}/songs/{song_id}` → 204, song removed
+  18. Playlist error paths (unknown playlist → 404, unknown song → 404, duplicate add)
+  19. Same song reusable across multiple playlists
 * [x] `make smoke` / `make smoke URL="..."` Makefile target
 
 ---
@@ -274,33 +283,56 @@ POST /songs → async processing
 
 ---
 
-### 📂 LIB-2 — Playlists
+### ✅ LIB-2 — Playlists
 
 **Branch:** `feature/playlists`
 
-* [ ] Models:
+* [x] Models:
 
   ```text
   playlists(id, name, created_at)
   playlist_songs(playlist_id, song_id, position)
   ```
 
-* [ ] `POST /playlists`
+* [x] `POST /playlists`
 
-* [ ] `GET /playlists`
+  * 201 on create
+  * Returns `{id, name, created_at, songs: []}`
 
-* [ ] `GET /playlists/{id}`
+* [x] `GET /playlists`
 
-* [ ] `POST /playlists/{id}/songs/{song_id}`
+  * Returns `paginated_response` ordered by `created_at DESC`
 
-  * Maintain order via `position`
+* [x] `GET /playlists/{id}`
 
-* [ ] `DELETE /playlists/{id}/songs/{song_id}`
+  * Returns playlist detail with songs ordered by `position ASC`
+  * 404 if not found
 
-* [ ] Verify:
+* [x] `POST /playlists/{id}/songs/{song_id}`
 
-  * Ordering preserved
-  * Same song reusable across playlists
+  * Appends song at next position (`max(position) + 1`)
+  * 201 on success
+  * 404 if playlist or song not found
+
+* [x] `DELETE /playlists/{id}/songs/{song_id}`
+
+  * 204 on success
+  * 404 if playlist not found or song not in playlist
+
+* [x] `app/api/playlists.py` — new router registered in `app/main.py`
+
+* [x] Bugs fixed during TDD loop:
+
+  * `Mapped[list]` missing type param → `Mapped[list["Song"]]` + `# type: ignore[type-arg]`
+  * Unused `type: ignore` removed from `_serialize_playlist_detail`
+  * Ordering test nondeterminism → explicit `datetime(...)` values instead of `server_default`
+  * Stale relationship after DELETE → `db.expire_all()` after commit in `remove_song_from_playlist`
+
+* [x] Verify:
+
+  * [x] Ordering preserved across add/remove cycles
+  * [x] Same song reusable across multiple playlists
+  * [x] `position` auto-increments correctly
 
 ---
 
@@ -382,6 +414,7 @@ offset
 
   * [x] preview endpoint
   * [x] favorites
+  * [x] playlists
   * speed streaming (existing)
 
 * [ ] Optional:
@@ -400,7 +433,7 @@ offset
 * [x] Speed processing works (0.5–4.0)
 * [x] Trim + speed combination streams correctly
 * [x] Favorites endpoints idempotent and correct
-* [ ] Playlists support ordering + CRUD
+* [x] Playlists support ordering + CRUD
 * [ ] `/songs` supports filtering, sorting, pagination
 * [x] All responses follow envelope format
 * [x] No temp file leaks in `/tmp/melo`
@@ -434,7 +467,10 @@ offset
 | `unique=True` on `favorites.song_id`                                    | DB-level dedup guarantee regardless of app logic                                                                                                    |
 | `is_favorite` populated with prefetched favorites in list serialization | Avoid N+1 in `/songs`; keep single-record paths simple                                                                                              |
 | `DELETE /favorites` returns 204                                         | No body on delete; 404 if not favorited for explicit error feedback                                                                                 |
-| Playlist ordering via `position`                                        | Predictable playback                                                                                                                                |
+| Playlist ordering via `position`                                        | Predictable playback; auto-increments on add                                                                                                        |
+| Same song reusable across playlists                                     | `playlist_songs` scoped per playlist; no uniqueness constraint on `song_id` alone                                                                   |
+| `db.expire_all()` after playlist mutations                              | Clears stale relationship state from SQLAlchemy identity map post-commit                                                                            |
+| Ordering test uses explicit `datetime` values                           | `server_default=func.now()` resolves identically within a transaction — order nondeterministic without explicit timestamps                          |
 | Filtering at DB level                                                   | Scalability                                                                                                                                         |
 | Computed `effective_duration`                                           | Reflects real playback                                                                                                                              |
 | No caching of processed streams                                         | Keep system simple                                                                                                                                  |

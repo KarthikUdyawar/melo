@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import HTTPException, RequestValidationError
 
 from app.api.favorites import router as favorites_router
+from app.api.playlists import router as playlists_router
 from app.api.songs import router as songs_router
 from app.core.config import get_settings
 from app.core.db import init_db, ping_db
@@ -81,6 +82,7 @@ def create_app() -> FastAPI:
 
     app.include_router(songs_router)
     app.include_router(favorites_router)
+    app.include_router(playlists_router)
 
     return app
 

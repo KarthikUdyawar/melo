@@ -36,6 +36,8 @@ graph TD
     API -->|StreamingResponse| Client
     Client -->|POST /favorites/id| API
     API -->|INSERT favorites| PG
+    Client -->|POST /playlists| API
+    API -->|INSERT playlist| PG
 ```
 
 ---
@@ -168,7 +170,18 @@ curl -X POST http://localhost:8000/favorites/<id>
 # 9. List favorites
 curl http://localhost:8000/favorites
 
-# 10. Run smoke test
+# 10. Create a playlist
+curl -X POST http://localhost:8000/playlists \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Morning Mix"}'
+
+# 11. Add a song to a playlist
+curl -X POST http://localhost:8000/playlists/<playlist_id>/songs/<song_id>
+
+# 12. List playlists
+curl http://localhost:8000/playlists
+
+# 13. Run smoke test
 make smoke
 ```
 
@@ -201,17 +214,22 @@ make smoke
 
 ## API
 
-| Method   | Path                   | Status | Description                          |
-| -------- | ---------------------- | ------ | ------------------------------------ |
-| `POST`   | `/songs/preview`       | ✅      | Fetch YouTube metadata (no DB write) |
-| `POST`   | `/songs`               | ✅      | Submit YouTube URL → async job       |
-| `GET`    | `/songs`               | ✅      | List all songs (with `is_favorite`)  |
-| `GET`    | `/songs/{id}`          | ✅      | Get song detail + status             |
-| `GET`    | `/songs/{id}/stream`   | ✅      | Stream mp3 (trim + speed applied)    |
-| `POST`   | `/favorites/{song_id}` | ✅      | Favorite a song (idempotent)         |
-| `DELETE` | `/favorites/{song_id}` | ✅      | Unfavorite a song                    |
-| `GET`    | `/favorites`           | ✅      | List favorited songs                 |
-| `GET`    | `/health`              | ✅      | Health check                         |
+| Method   | Path                              | Status | Description                          |
+| -------- | --------------------------------- | ------ | ------------------------------------ |
+| `POST`   | `/songs/preview`                  | ✅      | Fetch YouTube metadata (no DB write) |
+| `POST`   | `/songs`                          | ✅      | Submit YouTube URL → async job       |
+| `GET`    | `/songs`                          | ✅      | List all songs (with `is_favorite`)  |
+| `GET`    | `/songs/{id}`                     | ✅      | Get song detail + status             |
+| `GET`    | `/songs/{id}/stream`              | ✅      | Stream mp3 (trim + speed applied)    |
+| `POST`   | `/favorites/{song_id}`            | ✅      | Favorite a song (idempotent)         |
+| `DELETE` | `/favorites/{song_id}`            | ✅      | Unfavorite a song                    |
+| `GET`    | `/favorites`                      | ✅      | List favorited songs                 |
+| `POST`   | `/playlists`                      | ✅      | Create a playlist                    |
+| `GET`    | `/playlists`                      | ✅      | List all playlists                   |
+| `GET`    | `/playlists/{id}`                 | ✅      | Get playlist detail with songs       |
+| `POST`   | `/playlists/{id}/songs/{song_id}` | ✅      | Add song to playlist (ordered)       |
+| `DELETE` | `/playlists/{id}/songs/{song_id}` | ✅      | Remove song from playlist            |
+| `GET`    | `/health`                         | ✅      | Health check                         |
 
 Interactive docs: **http://localhost:8000/docs**
 
@@ -245,6 +263,34 @@ curl http://localhost:8000/favorites
 
 `is_favorite` is also reflected in `GET /songs` and `GET /songs/{id}`.
 
+### Playlists
+
+```bash
+# Create
+curl -X POST http://localhost:8000/playlists \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Morning Mix"}'
+# → 201 {id, name, created_at, songs: []}
+
+# Add song (appended at end; position maintained automatically)
+curl -X POST http://localhost:8000/playlists/<playlist_id>/songs/<song_id>
+# → 201
+
+# View playlist with ordered songs
+curl http://localhost:8000/playlists/<playlist_id>
+# → {id, name, songs: [...ordered by position]}
+
+# Remove song
+curl -X DELETE http://localhost:8000/playlists/<playlist_id>/songs/<song_id>
+# → 204
+
+# List all playlists
+curl http://localhost:8000/playlists
+# → {records: [...], count: N}
+```
+
+Songs can appear in multiple playlists. Position is maintained per-playlist and auto-increments on add.
+
 ---
 
 ## Folder Structure
@@ -254,6 +300,7 @@ melo/
 ├── app/
 │   ├── api/
 │   │   ├── favorites.py   # POST/DELETE/GET /favorites
+│   │   ├── playlists.py   # POST/DELETE/GET /playlists
 │   │   ├── songs.py       # songs router incl. /preview
 │   │   └── responses.py   # envelope_response, paginated_response
 │   ├── core/              # config, db, deps, logging, middleware
@@ -322,41 +369,45 @@ Test layout:
 | `tests/unit/test_downloader.py`           | Unit        |
 | `tests/unit/test_preview.py`              | Unit        |
 | `tests/unit/test_favorites.py`            | Unit        |
+| `tests/unit/test_playlist_schemas.py`     | Unit        |
 | `tests/integration/test_db.py`            | Integration |
 | `tests/integration/test_songs_api.py`     | Integration |
 | `tests/integration/test_preview_api.py`   | Integration |
 | `tests/integration/test_favorites_api.py` | Integration |
+| `tests/integration/test_playlists_api.py` | Integration |
 
 ---
 
 ## Decision Log
 
-| Decision                                  | Reason                                                                                       |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------- |
-| No Alembic                                | Solo project; `create_all()` on startup sufficient                                           |
-| `APP_ENV`-driven env files                | Clean separation: dev (localhost) / staging (Docker) / prod                                  |
-| Pinned yt-dlp format selector             | `bestaudio` needs JS runtime; explicit IDs (`140/251/…`) use plain HTTPS                     |
-| `worker_ready` signal for MinIO bucket    | Create once per process, not per task                                                        |
-| Proxy stream via FastAPI                  | Presigned URLs signed to internal hostname break on host rewrite; API proxies bytes directly |
-| `expire_on_commit=False`                  | Avoids lazy-load errors post-commit in Celery context                                        |
-| Speed applied at stream time              | Avoid storing per-speed variants in MinIO                                                    |
-| Chain `atempo` filters                    | FFmpeg atempo limited to 0.5–2.0 per stage                                                   |
-| Trim before speed                         | Correct processing order — trim reduces data before re-encoding                              |
-| `created_paths` list in stream endpoint   | Guarantees cleanup of all temp files regardless of which pipeline steps ran                  |
-| Preview endpoint is stateless             | No DB writes; simpler system; worker re-probes as source of truth                            |
-| Favorites idempotent (check-then-insert)  | Solo user; race condition acceptable; avoids upsert complexity                               |
-| `is_favorite` queried per song            | N+1 acceptable at MVP scale; batch subquery deferred to API-2                                |
-| `DELETE /favorites` returns 204           | No body on delete; 404 if not favorited for explicit error feedback                          |
-| SQLite truncation for unit test isolation | Savepoint rollback unreliable when endpoint calls `db.commit()` release the savepoint        |
-| Root `conftest.py` for env setup          | `pytest_configure` runs before collection — only reliable hook for early env vars            |
-| `tasks.py` excluded from coverage         | Celery internals require live worker; covered by `make smoke` instead                        |
-| `# nosec B108/B603/B607` in processor     | `/tmp/melo` intentional; subprocess args are internal constants only, never user input       |
+| Decision                                   | Reason                                                                                       |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| No Alembic                                 | Solo project; `create_all()` on startup sufficient                                           |
+| `APP_ENV`-driven env files                 | Clean separation: dev (localhost) / staging (Docker) / prod                                  |
+| Pinned yt-dlp format selector              | `bestaudio` needs JS runtime; explicit IDs (`140/251/…`) use plain HTTPS                     |
+| `worker_ready` signal for MinIO bucket     | Create once per process, not per task                                                        |
+| Proxy stream via FastAPI                   | Presigned URLs signed to internal hostname break on host rewrite; API proxies bytes directly |
+| `expire_on_commit=False`                   | Avoids lazy-load errors post-commit in Celery context                                        |
+| Speed applied at stream time               | Avoid storing per-speed variants in MinIO                                                    |
+| Chain `atempo` filters                     | FFmpeg atempo limited to 0.5–2.0 per stage                                                   |
+| Trim before speed                          | Correct processing order — trim reduces data before re-encoding                              |
+| `created_paths` list in stream endpoint    | Guarantees cleanup of all temp files regardless of which pipeline steps ran                  |
+| Preview endpoint is stateless              | No DB writes; simpler system; worker re-probes as source of truth                            |
+| Favorites idempotent (check-then-insert)   | Solo user; race condition acceptable; avoids upsert complexity                               |
+| `is_favorite` queried per song             | N+1 acceptable at MVP scale; batch subquery deferred to API-2                                |
+| `DELETE /favorites` returns 204            | No body on delete; 404 if not favorited for explicit error feedback                          |
+| Playlist ordering via `position`           | Predictable playback; auto-increments on add                                                 |
+| `db.expire_all()` after playlist mutations | Clears stale relationship state from SQLAlchemy identity map post-commit                     |
+| Same song reusable across playlists        | `playlist_songs` join table scoped per playlist; no uniqueness constraint on `song_id`       |
+| SQLite truncation for unit test isolation  | Savepoint rollback unreliable when endpoint calls `db.commit()` release the savepoint        |
+| Root `conftest.py` for env setup           | `pytest_configure` runs before collection — only reliable hook for early env vars            |
+| `tasks.py` excluded from coverage          | Celery internals require live worker; covered by `make smoke` instead                        |
+| `# nosec B108/B603/B607` in processor      | `/tmp/melo` intentional; subprocess args are internal constants only, never user input       |
 
 ---
 
 ## Out of Scope (v1)
 
-- Playlists → Sprint 3 (in progress)
-- Filtering, sorting, search → Sprint 3 (in progress)
+- Filtering, sorting, search → Sprint 3 API-2 (in progress)
 - Frontend UI → Sprint 4
 - Multi-user auth, lyrics, waveforms → never (personal tool)
