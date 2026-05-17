@@ -1,5 +1,4 @@
-"""
-Unit tests for META-2: POST /songs/preview
+"""Unit tests for META-2: POST /songs/preview
 
 Tests cover:
 - extract_youtube_id: all URL formats, invalid cases

@@ -1,4 +1,4 @@
-"""
+"""tests/conftest.py
 Root conftest — env setup and Docker Postgres lifecycle.
 
 Fixture split
@@ -70,8 +70,7 @@ def docker_compose_project_name() -> str:
 
 @pytest.fixture(scope="session")
 def postgres_url(docker_services: Any) -> str:  # type: ignore[misc]
-    """
-    Wait for Postgres to be ready, then return its connection URL.
+    """Wait for Postgres to be ready, then return its connection URL.
     `docker_services` is provided by pytest-docker.
     """
     port = int(os.environ.get("TEST_PG_PORT", "15432"))

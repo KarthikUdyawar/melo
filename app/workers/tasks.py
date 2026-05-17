@@ -1,9 +1,10 @@
-# app/workers/tasks.py
-"""
-Celery tasks for Melo.
+"""Celery tasks for the Melo project.
 
-Worker logs emit structured JSON with fields: task_name, song_id, status, duration_ms.
+This module contains the main song processing pipeline task (`process_song_task`)
+and supporting base class + utilities.
 """
+
+# app/workers/tasks.py
 
 import time
 from typing import Any, cast
@@ -21,12 +22,13 @@ logger = get_logger(__name__)
 
 
 class _BaseTask(Task):  # type: ignore[type-arg]
-    """
-    Shared base that holds one SQLAlchemy session per worker process.
+    """Base Celery task class that provides a shared SQLAlchemy session.
 
     The session is created lazily on first use and reused across tasks
-    in the same process — this avoids a connection-per-task overhead.
-    Celery workers are long-lived processes, so this is safe.
+    within the same worker process. It is automatically closed in
+    ``after_return()``.
+
+    This pattern reduces connection overhead in long-lived Celery workers.
     """
 
     _db = None
@@ -58,7 +60,7 @@ class _BaseTask(Task):  # type: ignore[type-arg]
             task_id,
             args,
             kwargs,
-            cast(ExceptionInfo, einfo),
+            cast("ExceptionInfo", einfo),
         )
 
 
@@ -75,31 +77,31 @@ def process_song_task(
     song_id: str,
     url: str,
 ) -> dict[str, object]:
-    """
-    Full ingest pipeline for a single song.
+    """Process a single song: download from YouTube, upload to MinIO, and update DB.
 
-    Steps
-    -----
-    1. Mark DB record → ``processing``
-    2. probe_metadata (yt-dlp, download=False) → populate
-       title/thumbnail/channel/upload_date
-    3. Check for existing done record with same youtube_id → dedup fast path
-    4. Download audio with yt-dlp  (→ /tmp/melo/<song_id>.mp3)
-    5. Upload mp3 to MinIO          (→ songs/<song_id>.mp3)
-    6. Update DB: file_url, duration, status → ``done``
-    7. Clean up the local tmp file
+    Full pipeline:
+    1. Mark song as ``processing`` in database
+    2. Probe metadata using yt-dlp
+    3. Deduplication check (reuse existing file if same YouTube video)
+    4. Download audio
+    5. Upload to MinIO
+    6. Mark as ``done`` with file reference
+    7. Clean up temporary file
 
-    Note: trim (start/end) and speed are stored on the Song record and applied
-    on-the-fly at stream time (GET /songs/{id}/stream). The worker only handles
-    download + upload of the raw audio.
+    Note:
+        Trimming and speed adjustment are **not** done in this task.
+        They are applied on-the-fly during streaming.
 
-    Dedup (same youtube_id, different trim/speed)
-    -----------------------------------------------
-    If a ``done`` record already exists for the same youtube_id, reuse its
-    file_url and metadata — no re-download, no re-upload, status → done immediately.
+    Args:
+        song_id: UUID string of the song record.
+        url: YouTube URL to download from.
 
-    On any unhandled exception the record is marked ``failed`` and the
-    exception is re-raised so Celery can log it and (optionally) retry.
+    Returns:
+        Status dictionary (e.g. ``{"song_id": "...", "status": "done"}``).
+
+    Raises:
+        DownloadError, StorageError: On known failures (task marked failed).
+        Exception: On unexpected errors (retried up to 3 times, then failed).
     """
     from pathlib import Path
 
@@ -354,8 +356,15 @@ def process_song_task(
 
 
 def _mark_failed(db: Session, song: Song) -> None:
-    """Best-effort status update to failed; swallows DB errors
-    to avoid masking the original."""
+    """Mark a song record as failed in the database.
+
+    This is a best-effort operation. Any database errors are logged
+    and swallowed so they do not mask the original task exception.
+
+    Args:
+        db: SQLAlchemy session.
+        song: Song model instance to update.
+    """
     try:
         from app.models.song import SongStatus
 

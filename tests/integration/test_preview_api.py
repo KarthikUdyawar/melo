@@ -1,5 +1,4 @@
-"""
-Integration tests for POST /songs/preview (META-2).
+"""Integration tests for POST /songs/preview (META-2).
 
 Uses a real Postgres DB (via pytest-docker) and FastAPI TestClient.
 yt-dlp is always mocked — no network calls.
@@ -110,7 +109,7 @@ class TestPreviewUrlFormats:
         ],
     )
     def test_url_format_accepted(
-        self, client: TestClient, url: str, expected_id: str
+        self, client: TestClient, url: str, expected_id: str,
     ) -> None:
         with patch("app.services.downloader.probe_metadata", return_value=FULL_META):
             resp = client.post("/songs/preview", json={"url": url})
@@ -209,7 +208,7 @@ class TestPreviewErrors:
 
 class TestPreviewStateless:
     def test_no_song_row_created_on_success(
-        self, client: TestClient, db_session: Session
+        self, client: TestClient, db_session: Session,
     ) -> None:
         with patch("app.services.downloader.probe_metadata", return_value=FULL_META):
             resp = client.post("/songs/preview", json={"url": VALID_URL})
@@ -217,7 +216,7 @@ class TestPreviewStateless:
         assert db_session.query(Song).count() == 0
 
     def test_no_song_row_created_on_502(
-        self, client: TestClient, db_session: Session
+        self, client: TestClient, db_session: Session,
     ) -> None:
         with patch(
             "app.services.downloader.probe_metadata",
@@ -227,7 +226,7 @@ class TestPreviewStateless:
         assert db_session.query(Song).count() == 0
 
     def test_idempotent_multiple_calls(
-        self, client: TestClient, db_session: Session
+        self, client: TestClient, db_session: Session,
     ) -> None:
         with patch("app.services.downloader.probe_metadata", return_value=FULL_META):
             client.post("/songs/preview", json={"url": VALID_URL})
@@ -236,7 +235,7 @@ class TestPreviewStateless:
         assert db_session.query(Song).count() == 0
 
     def test_preview_does_not_affect_existing_songs(
-        self, client: TestClient, db_session: Session
+        self, client: TestClient, db_session: Session,
     ) -> None:
         """Preview must not disturb pre-existing Song rows."""
         existing = Song(

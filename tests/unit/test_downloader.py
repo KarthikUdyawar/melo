@@ -1,5 +1,4 @@
-"""
-Unit tests for app/services/downloader.py
+"""Unit tests for app/services/downloader.py
 
 yt-dlp is fully mocked — no network calls.
 Tests cover:

@@ -1,4 +1,4 @@
-"""
+"""tests/integration/conftest.py
 Integration conftest — Postgres-backed db_session and client fixtures.
 
 These fixtures require the Docker Postgres container (via db_engine from
@@ -15,10 +15,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 
-@pytest.fixture()
+@pytest.fixture
 def db_session(db_engine: Any) -> Generator[Session, None, None]:
-    """
-    Per-test session on a fresh connection from the Postgres pool.
+    """Per-test session on a fresh connection from the Postgres pool.
 
     - Fresh connection per test (not one shared connection for 90s+).
     - Outer transaction wraps everything; savepoint lets code-under-test
@@ -37,7 +36,7 @@ def db_session(db_engine: Any) -> Generator[Session, None, None]:
     connection.close()
 
 
-@pytest.fixture()
+@pytest.fixture
 def client(db_session: Session) -> Generator[TestClient, None, None]:
     """FastAPI TestClient wired to the rolled-back Postgres session."""
     from app.core.deps import get_db

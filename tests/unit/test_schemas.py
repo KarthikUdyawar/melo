@@ -1,5 +1,4 @@
-"""
-Unit tests for app/schemas/song.py
+"""Unit tests for app/schemas/song.py
 
 Tests cover:
 - SongCreate URL validation (valid and invalid formats)

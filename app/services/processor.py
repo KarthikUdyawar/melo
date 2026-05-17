@@ -1,7 +1,13 @@
+"""Audio processor using FFmpeg for trimming and speed adjustment.
+
+This module provides functions to:
+- Trim audio files to a specific time range [start, end]
+- Change playback speed using FFmpeg's atempo filter
+
+All operations use temporary files in `/tmp/melo`, include retry logic for robustness,
+and raise ``ProcessingError`` on failure with proper cleanup.
+"""
 # app/services/processor.py
-"""
-Audio processor — FFmpeg trim + speed for Melo.
-"""
 
 import subprocess  # nosec B404
 from pathlib import Path
@@ -14,32 +20,30 @@ _TMP_DIR = Path("/tmp/melo") # nosec B108
 
 
 class ProcessingError(Exception):
-    """Raised when FFmpeg exits non-zero or output file is missing."""
+   """Raised when FFmpeg exits with non-zero code or produces invalid output."""
 
 
 def trim_audio(
-    input_path: Path, output_path: Path, start: float | None, end: float | None
+    input_path: Path, output_path: Path, start: float | None, end: float | None,
 ) -> Path:
-    """
-    Trim *input_path* to [start, end] and write result to *output_path*.
+    """Trim audio file to the given time range and save to output_path.
 
     Strategy
     --------
-    1. Try stream copy (-c copy) — fast, no re-encode, no quality loss.
-    2. On non-zero exit, retry with libmp3lame re-encode — handles codec
-       mismatch where stream copy silently produces corrupt output.
+    1. First attempt: Stream copy (-c copy) — fast, no re-encoding.
+    2. On failure: Retry with libmp3lame re-encode to handle codec issues.
 
     Args:
-        input_path:  Source mp3 (fetched from MinIO to /tmp/melo).
-        output_path: Destination path for trimmed mp3.
-        start:       Trim start in seconds (None = from beginning).
-        end:         Trim end in seconds (None = to end of file).
+        input_path: Path to source MP3 file.
+        output_path: Path where trimmed MP3 will be written.
+        start: Start time in seconds (None = from beginning).
+        end: End time in seconds (None = until end of file).
 
     Returns:
-        output_path on success.
+        The output_path on successful processing.
 
     Raises:
-        ProcessingError: if both attempts fail or output is missing.
+        ProcessingError: If both attempts fail or the output file is missing/empty.
     """
     _TMP_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -87,6 +91,12 @@ def trim_audio(
         )
         return output_path
 
+    if result.returncode == 0:
+        output_path.unlink(missing_ok=True)
+        raise ProcessingError(
+            f"FFmpeg stream-copy produced empty/missing output: {output_path}"
+        )
+
     logger.warning(
         "stream_copy_failed",
         returncode=result.returncode,
@@ -122,7 +132,8 @@ def trim_audio(
             stderr=result.stderr[-500:] if result.stderr else "",
         )
         raise ProcessingError(
-            f"FFmpeg re-encode failed (exit {result.returncode}):{result.stderr[-300:]}"
+            f"FFmpeg re-encode failed (exit {result.returncode}): "
+            f"{result.stderr[-300:]}"
         )
 
     if not output_path.exists() or output_path.stat().st_size == 0:
@@ -139,21 +150,26 @@ def trim_audio(
 
 
 def _build_atempo_filters(speed: float) -> str:
-    """
-    Build a comma-separated atempo filter chain for the given speed.
+    """Build FFmpeg atempo filter chain for the desired playback speed.
 
-    FFmpeg's atempo filter is limited to 0.5–2.0 per stage.
-    Chain multiple stages for speeds outside that range:
-        speed=4.0  → "atempo=2.0,atempo=2.0"
-        speed=0.25 → "atempo=0.5,atempo=0.5"
-        speed=1.5  → "atempo=1.5"
+    FFmpeg's ``atempo`` filter only supports range 0.5–2.0 per instance.
+    This function chains multiple filters to support wider speed ranges.
+
+    Examples:
+        - speed=4.0   → "atempo=2.0,atempo=2.0"
+        - speed=0.25  → "atempo=0.5,atempo=0.5"
+        - speed=1.5   → "atempo=1.5"
+        - speed=1.0   → "" (empty string — no filter needed)
 
     Args:
-        speed: Target playback speed. Must be > 0. 1.0 = no change.
+        speed: Target speed multiplier (> 0). 1.0 = normal speed.
 
     Returns:
-        Filter string suitable for -filter:a. Empty string if speed == 1.0.
+        Comma-separated atempo filter string. Empty string if speed is 1.0.
     """
+    if speed <= 0:
+        raise ValueError("speed must be > 0")
+
     filters: list[str] = []
 
     if speed > 1.0:
@@ -172,23 +188,22 @@ def _build_atempo_filters(speed: float) -> str:
 
 
 def apply_speed(input_path: Path, output_path: Path, speed: float) -> Path:
-    """
-    Apply atempo speed adjustment to *input_path*, write to *output_path*.
+    """Apply speed adjustment to an audio file using FFmpeg atempo filter.
 
-    Callers should guard with `speed != 1.0` before calling — this fn
-    will still work at 1.0 but wastes a re-encode.
+    Note:
+        Callers should avoid calling this with ``speed == 1.0`` as it
+        unnecessarily re-encodes the file.
 
     Args:
-        input_path:  Source mp3.
-        output_path: Destination path for speed-adjusted mp3.
-        speed:       Playback multiplier (e.g. 2.0 = double speed).
+        input_path: Path to source MP3 file.
+        output_path: Path where speed-adjusted MP3 will be written.
+        speed: Playback speed multiplier (e.g. 2.0 = double speed).
 
     Returns:
-        output_path on success.
+        The output_path on successful processing.
 
     Raises:
-        ProcessingError: FFmpeg non-zero exit or empty output.
-                         Cleans up output_path before raising.
+        ProcessingError: If FFmpeg fails or produces empty/missing output.
     """
     _TMP_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -229,13 +244,13 @@ def apply_speed(input_path: Path, output_path: Path, speed: float) -> Path:
             stderr=result.stderr[-500:] if result.stderr else "",
         )
         raise ProcessingError(
-            f"FFmpeg atempo failed (exit {result.returncode}): {result.stderr[-300:]}"
+            f"FFmpeg atempo failed (exit {result.returncode}): {result.stderr[-300:]}",
         )
 
     if not output_path.exists() or output_path.stat().st_size == 0:
         output_path.unlink(missing_ok=True)
         raise ProcessingError(
-            f"FFmpeg speed produced empty/missing output: {output_path}"
+            f"FFmpeg speed produced empty/missing output: {output_path}",
         )
 
     logger.info(

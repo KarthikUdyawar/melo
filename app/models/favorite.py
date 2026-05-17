@@ -1,3 +1,10 @@
+"""SQLAlchemy model for user favorite songs.
+
+This module defines the Favorite model which represents a user's
+favorite song entry in the database.
+"""
+# app/models/favorite.py
+
 import uuid
 from datetime import datetime
 
@@ -10,10 +17,16 @@ from app.models.song import Song
 
 
 class Favorite(Base):
+    """Represents a user's favorite song.
+
+    Each favorite links a user to a specific song. The model enforces
+    a one-to-one relationship per song (unique constraint on song_id).
+    """
+
     __tablename__ = "favorites"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
     )
     song_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -28,4 +41,4 @@ class Favorite(Base):
         server_default=func.now(),
     )
 
-    song: Mapped["Song"] = relationship("Song", backref="favorite")  # noqa: F821
+    song: Mapped["Song"] = relationship("Song", backref="favorite")

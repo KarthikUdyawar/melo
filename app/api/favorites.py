@@ -1,11 +1,11 @@
-"""
-Favorites API — LIB-1.
+"""Favorites API — LIB-1.
 
 POST   /favorites/{song_id}  → 201 created / 200 already favorited (idempotent)
 DELETE /favorites/{song_id}  → 204 removed / 404 not favorited
 GET    /favorites             → paginated list of favorited songs
 """
 
+# app/api/favorites.py
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
@@ -24,6 +24,16 @@ router = APIRouter(prefix="/favorites", tags=["favorites"])
 
 
 def _serialize_song(song: Song, *, is_favorite: bool = True) -> dict[str, object]:
+    """Serialize a Song model into a SongResponse dict.
+
+    Args:
+        song: The Song ORM model instance to serialize.
+        is_favorite: Whether to mark the song as favorited in the response.
+            Defaults to True.
+
+    Returns:
+        dict representation of the song following SongResponse schema.
+    """
     from app.schemas.song import SongResponse
 
     return SongResponse(
@@ -46,10 +56,22 @@ def _serialize_song(song: Song, *, is_favorite: bool = True) -> dict[str, object
 
 @router.post("/{song_id}", status_code=status.HTTP_201_CREATED)
 def add_favorite(song_id: UUID, db: DbDep) -> JSONResponse:
-    """
-    Favorite a song. Idempotent — second call returns 200 instead of 201.
+    """Favorite a song.
 
-    Uniqueness is enforced by DB constraint (unique=True on song_id).
+    The operation is idempotent: calling it again on an already favorited
+    song returns 200 instead of 201.
+
+    Uniqueness is enforced at the database level via a unique constraint.
+
+    Args:
+        song_id: UUID of the song to favorite.
+        db: Database dependency.
+
+    Returns:
+        JSONResponse with envelope containing the song_id and appropriate message.
+
+    Raises:
+        HTTPException: 404 if the song does not exist.
     """
     song = db.query(Song).filter(Song.id == song_id).first()
     if not song:
@@ -88,7 +110,18 @@ def add_favorite(song_id: UUID, db: DbDep) -> JSONResponse:
 
 @router.delete("/{song_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_favorite(song_id: UUID, db: DbDep) -> Response:
-    """Remove a song from favorites. 404 if song doesn't exist or isn't favorited."""
+    """Remove a song from the user's favorites.
+
+    Args:
+        song_id: UUID of the song to remove from favorites.
+        db: Database dependency.
+
+    Returns:
+        Empty Response with status 204 on success.
+
+    Raises:
+        HTTPException: 404 if the song doesn't exist or is not favorited.
+    """
     song = db.query(Song).filter(Song.id == song_id).first()
     if not song:
         raise HTTPException(status_code=404, detail=f"Song {song_id} not found.")
@@ -106,11 +139,16 @@ def remove_favorite(song_id: UUID, db: DbDep) -> Response:
 
 @router.get("")
 def list_favorites(db: DbDep) -> JSONResponse:
-    """
-    List all favorited songs, ordered by favorite created_at descending.
+    """List all songs favorited by the user.
 
-    Joins Favorite → Song so all song fields are returned.
-    Each record has is_favorite=True (only favorited songs appear here).
+    Results are ordered by when they were favorited (newest first).
+    Each song includes full metadata and `is_favorite=True`.
+
+    Args:
+        db: Database dependency.
+
+    Returns:
+        Paginated JSON response containing the list of favorited songs.
     """
     rows = (
         db.query(Song)

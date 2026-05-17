@@ -1,3 +1,14 @@
+"""MinIO storage service for file upload and presigned URL generation.
+
+This module provides a simple interface to interact with MinIO
+(S3-compatible object storage):
+
+- Ensures the configured bucket exists at startup
+- Uploads local files to MinIO
+- Generates presigned URLs for secure, time-limited access
+
+All operations are wrapped with proper error handling and structured logging.
+"""
 # app/services/storage.py
 from pathlib import Path
 
@@ -11,10 +22,17 @@ logger = get_logger(__name__)
 
 
 class StorageError(Exception):
-    """Raised when a MinIO operation fails."""
+    """Exception raised when a MinIO operation fails."""
 
 
 def _client() -> Minio:
+    """Return a configured MinIO client instance.
+
+    Uses settings from ``app.core.config.get_settings()``.
+
+    Returns:
+        A fresh ``Minio`` client object.
+    """
     s = get_settings()
     return Minio(
         s.minio_endpoint,
@@ -25,10 +43,12 @@ def _client() -> Minio:
 
 
 def ensure_bucket_exists() -> None:
-    """
-    Create the configured bucket if it does not already exist.
+    """Create the configured bucket if it does not already exist.
 
     Called once at worker startup so tasks never have to check themselves.
+
+    Raises:
+        StorageError: If the bucket check or creation fails due to S3 error.
     """
     s = get_settings()
     client = _client()
@@ -61,23 +81,23 @@ def ensure_bucket_exists() -> None:
             error=str(exc),
         )
         raise StorageError(
-            f"Could not ensure bucket {s.minio_bucket!r}: {exc}"
+            f"Could not ensure bucket {s.minio_bucket!r}: {exc}",
         ) from exc
 
 
 def upload_file(local_path: Path, object_key: str) -> str:
-    """
-    Upload *local_path* to MinIO at *object_key* inside the configured bucket.
+    """Upload a local file to MinIO at the given object key.
 
     Args:
-        local_path:  Absolute path to the file on disk.
-        object_key:  Destination key, e.g. ``"songs/abc-123.mp3"``.
+        local_path: Absolute path to the file on disk.
+        object_key: Destination key in MinIO (e.g. ``"songs/abc-123.mp3"``).
 
     Returns:
-        The bare object key (callers can build URLs / presigned URLs from it).
+        The object key that was uploaded (callers can use it to build URLs).
 
     Raises:
-        StorageError: on any S3 / IO error.
+        StorageError: On any S3 or I/O error.
+        FileNotFoundError: Implicitly if the file doesn't exist (via explicit check).
     """
     s = get_settings()
     client = _client()
@@ -123,7 +143,7 @@ def upload_file(local_path: Path, object_key: str) -> str:
             error=str(exc),
         )
         raise StorageError(
-            f"Upload failed for {local_path!r} → {object_key!r}: {exc}"
+            f"Upload failed for {local_path!r} → {object_key!r}: {exc}",
         ) from exc
 
     except Exception:
@@ -139,18 +159,17 @@ def upload_file(local_path: Path, object_key: str) -> str:
 
 
 def get_presigned_url(object_key: str, expires_seconds: int = 3600) -> str:
-    """
-    Generate a presigned GET URL for *object_key*.
+    """Generate a presigned GET URL for an object in MinIO.
 
     Args:
-        object_key:      e.g. ``"songs/abc-123.mp3"``
-        expires_seconds: URL TTL in seconds (default 1 hour).
+        object_key: Object key in the bucket (e.g. ``"songs/abc-123.mp3"``).
+        expires_seconds: URL expiration time in seconds (default: 3600 = 1 hour).
 
     Returns:
-        A pre-signed HTTPS/HTTP URL string.
+        A presigned URL (HTTP/HTTPS) that can be used to access the object.
 
     Raises:
-        StorageError: if MinIO rejects the request.
+        StorageError: If MinIO rejects the presigned URL request.
     """
     from datetime import timedelta
     from urllib.parse import urlparse, urlunparse
@@ -187,7 +206,7 @@ def get_presigned_url(object_key: str, expires_seconds: int = 3600) -> str:
                 parsed._replace(
                     scheme=public.scheme,
                     netloc=public.netloc,
-                )
+                ),
             )
 
             logger.debug(
@@ -212,7 +231,7 @@ def get_presigned_url(object_key: str, expires_seconds: int = 3600) -> str:
             error=str(exc),
         )
         raise StorageError(
-            f"Could not generate presigned URL for {object_key!r}: {exc}"
+            f"Could not generate presigned URL for {object_key!r}: {exc}",
         ) from exc
 
     except Exception:

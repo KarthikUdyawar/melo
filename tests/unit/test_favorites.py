@@ -1,5 +1,4 @@
-"""
-Unit tests for LIB-1: Favorites endpoints.
+"""Unit tests for LIB-1: Favorites endpoints.
 
 Tests cover:
 - POST /favorites/{song_id}: 201 created, idempotent (200), 404 missing song
@@ -141,7 +140,7 @@ class TestIsFavoriteInSongResponse:
         assert records[0]["is_favorite"] is False
 
     def test_list_songs_is_favorite_true_after_favoriting(
-        self, client, db_session
+        self, client, db_session,
     ) -> None:
         song = _make_song(db_session)
         client.post(f"/favorites/{song.id}")

@@ -1,3 +1,16 @@
+"""Song-related API endpoints.
+
+This module provides FastAPI routes for managing songs with the following
+functionality:
+- Submitting YouTube URLs for async download and processing
+- Previewing YouTube metadata without persisting data
+- Listing all songs with favorite status
+- Retrieving individual song details
+- Streaming processed audio (with optional trim and speed adjustment)
+
+All endpoints are prefixed with `/songs`.
+"""
+
 # app/api/songs.py
 from collections.abc import Generator
 from pathlib import Path
@@ -32,13 +45,35 @@ _TMP_DIR = Path("/tmp/melo")  # nosec B108
 
 
 def _is_favorited(song_id: UUID, db: DbDep) -> bool:
+    """Check if a song is favorited by the current user.
+
+    Args:
+        song_id: UUID of the song to check.
+        db: Database dependency.
+
+    Returns:
+        True if the song is in the user's favorites, False otherwise.
+    """
     return db.query(Favorite).filter(Favorite.song_id == song_id).first() is not None
 
 
 def _serialize(
-    song: Song, db: DbDep, *, is_favorite: bool | None = None
+    song: Song,
+    db: DbDep,
+    *,
+    is_favorite: bool | None = None,
 ) -> dict[str, object]:
-    """Serialize a song. Pass `is_favorite` to avoid per-song DB hits."""
+    """Serialize a Song model into a SongResponse dictionary.
+
+    Args:
+        song: The Song ORM instance to serialize.
+        db: Database dependency (used only if is_favorite is None).
+        is_favorite: Pre-computed favorite status to avoid N+1 queries.
+            If None, it will be queried individually.
+
+    Returns:
+        Dictionary representation of the song following the SongResponse schema.
+    """
     if is_favorite is None:
         is_favorite = _is_favorited(song.id, db)
 
@@ -61,7 +96,15 @@ def _serialize(
 
 
 def build_content_disposition(filename: str) -> str:
-    """RFC 5987 compliant Content-Disposition header supporting UTF-8 filenames."""
+    """Build RFC 5987 compliant Content-Disposition header with UTF-8 support.
+
+    Args:
+        filename: Original filename to be used in the download header.
+
+    Returns:
+        Content-Disposition string that supports both ASCII fallback and UTF-8
+        characters (e.g. non-English song titles).
+    """
     ascii_fallback = filename.encode("latin-1", "ignore").decode()
     utf8_encoded = quote(filename)
 
@@ -70,12 +113,22 @@ def build_content_disposition(filename: str) -> str:
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
-    """
-    Submit a YouTube URL for async download + processing.
+    """Submit a YouTube URL for asynchronous download and processing.
 
-    - First submission: creates record, enqueues Celery task.
-    - Same youtube_id + different trim: creates new record, task handles dedup
-      (reuses existing MinIO object, no re-download).
+    First submission creates a new record and enqueues a Celery task.
+    Duplicate submissions with different trim/speed settings create new
+    records (deduplication of download is handled by the worker).
+
+    Args:
+        payload: Song creation payload containing YouTube URL and optional
+            trim/speed parameters.
+        db: Database dependency.
+
+    Returns:
+        Envelope response with the created song and status 202 Accepted.
+
+    Raises:
+        HTTPException: 422 if the YouTube URL is invalid.
     """
     logger.info("create_song_request", url=payload.url, speed=payload.speed)
 
@@ -118,19 +171,27 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
         raise
 
     return envelope_response(
-        _serialize(song, db), "Song submitted.", status.HTTP_202_ACCEPTED
+        _serialize(song, db),
+        "Song submitted.",
+        status.HTTP_202_ACCEPTED,
     )
 
 
 @router.post("/preview")
 def preview_song(payload: PreviewRequest) -> JSONResponse:
-    """
-    Fetch YouTube metadata without creating a DB record or enqueuing a task.
+    """Preview YouTube song metadata without creating any database record.
 
-    Stateless — pure yt-dlp probe. Use before POST /songs to show the user
-    what they're about to ingest (title, duration, thumbnail, channel).
+    Pure metadata probe using yt-dlp. Used to show the user details before
+    submitting the actual song.
 
-    Response time target: <2s (no download, metadata only).
+    Args:
+        payload: Preview request containing the YouTube URL.
+
+    Returns:
+        Envelope response with song preview metadata.
+
+    Raises:
+        HTTPException: 422 for invalid URL, 502 if metadata fetching fails.
     """
     from app.services.downloader import (
         DownloadError,
@@ -150,7 +211,8 @@ def preview_song(payload: PreviewRequest) -> JSONResponse:
     except DownloadError as exc:
         logger.error("preview_probe_failed", url=payload.url, error=str(exc))
         raise HTTPException(
-            status_code=502, detail=f"Failed to fetch metadata: {exc}"
+            status_code=502,
+            detail=f"Failed to fetch metadata: {exc}",
         ) from exc
 
     preview = SongPreviewResponse(
@@ -177,7 +239,17 @@ def preview_song(payload: PreviewRequest) -> JSONResponse:
 
 @router.get("")
 def list_songs(db: DbDep) -> JSONResponse:
-    """List all songs with their current processing status."""
+    """List all songs ordered by creation date (newest first).
+
+    Optimised to fetch all favorite statuses in a single query to avoid N+1.
+
+    Args:
+        db: Database dependency.
+
+    Returns:
+        Paginated envelope response containing all songs with their favorite
+        status.
+    """
     logger.debug("list_songs_request")
     songs = db.query(Song).order_by(Song.created_at.desc()).all()
 
@@ -198,7 +270,18 @@ def list_songs(db: DbDep) -> JSONResponse:
 
 @router.get("/{song_id}")
 def get_song(song_id: UUID, db: DbDep) -> JSONResponse:
-    """Retrieve a single song by ID."""
+    """Retrieve detailed information about a single song.
+
+    Args:
+        song_id: UUID of the song to retrieve.
+        db: Database dependency.
+
+    Returns:
+        Envelope response with the song data.
+
+    Raises:
+        HTTPException: 404 if the song is not found.
+    """
     logger.debug("get_song_request", song_id=str(song_id))
     song = db.query(Song).filter(Song.id == song_id).first()
 
@@ -215,22 +298,27 @@ def get_song(song_id: UUID, db: DbDep) -> JSONResponse:
 
 @router.get("/{song_id}/stream")
 def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
-    """
-    Stream audio for a done song, applying trim and/or speed on-the-fly.
+    """Stream a processed song with optional on-the-fly trimming and speed adjustment.
 
-    Case matrix
-    -----------
-    | has_trim | has_speed | behaviour                          |
-    |----------|-----------|------------------------------------|
-    | False    | False     | direct MinIO proxy (fastest)       |
-    | True     | False     | fetch → trim → stream              |
-    | False    | True      | fetch → speed → stream             |
-    | True     | True      | fetch → trim → speed → stream      |
+    Supports four streaming modes:
+    - Direct MinIO proxy (no trim, no speed) — fastest
+    - Trim only
+    - Speed only
+    - Trim + Speed
 
-    Temp files are always cleaned up in generator finally block (streaming
-    cases) or on HTTPException (pre-stream errors).
+    NOTE: This endpoint returns a raw StreamingResponse (no envelope) because
+    it streams binary audio data.
 
-    NOTE: StreamingResponse intentionally skips envelope (binary stream).
+    Args:
+        song_id: UUID of the song to stream.
+        db: Database dependency.
+
+    Returns:
+        StreamingResponse with audio/mpeg content.
+
+    Raises:
+        HTTPException: 404 if song not found, 409 if not ready, \
+            502 on processing errors.
     """
     logger.debug("stream_request", song_id=str(song_id))
 
@@ -242,16 +330,20 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
 
     if song.status != SongStatus.done:
         logger.warning(
-            "stream_not_ready", song_id=str(song_id), status=song.status.value
+            "stream_not_ready",
+            song_id=str(song_id),
+            status=song.status.value,
         )
         raise HTTPException(
-            status_code=409, detail=f"Song not ready. Status: {song.status.value}"
+            status_code=409,
+            detail=f"Song not ready. Status: {song.status.value}",
         )
 
     if not song.file_url:
         logger.error("missing_file_url", song_id=str(song_id))
         raise HTTPException(
-            status_code=500, detail="Song marked done but has no file_url."
+            status_code=500,
+            detail="Song marked done but has no file_url.",
         )
 
     s = get_settings()
@@ -276,7 +368,10 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
         logger.info(
-            "stream_started", song_id=str(song_id), filename=filename, mode="direct"
+            "stream_started",
+            song_id=str(song_id),
+            filename=filename,
+            mode="direct",
         )
         return StreamingResponse(
             response.stream(32 * 1024),
@@ -333,7 +428,8 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
             except ProcessingError as exc:
                 logger.error("trim_error", song_id=str(song_id), error=str(exc))
                 raise HTTPException(
-                    status_code=502, detail=f"Trim failed: {exc}"
+                    status_code=502,
+                    detail=f"Trim failed: {exc}",
                 ) from exc
 
         # 3. Speed (if needed) ────────────────────────────────────────────────
@@ -350,7 +446,8 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
             except ProcessingError as exc:
                 logger.error("speed_error", song_id=str(song_id), error=str(exc))
                 raise HTTPException(
-                    status_code=502, detail=f"Speed processing failed: {exc}"
+                    status_code=502,
+                    detail=f"Speed processing failed: {exc}",
                 ) from exc
 
         # 4. Stream + cleanup in generator ────────────────────────────────────
