@@ -91,6 +91,12 @@ def trim_audio(
         )
         return output_path
 
+    if result.returncode == 0:
+        output_path.unlink(missing_ok=True)
+        raise ProcessingError(
+            f"FFmpeg stream-copy produced empty/missing output: {output_path}"
+        )
+
     logger.warning(
         "stream_copy_failed",
         returncode=result.returncode,
@@ -161,6 +167,9 @@ def _build_atempo_filters(speed: float) -> str:
     Returns:
         Comma-separated atempo filter string. Empty string if speed is 1.0.
     """
+    if speed <= 0:
+        raise ValueError("speed must be > 0")
+
     filters: list[str] = []
 
     if speed > 1.0:
