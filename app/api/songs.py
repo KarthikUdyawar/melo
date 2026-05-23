@@ -111,7 +111,7 @@ def _sort_column(sort_by: SortBy, order: SortOrder) -> ColumnElement[Any]:
         SortBy.song_title: Song.title,
         SortBy.duration: Song.duration,
     }[sort_by]
-    return col.asc() if order == SortOrder.asc else col.desc()
+    return col.asc().nulls_last() if order == SortOrder.asc else col.desc().nulls_last()
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
