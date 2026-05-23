@@ -336,11 +336,11 @@ POST /songs → async processing
 
 ---
 
-### 🔍 API-2 — Filtering, Sorting & Search
+### ✅ API-2 — Filtering, Sorting & Search
 
 **Branch:** `feature/api-query`
 
-* [ ] Enhance `GET /songs`:
+* [x] Enhance `GET /songs`:
 
 Query params:
 
@@ -351,27 +351,44 @@ search
 sort_by
 order
 limit
-offset
+after        (cursor — UUID v7 of last seen record)
 ```
 
-* [ ] DB-level filtering (SQLAlchemy)
+* [x] DB-level filtering (SQLAlchemy) — `SortBy` / `SortOrder` StrEnums; `ColumnElement[Any]` return types
 
-* [ ] Add indexes:
+* [x] Add indexes:
 
   * `youtube_id`
   * `created_at`
   * `status`
+  * `title` (btree)
 
-* [ ] Response:
+* [x] **Cursor-based pagination** via `?after=<uuid>`:
+
+  * Looks up anchor row → `col > anchor_val` (asc) or `col < anchor_val` (desc)
+  * Stable under concurrent inserts; no offset drift
+
+* [x] Response:
 
 ```json
 {
   "records": [...],
-  "count": 42
+  "count": 42,
+  "bookmark": "<last-uuid-or-null>"
 }
 ```
 
-* [ ] Verify:
+* [x] `app/api/responses.py` — `paginated_response` gains `bookmark` kwarg (default `None`)
+
+* [x] `tests/integration/test_songs_api_filtering.py` — **NEW** — 23 tests, 5 TDD slices
+
+* [x] `tests/smoke_test.sh` — S20–S24 added (sections 19 → 24)
+
+* [x] `pyproject.toml` — added `uuid6>=2025.0.1` dependency (`uv add uuid6`)
+
+* [x] All model PKs migrated to **UUID v7** (via `uuid6` package) — string-sortable = chronological = natural cursor key
+
+* [x] Verify:
 
   * Fast queries at scale
   * Case-insensitive search
@@ -434,7 +451,7 @@ offset
 * [x] Trim + speed combination streams correctly
 * [x] Favorites endpoints idempotent and correct
 * [x] Playlists support ordering + CRUD
-* [ ] `/songs` supports filtering, sorting, pagination
+* [x] `/songs` supports filtering, sorting, cursor pagination
 * [x] All responses follow envelope format
 * [x] No temp file leaks in `/tmp/melo`
 * [ ] All branches merged into `develop`
@@ -457,6 +474,11 @@ offset
 
 | Decision                                                                | Reason                                                                                                                                              |
 | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| UUID v7 for all PKs                                                     | String-sortable = chronological = natural cursor key; `uuid6` package used                                                                          |
+| Cursor pagination (`after=<uuid>`) on `GET /songs`                      | Stable under concurrent inserts; no offset drift vs `OFFSET`-based pagination                                                                       |
+| `bookmark` = last record's `id` or `null`                               | Clients use it as the next `after` param; `null` signals end of results                                                                             |
+| `count` = total matching before pagination                              | Lets clients show "42 results" without a separate count query                                                                                       |
+| Cursor tie-breaking on `title`/`duration` deferred                      | Secondary sort on `id` deferred to API-3                                                                                                            |
 | Metadata preview endpoint                                               | Enables better UX before async job                                                                                                                  |
 | Preview is stateless                                                    | No DB writes, simpler system                                                                                                                        |
 | Still probe in worker                                                   | Preview not source of truth                                                                                                                         |

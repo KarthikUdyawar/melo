@@ -1,22 +1,21 @@
-"""SQLAlchemy models for songs and related enums.
+"""SQLAlchemy models for songs and related enums."""
 
-This module defines the database models and enums used for managing
-YouTube audio processing jobs (download, trimming, speed adjustment, etc.).
-"""
 # app/models/song.py
 import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Float, String, func
+from sqlalchemy import DateTime, Enum, Float, Index, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
+from uuid6 import uuid7
 
 from app.core.db import Base
 
 
 class SongStatus(enum.StrEnum):
-    """Enum representing the processing status of a song."""
+    """Processing status of a song job."""
+
     pending = "pending"
     processing = "processing"
     done = "done"
@@ -24,23 +23,20 @@ class SongStatus(enum.StrEnum):
 
 
 class Song(Base):
-    """SQLAlchemy model representing a song / audio processing job.
-
-    Each row corresponds to a YouTube video that needs to be downloaded,
-    optionally trimmed and speed-adjusted, then stored.
-    """
+    """Audio processing job backed by a YouTube video."""
 
     __tablename__ = "songs"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid7,
     )
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     youtube_id: Mapped[str] = mapped_column(
         String(64),
         nullable=False,
-        index=True,  # NOTE: removed unique=True —
-        # dedup now allows multiple rows per youtube_id
+        index=True,
     )
     file_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     duration: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -52,6 +48,7 @@ class Song(Base):
         nullable=False,
         default=SongStatus.pending,
         server_default=SongStatus.pending.value,
+        index=True,
     )
     # Metadata fields — populated by probe_metadata before download
     thumbnail_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
@@ -62,4 +59,17 @@ class Song(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+        index=True,
+    )
+
+    __table_args__ = (
+        # GIN trigram index — supports leading-and-trailing ILIKE '%search%'
+        # queries on title. Requires the pg_trgm extension, which is created
+        # in init_db() before create_all() runs.
+        Index(
+            "ix_songs_title_trgm",
+            "title",
+            postgresql_using="gin",
+            postgresql_ops={"title": "gin_trgm_ops"},
+        ),
     )
