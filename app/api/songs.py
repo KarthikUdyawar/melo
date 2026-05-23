@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import literal, tuple_
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.api.responses import envelope_response, paginated_response
+from app.api.responses import envelope_response
 from app.core.config import get_settings
 from app.core.deps import DbDep
 from app.core.logging import get_logger
@@ -313,7 +313,11 @@ def list_songs(
     records = [_serialize(s, db, is_favorite=(s.id in favorite_ids)) for s in songs]
     bookmark = records[-1]["id"] if records else None
 
-    return paginated_response(records, total, "Songs retrieved.", bookmark=bookmark)
+    # FIX 1: Use envelope_response (consistent with all other non-stream endpoints)
+    return envelope_response(
+        {"records": records, "count": total, "bookmark": bookmark},
+        "Songs retrieved.",
+    )
 
 
 @router.get("/{song_id}")
@@ -354,14 +358,23 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
     has_trim = song.start is not None or song.end is not None
     has_speed = song.speed is not None and song.speed != 1.0
 
+    # FIX 2: Wrap the direct-proxy stream in a generator so the MinIO response
+    # is always closed on normal completion or client disconnect.
     if not has_trim and not has_speed:
         try:
             response = client.get_object(s.minio_bucket, song.file_url)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+        def _proxy_stream() -> Generator[bytes, None, None]:
+            try:
+                yield from response.stream(32 * 1024)
+            finally:
+                response.close()
+                response.release_conn()
+
         return StreamingResponse(
-            response.stream(32 * 1024),
+            _proxy_stream(),
             media_type="audio/mpeg",
             headers={"Content-Disposition": build_content_disposition(filename)},
         )
@@ -374,29 +387,31 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
     try:
         _TMP_DIR.mkdir(parents=True, exist_ok=True)
 
+        # FIX 3: Register paths before the write/process starts so partial files
+        # are cleaned up even when the operation raises mid-write.
         try:
             minio_response = client.get_object(s.minio_bucket, song.file_url)
             try:
+                created_paths.append(original_path)
                 with original_path.open("wb") as f:
                     for chunk in minio_response.stream(32 * 1024):
                         f.write(chunk)
             finally:
                 minio_response.close()
                 minio_response.release_conn()
-            created_paths.append(original_path)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
         post_trim_path = original_path
         if has_trim:
             try:
+                created_paths.append(trimmed_path)
                 trim_audio(
                     input_path=original_path,
                     output_path=trimmed_path,
                     start=song.start,
                     end=song.end,
                 )
-                created_paths.append(trimmed_path)
                 post_trim_path = trimmed_path
             except ProcessingError as exc:
                 raise HTTPException(
@@ -410,10 +425,10 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
         final_path = post_trim_path
         if has_speed:
             try:
+                created_paths.append(speed_path)
                 apply_speed(
                     input_path=post_trim_path, output_path=speed_path, speed=song.speed
                 )
-                created_paths.append(speed_path)
                 final_path = speed_path
             except ProcessingError as exc:
                 raise HTTPException(
