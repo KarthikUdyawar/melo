@@ -10,6 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import literal, tuple_
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.api.responses import envelope_response, paginated_response
@@ -101,7 +102,10 @@ def build_content_disposition(filename: str) -> str:
 
 
 def _sort_column(sort_by: SortBy, order: SortOrder) -> ColumnElement[Any]:
-    """Map sort params to a SQLAlchemy order_by clause."""
+    """Map sort params to a SQLAlchemy order_by clause (primary column only).
+
+    Song.id is always appended as a tie-breaker in the query itself.
+    """
     col = {
         SortBy.created_at: Song.created_at,
         SortBy.song_title: Song.title,
@@ -202,6 +206,10 @@ def list_songs(
     Cursor (`after`) takes precedence over `offset` for pagination.
     `count` reflects total matching records, not the current page size.
     `bookmark` is the last record's ID (UUID v7), or null when empty.
+
+    Ordering is always composite: primary sort column + Song.id as tie-breaker.
+    This guarantees stable pagination even when the primary column has duplicate
+    or NULL values.
     """
     logger.debug("list_songs_request", status=status_filter, search=search)
 
@@ -224,8 +232,11 @@ def list_songs(
     # ── total count (before pagination) ───────────────────────────────────────
     total = q.count()
 
-    # ── sort ──────────────────────────────────────────────────────────────────
-    q = q.order_by(_sort_column(sort_by, order))
+    # ── sort: primary column + id tie-breaker ─────────────────────────────────
+    # Song.id is UUID v7 (monotonically increasing), so it provides a fully
+    # deterministic secondary sort at zero extra cost.
+    id_tiebreaker = Song.id.asc() if order == SortOrder.asc else Song.id.desc()
+    q = q.order_by(_sort_column(sort_by, order), id_tiebreaker)
 
     # ── cursor pagination ─────────────────────────────────────────────────────
     if after is not None:
@@ -233,10 +244,56 @@ def list_songs(
         if anchor is not None:
             anchor_val = _cursor_value(anchor, sort_by)
             cursor_col = _cursor_column(sort_by)
-            if order == SortOrder.asc:
-                q = q.filter(cursor_col > anchor_val)
+
+            if anchor_val is None:
+                # NULL anchor: NULLs sort last in Postgres (NULLS LAST is the
+                # default for both ASC and DESC).  Any remaining rows after a
+                # NULL anchor must also have NULL on the sort col, so we
+                # disambiguate by id alone.
+                if order == SortOrder.asc:
+                    q = q.filter(
+                        cursor_col.is_(None),
+                        Song.id > anchor.id,
+                    )
+                else:
+                    q = q.filter(
+                        cursor_col.is_(None),
+                        Song.id < anchor.id,
+                    )
             else:
-                q = q.filter(cursor_col < anchor_val)
+                # Non-NULL anchor: composite (sort_col, id) comparison keeps
+                # pagination stable when sort_col has ties.
+                # Postgres NULLS LAST means NULLs come after every non-NULL
+                # value in ASC and also after every non-NULL value in DESC,
+                # so we handle them explicitly on each branch.
+                if order == SortOrder.asc:
+                    # Rows after (anchor_val, anchor.id) ascending:
+                    #   sort_col > anchor_val
+                    #   OR (sort_col = anchor_val AND id > anchor.id)
+                    #   OR sort_col IS NULL  ← NULLs are NULLS LAST = "after"
+                    q = q.filter(
+                        cursor_col.is_(None)
+                        | (cursor_col > anchor_val)
+                        | (
+                            tuple_(cursor_col, Song.id)
+                            > tuple_(literal(anchor_val), literal(anchor.id))
+                        ),
+                    )
+                else:
+                    # Rows after (anchor_val, anchor.id) descending:
+                    #   sort_col < anchor_val
+                    #   OR (sort_col = anchor_val AND id < anchor.id)
+                    # NULLs are NULLS LAST in DESC too, meaning they appear
+                    # *after* the anchor; since we're paginating forward in
+                    # descending order they should already be excluded once
+                    # we've passed the non-NULL anchor — do not include them.
+                    q = q.filter(
+                        (cursor_col < anchor_val)
+                        | (
+                            tuple_(cursor_col, Song.id)
+                            < tuple_(literal(anchor_val), literal(anchor.id))
+                        ),
+                    )
     else:
         q = q.offset(offset)
 
@@ -345,6 +402,10 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
                 raise HTTPException(
                     status_code=502, detail=f"Trim failed: {exc}"
                 ) from exc
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"Trim failed: {exc}"
+                ) from exc
 
         final_path = post_trim_path
         if has_speed:
@@ -355,6 +416,10 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
                 created_paths.append(speed_path)
                 final_path = speed_path
             except ProcessingError as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"Speed processing failed: {exc}"
+                ) from exc
+            except Exception as exc:
                 raise HTTPException(
                     status_code=502, detail=f"Speed processing failed: {exc}"
                 ) from exc
@@ -395,7 +460,11 @@ def _cursor_column(sort_by: SortBy) -> ColumnElement[Any]:
 
 
 def _cursor_value(song: Song, sort_by: SortBy) -> object:
-    """Extract the cursor field value from a Song instance."""
+    """Extract the cursor field value from a Song instance.
+
+    Returns None when the field is NULL — callers must handle this explicitly
+    rather than passing None into a SQL comparison operator.
+    """
     return {
         SortBy.created_at: song.created_at,
         SortBy.song_title: song.title,

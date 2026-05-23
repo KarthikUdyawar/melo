@@ -180,7 +180,7 @@ reviews:
     auto_incremental_review: true
     base_branches:
       - master
-      # - develop
+      - develop
       - "release/.*"
 
   # ── Path-based review instructions ──────────────────────────────────────────

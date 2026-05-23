@@ -520,7 +520,8 @@ section "S21. GET /songs — search filter"
 
 if [[ "$TITLE" != "null" && -n "$TITLE" ]]; then
     SEARCH_TERM=$(echo "$TITLE" | cut -c1-4 | tr '[:upper:]' '[:lower:]')
-    SEARCH_RESP=$(api_get "/songs?search=$SEARCH_TERM") || fail "GET /songs?search= failed"
+    SEARCH_Q=$(jq -rn --arg q "$SEARCH_TERM" '$q | @uri')
+    SEARCH_RESP=$(api_get "/songs?search=$SEARCH_Q") || fail "GET /songs?search= failed"
     SEARCH_COUNT=$(echo "$SEARCH_RESP" | jq -r '.body.count')
     [[ "$SEARCH_COUNT" -ge 1 ]] || fail "Search for '$SEARCH_TERM' returned 0 results"
     pass "GET /songs?search=$SEARCH_TERM → $SEARCH_COUNT result(s)"

@@ -4,6 +4,7 @@ This module provides lazy-initialized engine and session factory singletons,
 dependency injection helpers for FastAPI, and utility functions for database
 initialization and health checks.
 """
+
 # app/core/db.py
 from collections.abc import Generator
 
@@ -82,6 +83,24 @@ def get_session() -> Generator[Session, None, None]:
         session.close()
 
 
+def _create_pg_extensions(engine: Engine) -> None:
+    """Create required PostgreSQL extensions if running against Postgres.
+
+    pg_trgm is needed for the GIN trigram index on songs.title, which
+    supports leading-and-trailing ILIKE '%search%' queries.  The statement
+    is idempotent (IF NOT EXISTS) and skipped entirely on SQLite so unit
+    tests are unaffected.
+
+    Args:
+        engine: Active SQLAlchemy Engine to execute against.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.connect() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        conn.commit()
+
+
 def init_db() -> None:
     """Create all tables defined by models inheriting from Base.
 
@@ -95,7 +114,9 @@ def init_db() -> None:
     """
     import app.models  # noqa: F401 — ensure all models are registered
 
-    Base.metadata.create_all(bind=get_engine(), checkfirst=True)
+    engine = get_engine()
+    _create_pg_extensions(engine)
+    Base.metadata.create_all(bind=engine, checkfirst=True)
 
 
 def reset_db() -> None:
@@ -111,6 +132,7 @@ def reset_db() -> None:
 
     engine = get_engine()
     Base.metadata.drop_all(bind=engine)
+    _create_pg_extensions(engine)
     Base.metadata.create_all(bind=engine, checkfirst=True)
 
     # Flush session factory so next get_session() uses fresh tables

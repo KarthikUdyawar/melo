@@ -62,4 +62,14 @@ class Song(Base):
         index=True,
     )
 
-    __table_args__ = (Index("ix_songs_title_trgm", "title", postgresql_using="btree"),)
+    __table_args__ = (
+        # GIN trigram index — supports leading-and-trailing ILIKE '%search%'
+        # queries on title. Requires the pg_trgm extension, which is created
+        # in init_db() before create_all() runs.
+        Index(
+            "ix_songs_title_trgm",
+            "title",
+            postgresql_using="gin",
+            postgresql_ops={"title": "gin_trgm_ops"},
+        ),
+    )

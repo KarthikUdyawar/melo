@@ -83,7 +83,9 @@ class TestStatusFilter:
         body = resp.json()["body"]
         assert body["count"] == 2
 
-    def test_invalid_status_returns_422(self, client: TestClient) -> None:
+    def test_invalid_status_returns_422(
+        self, client: TestClient, db_session: Session
+    ) -> None:
         resp = client.get("/songs?status=unknown")
         assert resp.status_code == 422
 
@@ -149,7 +151,9 @@ class TestFavoriteFilter:
         records = resp.json()["body"]["records"]
         assert all(r["is_favorite"] for r in records)
 
-    def test_invalid_favorite_param_returns_422(self, client: TestClient) -> None:
+    def test_invalid_favorite_param_returns_422(
+        self, client: TestClient, db_session: Session
+    ) -> None:
         resp = client.get("/songs?favorite=maybe")
         assert resp.status_code == 422
 
@@ -280,11 +284,15 @@ class TestSortOrder:
         ids_order = [r["youtube_id"] for r in resp.json()["body"]["records"]]
         assert ids_order[0] == "new"
 
-    def test_invalid_sort_by_returns_422(self, client: TestClient) -> None:
+    def test_invalid_sort_by_returns_422(
+        self, client: TestClient, db_session: Session
+    ) -> None:
         resp = client.get("/songs?sort_by=invalid_field")
         assert resp.status_code == 422
 
-    def test_invalid_order_returns_422(self, client: TestClient) -> None:
+    def test_invalid_order_returns_422(
+        self, client: TestClient, db_session: Session
+    ) -> None:
         resp = client.get("/songs?order=sideways")
         assert resp.status_code == 422
 
@@ -361,6 +369,7 @@ class TestPagination:
     def test_bookmark_null_when_no_records(
         self,
         client: TestClient,
+        db_session: Session,
     ) -> None:
         resp = client.get("/songs?limit=10")
         body = resp.json()["body"]
@@ -391,11 +400,15 @@ class TestPagination:
         assert str(songs[2].id) in second_ids
         assert str(songs[3].id) in second_ids
 
-    def test_limit_above_max_returns_422(self, client: TestClient) -> None:
+    def test_limit_above_max_returns_422(
+        self, client: TestClient, db_session: Session
+    ) -> None:
         resp = client.get("/songs?limit=1001")
         assert resp.status_code == 422
 
-    def test_offset_negative_returns_422(self, client: TestClient) -> None:
+    def test_offset_negative_returns_422(
+        self, client: TestClient, db_session: Session
+    ) -> None:
         resp = client.get("/songs?offset=-1")
         assert resp.status_code == 422
 

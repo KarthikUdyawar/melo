@@ -138,7 +138,7 @@ flowchart TD
 
 **`atempo` chaining** — FFmpeg caps a single `atempo` stage at `[0.5, 2.0]`:
 
-```
+```text
 speed=4.0  → atempo=2.0,atempo=2.0
 speed=0.25 → atempo=0.5,atempo=0.5
 ```
@@ -251,7 +251,7 @@ Paginated list responses include:
 
 ## Folder Structure
 
-```
+```test
 melo/
 ├── app/
 │   ├── api/
