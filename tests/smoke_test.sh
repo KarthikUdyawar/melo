@@ -9,6 +9,7 @@
 #   GET  /songs/{id}/stream
 #   POST/DELETE/GET /favorites  (LIB-1)
 #   POST/GET/DELETE /playlists  (LIB-2)
+#   GET /songs filtering, sorting, pagination (API-2)
 #   Validation error paths (422, 404)
 #
 # Usage:
@@ -232,7 +233,6 @@ pass "GET /songs/{id}/stream → 200, ${BYTES} bytes"
 # =============================================================================
 section "S9. Favorites — lifecycle"
 
-# POST → 201
 FAV_RAW=$(api_post_raw "/favorites/$SONG_ID" '{}')
 FAV_BODY="${FAV_RAW%|||*}"
 FAV_HTTP="${FAV_RAW##*|||}"
@@ -241,13 +241,11 @@ FAV_SONG_ID=$(echo "$FAV_BODY" | jq -r '.body.song_id')
 [[ "$FAV_SONG_ID" == "$SONG_ID" ]] || fail "song_id mismatch in favorite response"
 pass "POST /favorites/{id} → 201"
 
-# POST again → 200 (idempotent)
 FAV_RAW2=$(api_post_raw "/favorites/$SONG_ID" '{}')
 FAV_HTTP2="${FAV_RAW2##*|||}"
 [[ "$FAV_HTTP2" == "200" ]] || fail "Second POST /favorites: expected 200, got $FAV_HTTP2"
 pass "POST /favorites/{id} again → 200 (idempotent)"
 
-# GET /favorites — appears in list
 FAVS=$(api_get "/favorites") || fail "GET /favorites failed"
 FAV_COUNT=$(echo "$FAVS" | jq -r '.body.count')
 [[ "$FAV_COUNT" -ge 1 ]] || fail "Expected ≥1 favorite, got $FAV_COUNT"
@@ -255,19 +253,16 @@ IS_FAV=$(echo "$FAVS" | jq -r --arg id "$SONG_ID" '.body.records[] | select(.id=
 [[ "$IS_FAV" == "true" ]] || fail "Song not marked is_favorite=true in GET /favorites"
 pass "GET /favorites → count=$FAV_COUNT, is_favorite=true"
 
-# GET /songs/{id} — is_favorite reflected
 SONG_ONE=$(api_get "/songs/$SONG_ID") || fail "GET /songs/$SONG_ID failed"
 IS_FAV_SONG=$(echo "$SONG_ONE" | jq -r '.body.is_favorite')
 [[ "$IS_FAV_SONG" == "true" ]] || fail "is_favorite not true in GET /songs/{id}"
 pass "GET /songs/{id} — is_favorite=true reflected"
 
-# DELETE → 204
 DEL_RAW=$(api_delete_raw "/favorites/$SONG_ID")
 DEL_HTTP="${DEL_RAW##*|||}"
 [[ "$DEL_HTTP" == "204" ]] || fail "DELETE /favorites: expected 204, got $DEL_HTTP"
 pass "DELETE /favorites/{id} → 204"
 
-# GET /favorites after delete — gone
 FAVS_AFTER=$(api_get "/favorites") || fail "GET /favorites after delete failed"
 COUNT_AFTER=$(echo "$FAVS_AFTER" | jq -r '.body.count')
 [[ "$COUNT_AFTER" -eq 0 ]] || warn "Expected 0 favorites after delete, got $COUNT_AFTER (may have pre-existing)"
@@ -275,7 +270,6 @@ IS_PRESENT_AFTER=$(echo "$FAVS_AFTER" | jq -r --arg id "$SONG_ID" '[.body.record
 [[ "$IS_PRESENT_AFTER" -eq 0 ]] || fail "Deleted song still present in GET /favorites"
 pass "GET /favorites after delete → count=$COUNT_AFTER"
 
-# is_favorite=false in /songs/{id} after delete
 SONG_ONE_AFTER=$(api_get "/songs/$SONG_ID") || fail "GET /songs/$SONG_ID after delete failed"
 IS_FAV_AFTER=$(echo "$SONG_ONE_AFTER" | jq -r '.body.is_favorite')
 [[ "$IS_FAV_AFTER" == "false" ]] || fail "is_favorite still true after DELETE"
@@ -351,13 +345,11 @@ PL_COUNT=$(echo "$PL_RESP" | jq -r '.body.song_count // (.body.songs | length)')
 [[ "$PL_COUNT" == "0" ]] || fail "Expected song_count=0, got $PL_COUNT"
 pass "POST /playlists → 201, id=$PLAYLIST_ID"
 
-# Validation — empty name
 RAW=$(api_post_raw "/playlists" '{"name": ""}')
 HTTP="${RAW##*|||}"
 [[ "$HTTP" == "422" ]] || fail "Empty name: expected 422, got $HTTP"
 pass "POST /playlists empty name → 422"
 
-# Validation — missing name
 RAW=$(api_post_raw "/playlists" '{}')
 HTTP="${RAW##*|||}"
 [[ "$HTTP" == "422" ]] || fail "Missing name: expected 422, got $HTTP"
@@ -388,19 +380,16 @@ ADD_SONG_COUNT=$(echo "$ADD_BODY" | jq -r '.body.song_count')
 [[ "$ADD_SONG_COUNT" == "1" ]] || fail "Expected song_count=1 after add, got $ADD_SONG_COUNT"
 pass "POST /playlists/{id}/songs/{song_id} → 201, song_count=1"
 
-# Idempotent — second add → 200
 ADD_RAW2=$(api_post_raw "/playlists/$PLAYLIST_ID/songs/$SONG_ID" '{}')
 ADD_HTTP2="${ADD_RAW2##*|||}"
 [[ "$ADD_HTTP2" == "200" ]] || fail "Second add: expected 200, got $ADD_HTTP2"
 pass "POST /playlists/{id}/songs/{song_id} again → 200 (idempotent)"
 
-# Error — unknown playlist
 RAW=$(api_post_raw "/playlists/00000000-0000-0000-0000-000000000000/songs/$SONG_ID" '{}')
 HTTP="${RAW##*|||}"
 [[ "$HTTP" == "404" ]] || fail "Unknown playlist add: expected 404, got $HTTP"
 pass "POST /playlists/{unknown}/songs/{song_id} → 404"
 
-# Error — unknown song
 RAW=$(api_post_raw "/playlists/$PLAYLIST_ID/songs/00000000-0000-0000-0000-000000000000" '{}')
 HTTP="${RAW##*|||}"
 [[ "$HTTP" == "404" ]] || fail "Unknown song add: expected 404, got $HTTP"
@@ -421,12 +410,10 @@ PL_SONG_ID=$(echo "$PL_DETAIL" | jq -r '.body.songs[0].id')
 [[ "$PL_SONG_ID" == "$SONG_ID" ]] || fail "song id mismatch in playlist detail"
 pass "GET /playlists/{id} → name ok, 1 song, song_id matches"
 
-# Song has is_favorite field
 HAS_IS_FAV=$(echo "$PL_DETAIL" | jq -r '.body.songs[0] | has("is_favorite")')
 [[ "$HAS_IS_FAV" == "true" ]] || fail "Song in playlist missing is_favorite field"
 pass "Songs in playlist detail have is_favorite field"
 
-# 404 for unknown playlist
 RAW=$(api_get_raw "/playlists/00000000-0000-0000-0000-000000000000")
 HTTP="${RAW##*|||}"
 [[ "$HTTP" == "404" ]] || fail "GET /playlists/unknown: expected 404, got $HTTP"
@@ -442,13 +429,11 @@ DEL_SONG_HTTP="${DEL_SONG_RAW##*|||}"
 [[ "$DEL_SONG_HTTP" == "204" ]] || fail "DELETE /playlists/{id}/songs/{sid}: expected 204, got $DEL_SONG_HTTP"
 pass "DELETE /playlists/{id}/songs/{song_id} → 204"
 
-# Song gone from detail
 PL_AFTER_REMOVE=$(api_get "/playlists/$PLAYLIST_ID") || fail "GET /playlists after remove failed"
 SONGS_AFTER=$(echo "$PL_AFTER_REMOVE" | jq -r '.body.songs | length')
 [[ "$SONGS_AFTER" -eq 0 ]] || fail "Expected 0 songs after remove, got $SONGS_AFTER"
 pass "Song removed from playlist detail"
 
-# 404 if not in playlist
 RAW=$(api_delete_raw "/playlists/$PLAYLIST_ID/songs/$SONG_ID")
 HTTP="${RAW##*|||}"
 [[ "$HTTP" == "404" ]] || fail "Remove not-in-playlist: expected 404, got $HTTP"
@@ -459,7 +444,6 @@ pass "DELETE /playlists/{id}/songs/{not-in-playlist} → 404"
 # =============================================================================
 section "S18. Playlists — delete playlist"
 
-# Re-add song so we can verify cascade
 api_post "/playlists/$PLAYLIST_ID/songs/$SONG_ID" '{}' > /dev/null
 
 DEL_PL_RAW=$(api_delete_raw "/playlists/$PLAYLIST_ID")
@@ -467,19 +451,16 @@ DEL_PL_HTTP="${DEL_PL_RAW##*|||}"
 [[ "$DEL_PL_HTTP" == "204" ]] || fail "DELETE /playlists/{id}: expected 204, got $DEL_PL_HTTP"
 pass "DELETE /playlists/{id} → 204"
 
-# 404 after delete
 RAW=$(api_get_raw "/playlists/$PLAYLIST_ID")
 HTTP="${RAW##*|||}"
 [[ "$HTTP" == "404" ]] || fail "GET deleted playlist: expected 404, got $HTTP"
 pass "GET /playlists/{deleted} → 404"
 
-# Gone from list
 PL_LIST_AFTER=$(api_get "/playlists") || fail "GET /playlists after delete failed"
 PL_STILL_THERE=$(echo "$PL_LIST_AFTER" | jq -r --arg id "$PLAYLIST_ID" '[.body.records[] | select(.id==$id)] | length')
 [[ "$PL_STILL_THERE" -eq 0 ]] || fail "Deleted playlist still in GET /playlists"
 pass "Deleted playlist absent from GET /playlists"
 
-# 404 for unknown delete
 RAW=$(api_delete_raw "/playlists/00000000-0000-0000-0000-000000000000")
 HTTP="${RAW##*|||}"
 [[ "$HTTP" == "404" ]] || fail "DELETE /playlists/unknown: expected 404, got $HTTP"
@@ -504,7 +485,6 @@ SONGS_B=$(api_get "/playlists/$PL_B" | jq -r '.body.songs | length')
 [[ "$SONGS_B" -eq 1 ]] || fail "Playlist B: expected 1 song, got $SONGS_B"
 pass "Same song added to two playlists successfully"
 
-# Delete from A — B unaffected
 api_delete_raw "/playlists/$PL_A/songs/$SONG_ID" > /dev/null
 SONGS_A_AFTER=$(api_get "/playlists/$PL_A" | jq -r '.body.songs | length')
 SONGS_B_AFTER=$(api_get "/playlists/$PL_B" | jq -r '.body.songs | length')
@@ -512,13 +492,135 @@ SONGS_B_AFTER=$(api_get "/playlists/$PL_B" | jq -r '.body.songs | length')
 [[ "$SONGS_B_AFTER" -eq 1 ]] || fail "Playlist B: expected 1 song still, got $SONGS_B_AFTER"
 pass "Delete from one playlist leaves other intact"
 
-# Cleanup
 api_delete_raw "/playlists/$PL_A" > /dev/null
 api_delete_raw "/playlists/$PL_B" > /dev/null
+
+# =============================================================================
+# S20. GET /songs — status filter
+# =============================================================================
+section "S20. GET /songs — status filter"
+
+DONE_RESP=$(api_get "/songs?status=done") || fail "GET /songs?status=done failed"
+DONE_RECORDS=$(echo "$DONE_RESP" | jq -r '.body.records')
+DONE_COUNT=$(echo "$DONE_RESP" | jq -r '.body.count')
+[[ "$DONE_COUNT" -ge 1 ]] || fail "Expected ≥1 done song, got $DONE_COUNT"
+ALL_DONE=$(echo "$DONE_RECORDS" | jq -r '[.[].status == "done"] | all')
+[[ "$ALL_DONE" == "true" ]] || fail "Non-done songs returned with status=done filter"
+pass "GET /songs?status=done → count=$DONE_COUNT, all records done"
+
+RAW=$(api_get_raw "/songs?status=bogus")
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "422" ]] || fail "Invalid status: expected 422, got $HTTP"
+pass "GET /songs?status=bogus → 422"
+
+# =============================================================================
+# S21. GET /songs — search filter
+# =============================================================================
+section "S21. GET /songs — search filter"
+
+if [[ "$TITLE" != "null" && -n "$TITLE" ]]; then
+    SEARCH_TERM=$(echo "$TITLE" | cut -c1-4 | tr '[:upper:]' '[:lower:]')
+    SEARCH_RESP=$(api_get "/songs?search=$SEARCH_TERM") || fail "GET /songs?search= failed"
+    SEARCH_COUNT=$(echo "$SEARCH_RESP" | jq -r '.body.count')
+    [[ "$SEARCH_COUNT" -ge 1 ]] || fail "Search for '$SEARCH_TERM' returned 0 results"
+    pass "GET /songs?search=$SEARCH_TERM → $SEARCH_COUNT result(s)"
+else
+    warn "Skipping search test — title was null in preview"
+fi
+
+NO_MATCH=$(api_get "/songs?search=zzznomatch_xyz") || fail "GET /songs?search=zzz failed"
+NO_COUNT=$(echo "$NO_MATCH" | jq -r '.body.count')
+[[ "$NO_COUNT" -eq 0 ]] || fail "Expected 0 for no-match search, got $NO_COUNT"
+pass "GET /songs?search=zzznomatch_xyz → 0 results"
+
+# =============================================================================
+# S22. GET /songs — favorite filter
+# =============================================================================
+section "S22. GET /songs — favorite filter"
+
+api_post "/favorites/$SONG_ID" '{}' > /dev/null
+
+FAV_FILTER=$(api_get "/songs?favorite=true") || fail "GET /songs?favorite=true failed"
+FAV_COUNT=$(echo "$FAV_FILTER" | jq -r '.body.count')
+[[ "$FAV_COUNT" -ge 1 ]] || fail "Expected ≥1 favorited song, got $FAV_COUNT"
+ALL_IS_FAV=$(echo "$FAV_FILTER" | jq -r '[.body.records[].is_favorite] | all')
+[[ "$ALL_IS_FAV" == "true" ]] || fail "Not all records have is_favorite=true"
+pass "GET /songs?favorite=true → count=$FAV_COUNT, all is_favorite=true"
+
+NON_FAV=$(api_get "/songs?favorite=false") || fail "GET /songs?favorite=false failed"
+SONG_IN_NON_FAV=$(echo "$NON_FAV" | jq -r --arg id "$SONG_ID" '[.body.records[] | select(.id == $id)] | length')
+[[ "$SONG_IN_NON_FAV" -eq 0 ]] || fail "Favorited song appears in favorite=false results"
+pass "GET /songs?favorite=false → favorited song excluded"
+
+RAW=$(api_get_raw "/songs?favorite=maybe")
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "422" ]] || fail "Invalid favorite param: expected 422, got $HTTP"
+pass "GET /songs?favorite=maybe → 422"
+
+api_delete_raw "/favorites/$SONG_ID" > /dev/null
+
+# =============================================================================
+# S23. GET /songs — sort_by + order
+# =============================================================================
+section "S23. GET /songs — sort_by + order"
+
+SORTED=$(api_get "/songs?sort_by=created_at&order=asc") || fail "GET /songs?sort_by=created_at&order=asc failed"
+TIMESTAMPS=$(echo "$SORTED" | jq -r '[.body.records[].created_at]')
+IS_SORTED=$(echo "$TIMESTAMPS" | jq -r '. == (. | sort)')
+[[ "$IS_SORTED" == "true" ]] || fail "Records not sorted ascending by created_at"
+pass "GET /songs?sort_by=created_at&order=asc → records sorted asc"
+
+RAW=$(api_get_raw "/songs?sort_by=invalid_field")
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "422" ]] || fail "Invalid sort_by: expected 422, got $HTTP"
+pass "GET /songs?sort_by=invalid_field → 422"
+
+RAW=$(api_get_raw "/songs?order=sideways")
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "422" ]] || fail "Invalid order: expected 422, got $HTTP"
+pass "GET /songs?order=sideways → 422"
+
+# =============================================================================
+# S24. GET /songs — pagination + bookmark cursor
+# =============================================================================
+section "S24. GET /songs — pagination + bookmark cursor"
+
+PAGE1=$(api_get "/songs?sort_by=created_at&order=asc&limit=1") || fail "GET /songs?limit=1 failed"
+P1_COUNT=$(echo "$PAGE1" | jq -r '.body.count')
+P1_RECORDS=$(echo "$PAGE1" | jq -r '.body.records | length')
+P1_BOOKMARK=$(echo "$PAGE1" | jq -r '.body.bookmark')
+
+[[ "$P1_RECORDS" -eq 1 ]] || fail "limit=1: expected 1 record, got $P1_RECORDS"
+[[ "$P1_COUNT" -ge 1 ]] || fail "count should reflect total, got $P1_COUNT"
+[[ "$P1_BOOKMARK" != "null" && -n "$P1_BOOKMARK" ]] || fail "bookmark missing on page 1"
+pass "GET /songs?limit=1 → 1 record, count=$P1_COUNT, bookmark present"
+
+if [[ "$P1_COUNT" -ge 2 ]]; then
+    PAGE2=$(api_get "/songs?sort_by=created_at&order=asc&limit=1&after=$P1_BOOKMARK") \
+        || fail "GET /songs?after=<bookmark> failed"
+    P2_RECORDS=$(echo "$PAGE2" | jq -r '.body.records | length')
+    P2_ID=$(echo "$PAGE2" | jq -r '.body.records[0].id')
+    P1_ID=$(echo "$PAGE1" | jq -r '.body.records[0].id')
+    [[ "$P2_RECORDS" -eq 1 ]] || fail "Page 2: expected 1 record, got $P2_RECORDS"
+    [[ "$P2_ID" != "$P1_ID" ]] || fail "Page 2 returned same record as page 1"
+    pass "GET /songs?after=<bookmark> → different record on page 2"
+else
+    warn "Only 1 song in DB — skipping cursor page-2 test"
+fi
+
+RAW=$(api_get_raw "/songs?limit=9999")
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "422" ]] || fail "limit=9999: expected 422, got $HTTP"
+pass "GET /songs?limit=9999 → 422 (exceeds max)"
+
+RAW=$(api_get_raw "/songs?offset=-1")
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "422" ]] || fail "offset=-1: expected 422, got $HTTP"
+pass "GET /songs?offset=-1 → 422"
 
 # =============================================================================
 # Summary
 # =============================================================================
 echo -e "\n${GREEN}════════════════════════════════════════${NC}"
-echo -e "${GREEN}  ✓ All smoke tests passed! (19 sections)${NC}"
+echo -e "${GREEN}  ✓ All smoke tests passed! (24 sections)${NC}"
 echo -e "${GREEN}════════════════════════════════════════${NC}\n"

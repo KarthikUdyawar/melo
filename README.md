@@ -214,25 +214,65 @@ make smoke
 
 ## API
 
-| Method   | Path                              | Status | Description                          |
-| -------- | --------------------------------- | ------ | ------------------------------------ |
-| `POST`   | `/songs/preview`                  | ✅      | Fetch YouTube metadata (no DB write) |
-| `POST`   | `/songs`                          | ✅      | Submit YouTube URL → async job       |
-| `GET`    | `/songs`                          | ✅      | List all songs (with `is_favorite`)  |
-| `GET`    | `/songs/{id}`                     | ✅      | Get song detail + status             |
-| `GET`    | `/songs/{id}/stream`              | ✅      | Stream mp3 (trim + speed applied)    |
-| `POST`   | `/favorites/{song_id}`            | ✅      | Favorite a song (idempotent)         |
-| `DELETE` | `/favorites/{song_id}`            | ✅      | Unfavorite a song                    |
-| `GET`    | `/favorites`                      | ✅      | List favorited songs                 |
-| `POST`   | `/playlists`                      | ✅      | Create a playlist                    |
-| `GET`    | `/playlists`                      | ✅      | List all playlists                   |
-| `GET`    | `/playlists/{id}`                 | ✅      | Get playlist detail with songs       |
-| `DELETE` | `/playlists/{id}`                 | ✅      | Delete a playlist                    |
-| `POST`   | `/playlists/{id}/songs/{song_id}` | ✅      | Add song to playlist (ordered)       |
-| `DELETE` | `/playlists/{id}/songs/{song_id}` | ✅      | Remove song from playlist            |
-| `GET`    | `/health`                         | ✅      | Health check                         |
+| Method   | Path                              | Status | Description                                |
+| -------- | --------------------------------- | ------ | ------------------------------------------ |
+| `POST`   | `/songs/preview`                  | ✅      | Fetch YouTube metadata (no DB write)       |
+| `POST`   | `/songs`                          | ✅      | Submit YouTube URL → async job             |
+| `GET`    | `/songs`                          | ✅      | List songs — filter, sort, cursor-paginate |
+| `GET`    | `/songs/{id}`                     | ✅      | Get song detail + status                   |
+| `GET`    | `/songs/{id}/stream`              | ✅      | Stream mp3 (trim + speed applied)          |
+| `POST`   | `/favorites/{song_id}`            | ✅      | Favorite a song (idempotent)               |
+| `DELETE` | `/favorites/{song_id}`            | ✅      | Unfavorite a song                          |
+| `GET`    | `/favorites`                      | ✅      | List favorited songs                       |
+| `POST`   | `/playlists`                      | ✅      | Create a playlist                          |
+| `GET`    | `/playlists`                      | ✅      | List all playlists                         |
+| `GET`    | `/playlists/{id}`                 | ✅      | Get playlist detail with songs             |
+| `DELETE` | `/playlists/{id}`                 | ✅      | Delete a playlist                          |
+| `POST`   | `/playlists/{id}/songs/{song_id}` | ✅      | Add song to playlist (ordered)             |
+| `DELETE` | `/playlists/{id}/songs/{song_id}` | ✅      | Remove song from playlist                  |
+| `GET`    | `/health`                         | ✅      | Health check                               |
 
 Interactive docs: **http://localhost:8000/docs**
+
+### Filtering, Sorting & Pagination
+
+`GET /songs` supports query parameters:
+
+```text
+status        pending | processing | done | failed
+favorite      true | false
+search        case-insensitive title match
+sort_by       created_at (default) | title | duration
+order         desc (default) | asc
+limit         max records per page (default: 20)
+after         cursor — UUID v7 id of last seen record
+```
+
+Response shape:
+
+```json
+{
+  "records": [...],
+  "count": 42,
+  "bookmark": "<uuid-or-null>"
+}
+```
+
+`bookmark` is the `id` of the last record returned. Pass it as `?after=<bookmark>` on the next request to get the next page. `null` means you've reached the end.
+
+```bash
+# First page — done songs, newest first
+curl "http://localhost:8000/songs?status=done&limit=10"
+
+# Next page
+curl "http://localhost:8000/songs?status=done&limit=10&after=<bookmark>"
+
+# Search by title
+curl "http://localhost:8000/songs?search=lofi&sort_by=title&order=asc"
+
+# Only favorites
+curl "http://localhost:8000/songs?favorite=true"
+```
 
 ### Preview Flow
 
@@ -362,20 +402,21 @@ Coverage target: **80%** (currently **94.77%**).
 
 Test layout:
 
-| Module                                    | Type        |
-| ----------------------------------------- | ----------- |
-| `tests/unit/test_schemas.py`              | Unit        |
-| `tests/unit/test_processor.py`            | Unit        |
-| `tests/unit/test_storage.py`              | Unit        |
-| `tests/unit/test_downloader.py`           | Unit        |
-| `tests/unit/test_preview.py`              | Unit        |
-| `tests/unit/test_favorites.py`            | Unit        |
-| `tests/unit/test_playlist_schemas.py`     | Unit        |
-| `tests/integration/test_db.py`            | Integration |
-| `tests/integration/test_songs_api.py`     | Integration |
-| `tests/integration/test_preview_api.py`   | Integration |
-| `tests/integration/test_favorites_api.py` | Integration |
-| `tests/integration/test_playlists_api.py` | Integration |
+| Module                                          | Type        |
+| ----------------------------------------------- | ----------- |
+| `tests/unit/test_schemas.py`                    | Unit        |
+| `tests/unit/test_processor.py`                  | Unit        |
+| `tests/unit/test_storage.py`                    | Unit        |
+| `tests/unit/test_downloader.py`                 | Unit        |
+| `tests/unit/test_preview.py`                    | Unit        |
+| `tests/unit/test_favorites.py`                  | Unit        |
+| `tests/unit/test_playlist_schemas.py`           | Unit        |
+| `tests/integration/test_db.py`                  | Integration |
+| `tests/integration/test_songs_api.py`           | Integration |
+| `tests/integration/test_songs_api_filtering.py` | Integration |
+| `tests/integration/test_preview_api.py`         | Integration |
+| `tests/integration/test_favorites_api.py`       | Integration |
+| `tests/integration/test_playlists_api.py`       | Integration |
 
 ---
 
@@ -400,6 +441,10 @@ Test layout:
 | Playlist ordering via `position`           | Predictable playback; auto-increments on add                                                 |
 | `db.expire_all()` after playlist mutations | Clears stale relationship state from SQLAlchemy identity map post-commit                     |
 | Same song reusable across playlists        | `playlist_songs` join table scoped per playlist; no uniqueness constraint on `song_id`       |
+| UUID v7 for all PKs (`uuid6` package)      | String-sortable = chronological = natural cursor key for pagination                          |
+| Cursor pagination (`after=<uuid>`)         | Stable under concurrent inserts; no offset drift                                             |
+| `bookmark` = last record id or `null`      | Clients pass as next `after`; `null` signals end of results                                  |
+| DB-level filtering on `GET /songs`         | Scalability; avoids fetching and filtering in Python                                         |
 | SQLite truncation for unit test isolation  | Savepoint rollback unreliable when endpoint calls `db.commit()` release the savepoint        |
 | Root `conftest.py` for env setup           | `pytest_configure` runs before collection — only reliable hook for early env vars            |
 | `tasks.py` excluded from coverage          | Celery internals require live worker; covered by `make smoke` instead                        |
@@ -409,6 +454,6 @@ Test layout:
 
 ## Out of Scope (v1)
 
-- Filtering, sorting, search → Sprint 3 API-2 (in progress)
+- Computed fields & UX polish (`effective_duration`, `stream_url`, `upload_date` normalisation) → Sprint 3 API-3 (in progress)
 - Frontend UI → Sprint 4
 - Multi-user auth, lyrics, waveforms → never (personal tool)
