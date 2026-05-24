@@ -97,11 +97,11 @@ backup-db: ## Backup PostgreSQL to ./backups/db_<timestamp>.sql.gz
 	@echo "   ✔  $(BACKUP_DIR)/db_$(TIMESTAMP).sql.gz"
 
 backup-minio: ## Backup MinIO bucket to ./backups/minio_<timestamp>.tar.gz
-	`@mkdir` -p $(BACKUP_DIR)
-	`@echo` "📦  Archiving MinIO bucket '$(MINIO_BUCKET)' → $(BACKUP_DIR)/minio_$(TIMESTAMP).tar.gz"
-	`@docker` cp $$(docker compose ps -q minio):/data/$(MINIO_BUCKET) - \
+	@mkdir -p $(BACKUP_DIR)
+	@echo "📦  Archiving MinIO bucket '$(MINIO_BUCKET)' → $(BACKUP_DIR)/minio_$(TIMESTAMP).tar.gz"
+	@docker cp $$(docker compose ps -q minio):/data/$(MINIO_BUCKET) - \
 	  | gzip > $(BACKUP_DIR)/minio_$(TIMESTAMP).tar.gz
-	`@echo` "   ✔  $(BACKUP_DIR)/minio_$(TIMESTAMP).tar.gz"
+	@echo "   ✔  $(BACKUP_DIR)/minio_$(TIMESTAMP).tar.gz"
 
 restore-db: ## Restore DB from FILE=backups/<name>.sql.gz
 	@test -n "$(FILE)" || (echo "❌  Usage: make restore-db FILE=backups/<filename>.sql.gz" && exit 1)

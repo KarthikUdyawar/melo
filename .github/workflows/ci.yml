@@ -27,6 +27,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Setup uv
@@ -55,6 +56,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -91,13 +94,20 @@ jobs:
       APP_ENV: test
       LOG_LEVEL: warning
       LOG_FILE_PATH: /tmp/melo-test.log
+      DATABASE_URL: postgresql://melo_test:melo_test@localhost:15432/melo_test
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Start test services
-        run: docker compose -f tests/docker-compose.test.yml up -d --wait
+        run: |
+          docker compose -f tests/docker-compose.test.yml up -d
+          echo "Waiting for Postgres on port 15432..."
+          timeout 60 bash -c \
+            'until pg_isready -h localhost -p 15432 -U melo_test -q; do sleep 2; done'
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -138,6 +148,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
