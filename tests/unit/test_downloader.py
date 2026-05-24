@@ -41,10 +41,10 @@ class TestProbeMetadata:
         with patch("yt_dlp.YoutubeDL", return_value=mock_ydl):
             meta = probe_metadata(TEST_URL)
 
-        assert meta["title"] == "Never Gonna Give You Up"
-        assert meta["duration"] == 213.0
-        assert meta["channel"] == "RickAstleyVEVO"
-        assert meta["upload_date"] == "20091025"
+        assert meta.get("title") == "Never Gonna Give You Up"
+        assert meta.get("duration") == 213.0
+        assert meta.get("channel") == "RickAstleyVEVO"
+        assert meta.get("upload_date") == "20091025"
         assert "thumbnail_url" in meta
 
     def test_maps_thumbnail_key(self) -> None:
@@ -57,8 +57,7 @@ class TestProbeMetadata:
         with patch("yt_dlp.YoutubeDL", return_value=mock_ydl):
             meta = probe_metadata(TEST_URL)
 
-        # yt-dlp returns "thumbnail" but SongMeta uses "thumbnail_url"
-        assert meta["thumbnail_url"] == "https://example.com/thumb.jpg"
+        assert meta.get("thumbnail_url") == "https://example.com/thumb.jpg"
 
     def test_falls_back_to_uploader_when_no_channel(self) -> None:
         info = {**FAKE_INFO, "channel": None, "uploader": "Rick Astley"}
@@ -70,7 +69,7 @@ class TestProbeMetadata:
         with patch("yt_dlp.YoutubeDL", return_value=mock_ydl):
             meta = probe_metadata(TEST_URL)
 
-        assert meta["channel"] == "Rick Astley"
+        assert meta.get("channel") == "Rick Astley"
 
     def test_raises_download_error_on_yt_dlp_error(self) -> None:
         mock_ydl = MagicMock()
@@ -118,9 +117,9 @@ class TestProbeMetadata:
         with patch("yt_dlp.YoutubeDL", return_value=mock_ydl):
             meta = probe_metadata(TEST_URL)
 
-        assert meta["title"] == "Test"
-        assert meta["thumbnail_url"] is None
-        assert meta["channel"] is None
+        assert meta.get("title") == "Test"
+        assert meta.get("thumbnail_url") is None
+        assert meta.get("channel") is None
 
 
 # ── download_audio ────────────────────────────────────────────────────────────
@@ -201,5 +200,4 @@ class TestDownloadAudio:
             patch("app.services.downloader._DOWNLOAD_DIR", tmp_path),
             pytest.raises(DownloadError, match="Expected output file not found"),
         ):
-            # Don't create the file — simulate missing output
-                download_audio(url=TEST_URL, song_id="missing-output")
+            download_audio(url=TEST_URL, song_id="missing-output")

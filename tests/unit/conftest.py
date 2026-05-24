@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Generator
 
 import pytest
-import sqlalchemy as sa
+import sqlalchemy.event as sa_event
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -32,11 +32,11 @@ def sqlite_engine():
     )
 
     # SQLite-specific setup for nested transactions / savepoints
-    @sa.event.listens_for(engine, "connect")
+    @sa_event.listens_for(engine, "connect")
     def do_connect(dbapi_connection, connection_record):
         dbapi_connection.isolation_level = None
 
-    @sa.event.listens_for(engine, "begin")
+    @sa_event.listens_for(engine, "begin")
     def do_begin(conn):
         conn.exec_driver_sql("BEGIN")
 
@@ -67,7 +67,7 @@ def db_session(sqlite_engine) -> Generator[Session, None, None]:
 
     # When the app calls session.commit(), it ends the current savepoint.
     # This listener restarts a new one so further operations don't fail.
-    @sa.event.listens_for(session, "after_transaction_end")
+    @sa_event.listens_for(session, "after_transaction_end")
     def end_savepoint(session, transaction):
         nonlocal nested
         if not nested.is_active:

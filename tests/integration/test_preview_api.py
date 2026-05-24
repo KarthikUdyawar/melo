@@ -71,7 +71,7 @@ class TestPreviewHappyPath:
         assert data["duration"] == FULL_META["duration"]
         assert data["thumbnail_url"] == FULL_META["thumbnail_url"]
         assert data["channel"] == FULL_META["channel"]
-        assert data["upload_date"] == FULL_META["upload_date"]
+        assert data["upload_date"] == "2009-10-25"
 
     def test_youtube_id_extracted_correctly(self, client: TestClient) -> None:
         with patch("app.services.downloader.probe_metadata", return_value=FULL_META):
@@ -253,4 +253,5 @@ class TestPreviewStateless:
         assert resp.status_code == 200
         # Still exactly 1 row — our pre-existing one
         assert db_session.query(Song).count() == 1
-        assert db_session.query(Song).first().id == existing.id
+        assert db_session.query(Song).one().id == existing.id
+        assert db_session.query(Song).one().youtube_id == VALID_ID

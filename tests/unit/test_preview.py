@@ -84,7 +84,8 @@ class TestPreviewEndpoint:
         assert data["title"] == "Never Gonna Give You Up"
         assert data["duration"] == 213.0
         assert data["channel"] == "RickAstleyVEVO"
-        assert data["upload_date"] == "20091025"
+        # _normalize_upload_date converts "20091025" → "2009-10-25"
+        assert data["upload_date"] == "2009-10-25"
         assert "thumbnail_url" in data
 
     def test_invalid_url_returns_422(self, client) -> None:

@@ -2,17 +2,19 @@
 
 POST   /favorites/{song_id}  → 201 created / 200 already favorited (idempotent)
 DELETE /favorites/{song_id}  → 204 removed / 404 not favorited
-GET    /favorites             → paginated list of favorited songs
+GET    /favorites             → list of favorited songs
 """
 
 # app/api/favorites.py
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 
-from app.api.responses import envelope_response, paginated_response
+from app.api._song_utils import serialize_song
+from app.api.responses import envelope_response
 from app.core.deps import DbDep
 from app.core.logging import get_logger
 from app.models.favorite import Favorite
@@ -23,67 +25,35 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/favorites", tags=["favorites"])
 
 
-def _serialize_song(song: Song, *, is_favorite: bool = True) -> dict[str, object]:
-    """Serialize a Song model into a SongResponse dict.
-
-    Args:
-        song: The Song ORM model instance to serialize.
-        is_favorite: Whether to mark the song as favorited in the response.
-            Defaults to True.
-
-    Returns:
-        dict representation of the song following SongResponse schema.
-    """
-    from app.schemas.song import SongResponse
-
-    return SongResponse(
-        id=song.id,
-        title=song.title,
-        youtube_id=song.youtube_id,
-        file_url=song.file_url,
-        duration=song.duration,
-        start=song.start,
-        end=song.end,
-        speed=song.speed,
-        status=song.status.value,
-        thumbnail_url=song.thumbnail_url,
-        channel=song.channel,
-        upload_date=song.upload_date,
-        created_at=song.created_at.isoformat(),
-        is_favorite=is_favorite,
-    ).model_dump(mode="json")
+def _active_favorite(song_id: UUID, db: DbDep) -> Favorite | None:
+    """Return the active (non-deleted) Favorite row for a song, or None."""
+    return (
+        db.query(Favorite)
+        .filter(Favorite.song_id == song_id, Favorite.deleted_at.is_(None))
+        .first()
+    )
 
 
-@router.post("/{song_id}", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{song_id}",
+    status_code=status.HTTP_201_CREATED,
+    summary="Favorite a song (idempotent)",
+    responses={
+        200: {"description": "Already favorited"},
+        201: {"description": "Favorited"},
+        404: {"description": "Song not found"},
+    },
+)
 def add_favorite(song_id: UUID, db: DbDep) -> JSONResponse:
-    """Favorite a song.
-
-    The operation is idempotent: calling it again on an already favorited
-    song returns 200 instead of 201.
-
-    Uniqueness is enforced at the database level via a unique constraint.
-
-    Args:
-        song_id: UUID of the song to favorite.
-        db: Database dependency.
-
-    Returns:
-        JSONResponse with envelope containing the song_id and appropriate message.
-
-    Raises:
-        HTTPException: 404 if the song does not exist.
-    """
-    song = db.query(Song).filter(Song.id == song_id).first()
+    """Mark a song as favorite. Returns 201 on create, 200 if already favorited."""
+    song = db.query(Song).filter(Song.id == song_id, Song.deleted_at.is_(None)).first()
     if not song:
         raise HTTPException(status_code=404, detail=f"Song {song_id} not found.")
 
-    existing = db.query(Favorite).filter(Favorite.song_id == song_id).first()
-    if existing:
+    if _active_favorite(song_id, db):
         logger.info("favorite_already_exists", song_id=str(song_id))
         return envelope_response(
-            {"song_id": str(song_id)},
-            "Already favorited.",
-            status_code=200,
+            {"song_id": str(song_id)}, "Already favorited.", status_code=200
         )
 
     fav = Favorite(song_id=song_id)
@@ -95,68 +65,59 @@ def add_favorite(song_id: UUID, db: DbDep) -> JSONResponse:
         db.rollback()
         logger.info("favorite_already_exists_race", song_id=str(song_id))
         return envelope_response(
-            {"song_id": str(song_id)},
-            "Already favorited.",
-            status_code=200,
+            {"song_id": str(song_id)}, "Already favorited.", status_code=200
         )
 
     logger.info("favorite_created", song_id=str(song_id))
     return envelope_response(
-        {"song_id": str(song_id)},
-        "Song favorited.",
-        status_code=201,
+        {"song_id": str(song_id)}, "Song favorited.", status_code=201
     )
 
 
-@router.delete("/{song_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{song_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a song from favorites",
+    responses={
+        204: {"description": "Unfavorited"},
+        404: {"description": "Song not found or not favorited"},
+    },
+)
 def remove_favorite(song_id: UUID, db: DbDep) -> Response:
-    """Remove a song from the user's favorites.
-
-    Args:
-        song_id: UUID of the song to remove from favorites.
-        db: Database dependency.
-
-    Returns:
-        Empty Response with status 204 on success.
-
-    Raises:
-        HTTPException: 404 if the song doesn't exist or is not favorited.
-    """
-    song = db.query(Song).filter(Song.id == song_id).first()
+    """Soft-delete the favorite row. Returns 404 if song or favorite not found."""
+    song = db.query(Song).filter(Song.id == song_id, Song.deleted_at.is_(None)).first()
     if not song:
         raise HTTPException(status_code=404, detail=f"Song {song_id} not found.")
 
-    fav = db.query(Favorite).filter(Favorite.song_id == song_id).first()
+    fav = _active_favorite(song_id, db)
     if not fav:
         raise HTTPException(status_code=404, detail=f"Song {song_id} is not favorited.")
 
-    db.delete(fav)
+    fav.deleted_at = datetime.now(UTC)
     db.commit()
 
     logger.info("favorite_removed", song_id=str(song_id))
     return Response(status_code=204)
 
 
-@router.get("")
+@router.get(
+    "",
+    summary="List all favorited songs",
+)
 def list_favorites(db: DbDep) -> JSONResponse:
-    """List all songs favorited by the user.
-
-    Results are ordered by when they were favorited (newest first).
-    Each song includes full metadata and `is_favorite=True`.
-
-    Args:
-        db: Database dependency.
-
-    Returns:
-        Paginated JSON response containing the list of favorited songs.
-    """
+    """Return all active favorites ordered by \
+        when they were favorited (newest first)."""
     rows = (
         db.query(Song)
         .join(Favorite, Favorite.song_id == Song.id)
+        .filter(Favorite.deleted_at.is_(None), Song.deleted_at.is_(None))
         .order_by(Favorite.created_at.desc())
         .all()
     )
 
-    records = [_serialize_song(s, is_favorite=True) for s in rows]
+    records = [serialize_song(s, db, is_favorite=True) for s in rows]
     logger.info("favorites_listed", count=len(records))
-    return paginated_response(records, len(records), "Favorites retrieved.")
+    return envelope_response(
+        {"records": records, "count": len(records), "bookmark": None},
+        "Favorites retrieved.",
+    )

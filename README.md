@@ -220,6 +220,7 @@ make smoke
 | `POST`   | `/songs`                          | ✅      | Submit YouTube URL → async job             |
 | `GET`    | `/songs`                          | ✅      | List songs — filter, sort, cursor-paginate |
 | `GET`    | `/songs/{id}`                     | ✅      | Get song detail + status                   |
+| `DELETE` | `/songs/{id}`                     | ✅      | Soft-delete a song + remove from MinIO     |
 | `GET`    | `/songs/{id}/stream`              | ✅      | Stream mp3 (trim + speed applied)          |
 | `POST`   | `/favorites/{song_id}`            | ✅      | Favorite a song (idempotent)               |
 | `DELETE` | `/favorites/{song_id}`            | ✅      | Unfavorite a song                          |
@@ -449,11 +450,19 @@ Test layout:
 | Root `conftest.py` for env setup           | `pytest_configure` runs before collection — only reliable hook for early env vars            |
 | `tasks.py` excluded from coverage          | Celery internals require live worker; covered by `make smoke` instead                        |
 | `# nosec B108/B603/B607` in processor      | `/tmp/melo` intentional; subprocess args are internal constants only, never user input       |
+| `stream_url` relative path                 | No config dependency; works regardless of deployment base URL                                |
+| `stream_url` status-driven (not nullable)  | Always a usable URL — client polls `GET /songs/{id}` until done, then hits stream            |
+| `effective_duration` computed in schema    | Reflects real playback length after trim; `end - start` when both set, else `duration`       |
+| `_normalize_upload_date` in schema         | Converts yt-dlp `"20091025"` format to ISO `"2009-10-25"` at the schema boundary             |
+| Soft delete on Song, Favorite, Playlist    | Safer than hard delete; preserves audit trail; `deleted_at` column; no Alembic needed        |
+| `DELETE /songs/{id}` + MinIO delete        | Endpoint was in PRD but never implemented; MinIO object freed alongside soft delete          |
+| `_song_utils.py` shared serializer         | Eliminates three copies of `_serialize_song`; avoids circular import                         |
+| `docs_url=None` in production              | Swagger not needed in production; reduces attack surface                                     |
+| Health check adds Redis + MinIO probes     | Silent infrastructure failure previously undetectable via `/health`                          |
 
 ---
 
 ## Out of Scope (v1)
 
-- Computed fields & UX polish (`effective_duration`, `stream_url`, `upload_date` normalisation) → Sprint 3 API-3 (in progress)
 - Frontend UI → Sprint 4
 - Multi-user auth, lyrics, waveforms → never (personal tool)
