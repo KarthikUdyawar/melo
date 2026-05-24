@@ -71,9 +71,18 @@ jobs:
 
       - name: Run unit tests with coverage
         run: |
+          set -euxo pipefail
+
           uv run coverage run \
             --data-file=.coverage.unit-raw \
-            -m pytest -o addopts='' tests/unit -v
+            -m pytest \
+            -o addopts='' \
+            tests/unit \
+            -v
+
+          ls -lah
+
+          test -f .coverage.unit-raw
 
           uv run coverage xml \
             --data-file=.coverage.unit-raw \
@@ -81,15 +90,6 @@ jobs:
 
           uv run coverage report \
             --data-file=.coverage.unit-raw
-
-      - name: Verify coverage file exists
-        if: always()
-        run: |
-          echo "Workspace contents:"
-          ls -lah
-
-          echo "Checking for coverage file..."
-          test -f .coverage.unit-raw
 
       - name: Upload unit coverage
         if: always()
@@ -123,6 +123,8 @@ jobs:
 
       - name: Start test services
         run: |
+          set -euxo pipefail
+
           docker compose -f tests/docker-compose.test.yml up -d
 
           echo "Waiting for Postgres on port 15432..."
@@ -131,6 +133,15 @@ jobs:
             'until pg_isready -h localhost -p 15432 -U melo_test -q; do
               sleep 2
             done'
+
+      - name: Verify database connectivity
+        run: |
+          PGPASSWORD=melo_test psql \
+            -h localhost \
+            -p 15432 \
+            -U melo_test \
+            -d melo_test \
+            -c "SELECT 1;"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -142,9 +153,18 @@ jobs:
 
       - name: Run integration tests with coverage
         run: |
+          set -euxo pipefail
+
           uv run coverage run \
             --data-file=.coverage.integration-raw \
-            -m pytest -o addopts='' tests/integration -v
+            -m pytest \
+            -o addopts='' \
+            tests/integration \
+            -v
+
+          ls -lah
+
+          test -f .coverage.integration-raw
 
           uv run coverage xml \
             --data-file=.coverage.integration-raw \
@@ -153,14 +173,11 @@ jobs:
           uv run coverage report \
             --data-file=.coverage.integration-raw
 
-      - name: Verify coverage file exists
-        if: always()
+      - name: Debug docker services
+        if: failure()
         run: |
-          echo "Workspace contents:"
-          ls -lah
-
-          echo "Checking for coverage file..."
-          test -f .coverage.integration-raw
+          docker compose -f tests/docker-compose.test.yml ps
+          docker compose -f tests/docker-compose.test.yml logs
 
       - name: Upload integration coverage
         if: always()
@@ -215,7 +232,8 @@ jobs:
 
       - name: Verify downloaded artifacts
         run: |
-          echo "Artifacts:"
+          set -euxo pipefail
+
           find artifacts -type f
 
           test -f artifacts/unit/.coverage.unit-raw
@@ -223,6 +241,8 @@ jobs:
 
       - name: Combine coverage
         run: |
+          set -euxo pipefail
+
           uv run coverage combine \
             artifacts/unit/.coverage.unit-raw \
             artifacts/integration/.coverage.integration-raw
