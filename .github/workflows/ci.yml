@@ -69,15 +69,18 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-groups
 
-      - name: Run unit tests
-        env:
-          COVERAGE_FILE: .coverage.unit-raw
+      - name: Run unit tests with coverage
         run: |
-          uv run pytest -o addopts='' tests/unit \
-            -v \
-            --cov=app \
-            --cov-report=term-missing \
-            --cov-report=xml:coverage-unit.xml
+          uv run coverage run \
+            --data-file=.coverage.unit-raw \
+            -m pytest -o addopts='' tests/unit -v
+
+          uv run coverage xml \
+            --data-file=.coverage.unit-raw \
+            -o coverage-unit.xml
+
+          uv run coverage report \
+            --data-file=.coverage.unit-raw
 
       - name: Verify coverage file exists
         if: always()
@@ -137,15 +140,18 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-groups
 
-      - name: Run integration tests
-        env:
-          COVERAGE_FILE: .coverage.integration-raw
+      - name: Run integration tests with coverage
         run: |
-          uv run pytest -o addopts='' tests/integration \
-            -v \
-            --cov=app \
-            --cov-report=term-missing \
-            --cov-report=xml:coverage-integration.xml
+          uv run coverage run \
+            --data-file=.coverage.integration-raw \
+            -m pytest -o addopts='' tests/integration -v
+
+          uv run coverage xml \
+            --data-file=.coverage.integration-raw \
+            -o coverage-integration.xml
+
+          uv run coverage report \
+            --data-file=.coverage.integration-raw
 
       - name: Verify coverage file exists
         if: always()

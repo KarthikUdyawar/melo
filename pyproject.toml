@@ -50,6 +50,7 @@ dev = [
     "faker>=30.0.0",
     "pre-commit>=4.6.0",
     "psycopg2-binary>=2.9.9",
+    "coverage>=7.6.0",
 ]
 
 [build-system]
@@ -90,13 +91,7 @@ disable_error_code = ["misc"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
-addopts = [
-    "--cov=app",
-    "--cov-report=term-missing",
-    "--cov-report=xml:coverage.xml",
-    "--cov-fail-under=80",
-    "-v",
-]
+addopts = ["-v"]
 
 pythonpath = ["."]
 

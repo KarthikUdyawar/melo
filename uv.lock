@@ -582,6 +582,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "coverage" },
     { name = "factory-boy" },
     { name = "faker" },
     { name = "httpx" },
@@ -610,6 +611,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "coverage", specifier = ">=7.6.0" },
     { name = "factory-boy", specifier = ">=3.3.0" },
     { name = "faker", specifier = ">=30.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },
