@@ -1,11 +1,11 @@
-"""tests/unit/test_playlist_schemas.py — Unit tests for playlist schemas."""
+"""Unit tests for playlist schemas."""
 
 import uuid
 
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.playlist import PlaylistCreate, PlaylistResponse, PlaylistSongAdd
+from app.schemas.playlist import PlaylistCreate, PlaylistResponse
 
 
 class TestPlaylistCreate:
@@ -32,24 +32,6 @@ class TestPlaylistCreate:
     def test_name_max_length_ok(self) -> None:
         p = PlaylistCreate(name="x" * 255)
         assert len(p.name) == 255
-
-
-class TestPlaylistSongAdd:
-    def test_no_position_defaults_none(self) -> None:
-        p = PlaylistSongAdd()
-        assert p.position is None
-
-    def test_valid_position(self) -> None:
-        p = PlaylistSongAdd(position=3)
-        assert p.position == 3
-
-    def test_zero_position_ok(self) -> None:
-        p = PlaylistSongAdd(position=0)
-        assert p.position == 0
-
-    def test_negative_position_raises(self) -> None:
-        with pytest.raises(ValidationError, match=">= 0"):
-            PlaylistSongAdd(position=-1)
 
 
 class TestPlaylistResponse:

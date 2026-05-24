@@ -118,7 +118,7 @@
 
 > Sprint addition — not originally planned but completed this week.
 
-* [x] `smoke_test.sh` — 19-section end-to-end bash script (requires `curl` + `jq`):
+* [x] `smoke_test.sh` — 24-section end-to-end bash script (requires `curl` + `jq`):
   1. `GET /health`
   2. `POST /songs/preview` → happy path (youtube_id, title, duration, envelope shape)
   3. Preview stateless (song count unchanged)
@@ -138,6 +138,7 @@
   17. `DELETE /playlists/{id}/songs/{song_id}` → 204, song removed
   18. Playlist error paths (unknown playlist → 404, unknown song → 404) + duplicate add idempotency (→ 200)
   19. Same song reusable across multiple playlists
+  20. S20–S24: filtering, sorting, cursor pagination (`after=`, `status=`, `favorite=`, `search=`, `sort_by=`)
 * [x] `make smoke` / `make smoke URL="..."` Makefile target
 
 ---
@@ -395,27 +396,66 @@ after        (cursor — UUID v7 of last seen record)
 
 ---
 
-### 🧠 API-3 — Computed Fields & UX Polish
+### ✅ API-3 — Computed Fields, UX Polish & Swagger
 
 **Branch:** `feature/api-polish`
 
-* [ ] Add computed:
+#### Slice 1 — `schemas/song.py`
 
-  ```python
-  effective_duration = (end - start) if start and end else duration
-  ```
+* [x] `_normalize_upload_date(v)` module-level fn:
+  * `None → None`, `"20091025" → "2009-10-25"`, already ISO → passthrough, malformed → passthrough
+* [x] `@field_validator("upload_date", mode="before")` on `SongResponse` and `SongPreviewResponse`
+* [x] `effective_duration: float | None` — `@model_validator(mode="after")`: `end - start` if both set, else `duration`
+* [x] `stream_url: str` — passed at construction, status-driven in `_serialize`
+* [x] `status: Literal["pending","processing","done","failed"]` — replace bare `str`
 
-* [ ] Normalize:
+#### Slice 2 — `api/songs.py` `_serialize`
 
-  * `upload_date: YYYYMMDD → YYYY-MM-DD`
+* [x] `stream_url`: `done → /songs/{id}/stream`, else → `/songs/{id}`
+* [x] Pass `stream_url` into `SongResponse` constructor
 
-* [ ] Add:
+#### Slice 3 — deduplicate `_serialize_song`
 
-  ```python
-  stream_url: str
-  ```
+* [x] Created `app/api/_song_utils.py` — `_is_favorited` + `serialize_song` centralised here
+* [x] `songs.py`, `favorites.py`, `playlists.py` import from `_song_utils`
 
-* [ ] Ensure envelope compliance everywhere
+#### Slice 4 — envelope audit
+
+* [x] `favorites.list_favorites` → `envelope_response`
+* [x] `playlists.list_playlists` → `envelope_response`
+
+#### Slice 5 — soft delete
+
+* [x] Added `deleted_at: Mapped[datetime | None]` to `Song`, `Favorite`, `Playlist`
+  * `DateTime(timezone=True)`, nullable, default `None`
+  * No migration needed — `create_all(checkfirst=True)` on startup handles new column
+* [x] `DELETE /songs/{id}` — **new endpoint** (was in PRD, never implemented):
+  * Soft delete: `song.deleted_at = datetime.now(UTC)`
+  * Also calls MinIO `remove_object(bucket, song.file_url)` if `file_url` set
+  * 404 if not found or already deleted
+  * 204 on success
+* [x] `DELETE /favorites/{song_id}` — changed to soft delete
+* [x] `DELETE /playlists/{id}` — changed to soft delete
+* [x] `PlaylistSong` — hard delete stays (join table, no audit need)
+* [x] All `GET` queries add `.filter(Model.deleted_at.is_(None))` guard
+
+#### Slice 6 — quick wins
+
+* [x] `main.py`: `docs_url=None` / `redoc_url=None` when `is_production`
+* [x] `main.py`: version from `importlib.metadata.version("melo")`
+* [x] `main.py`: `openapi_tags` list with name + description per router
+* [x] `exception_handlers.py`: `logger.exception("unhandled_error", path=...)` in `unhandled_exception_handler`
+* [x] `health`: added `ping_redis()` + `ping_minio()` alongside `ping_db()`; wrapped in `envelope_response`
+* [x] Makefile: `make clean-tmp` → `rm -rf /tmp/melo`
+* [x] `schemas/playlist.py`: removed dead `PlaylistSongAdd.position` field
+
+#### Slice 7 — Swagger / OpenAPI
+
+* [x] `summary=` on every `@router.X` decorator
+* [x] `responses={404: ..., 409: ..., 422: ..., 502: ...}` on routes that raise them
+* [x] Stream endpoint: `openapi_extra` for `audio/mpeg` response
+* [x] `Field(description=...)` on all `SongResponse` fields
+* [x] `Query(description=...)` on all `list_songs` filter params
 
 ---
 
@@ -423,16 +463,19 @@ after        (cursor — UUID v7 of last seen record)
 
 **Branch:** `feature/dx`
 
-* [ ] `make seed` → sample data
+* [ ] `make seed` → sample data (→ Sprint 4)
 
-* [ ] `make clean-tmp` → clear `/tmp/melo`
+* [ ] `make clean-tmp` → clear `/tmp/melo` (moved into API-3 Slice 6)
 
 * [x] Update README:
 
   * [x] preview endpoint
   * [x] favorites
   * [x] playlists
-  * speed streaming (existing)
+  * [x] `DELETE /songs/{id}` in API table
+  * [x] `make clean-tmp` in Makefile targets
+  * [x] API-3 decision log entries added
+  * [x] Out of Scope updated (API-3 complete)
 
 * [ ] Optional:
 
@@ -454,8 +497,23 @@ after        (cursor — UUID v7 of last seen record)
 * [x] `/songs` supports filtering, sorting, cursor pagination
 * [x] All responses follow envelope format
 * [x] No temp file leaks in `/tmp/melo`
+* [x] API-3 slices 1–7 complete
+* [x] Test suite green (9 failures fixed — see test fix notes below)
 * [ ] All branches merged into `develop`
 * [ ] File moved to `melo/docs/sprints/`
+
+### Test fix notes (post API-3)
+
+9 tests failed after API-3 landed because they asserted pre-API-3 behaviour:
+
+| Test                                                     | Root cause                                                | Fix                                                                           |
+| -------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `test_delete_removes_row` (unit)                         | Hard-delete assertion; soft delete leaves row             | Assert `deleted_at is not None` instead of `count == 0`                       |
+| `test_song_detail_is_favorite_toggles` (integration)     | `_is_favorited` queried all rows incl. soft-deleted       | Added `.filter(Favorite.deleted_at.is_(None))` to `_song_utils._is_favorited` |
+| `test_response_fields` (unit preview)                    | Expected raw `"20091025"`                                 | Expect normalized `"2009-10-25"`                                              |
+| `test_all_metadata_fields_present` (integration preview) | Expected raw `"20091025"`                                 | Expect normalized `"2009-10-25"`                                              |
+| `test_health_contains_db_field` (integration songs)      | `"db" in body` — health now enveloped                     | `"db" in body["body"]`                                                        |
+| 4× `TestPlaylistSongAdd` (unit schemas)                  | `position` field removed from `PlaylistSongAdd` (Slice 6) | Deleted the 4 tests                                                           |
 
 ---
 
@@ -467,6 +525,8 @@ after        (cursor — UUID v7 of last seen record)
 * AI recommendations
 * Multi-user authentication
 * Caching processed variants
+* `GET /favorites` cursor pagination
+* `make seed`
 
 ---
 
@@ -494,9 +554,19 @@ after        (cursor — UUID v7 of last seen record)
 | `db.expire_all()` after playlist mutations                              | Clears stale relationship state from SQLAlchemy identity map post-commit                                                                            |
 | Ordering test uses explicit `datetime` values                           | `server_default=func.now()` resolves identically within a transaction — order nondeterministic without explicit timestamps                          |
 | Filtering at DB level                                                   | Scalability                                                                                                                                         |
-| Computed `effective_duration`                                           | Reflects real playback                                                                                                                              |
+| Computed `effective_duration`                                           | Reflects real playback length after trim                                                                                                            |
+| `stream_url` relative path                                              | No config dependency; works regardless of deployment base URL                                                                                       |
+| `stream_url` status-driven not nullable                                 | Always a usable URL — client polls `GET /songs/{id}` until done, then streams                                                                       |
+| No `GET /songs/{id}/status` endpoint                                    | `GET /songs/{id}` already returns status; no new endpoint needed                                                                                    |
+| Soft delete on Song, Favorite, Playlist                                 | Safer than hard delete; preserves audit trail; `deleted_at` column                                                                                  |
+| `PlaylistSong` hard delete stays                                        | Join table; no user-facing audit need; position logic unaffected                                                                                    |
+| `_song_utils.py` shared serializer                                      | Eliminates three copies of `_serialize_song`; avoids circular import                                                                                |
+| `docs_url=None` in production                                           | Swagger not needed in production; reduces attack surface                                                                                            |
+| `unhandled_exception_handler` add logger                                | 500s currently invisible in structured logs                                                                                                         |
+| Health check add Redis + MinIO                                          | Silent infrastructure failure undetectable via `/health` today                                                                                      |
+| `DELETE /songs/{id}` + MinIO delete                                     | Endpoint was in PRD but never implemented; MinIO object freed alongside soft delete                                                                 |
 | No caching of processed streams                                         | Keep system simple                                                                                                                                  |
-| Optional Redis preview cache                                            | Reduce yt-dlp overhead                                                                                                                              |
+| Optional Redis preview cache                                            | Reduce yt-dlp overhead on repeated previews                                                                                                         |
 | `class Envelope[T]` requires Python 3.12                                | PEP 695 syntax — confirmed `requires-python = ">=3.12"` in pyproject                                                                                |
 | `# nosec B108/B603/B607` in processor                                   | `/tmp/melo` is intentional; subprocess args are internal constants only                                                                             |
 | `tasks.py` excluded from coverage                                       | Celery task internals require running worker — covered by smoke test                                                                                |

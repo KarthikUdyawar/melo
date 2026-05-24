@@ -1,6 +1,6 @@
 """Pydantic schemas for playlist-related request and response models."""
-#app/schemas/playlist.py
 
+# app/schemas/playlist.py
 from uuid import UUID
 
 from pydantic import BaseModel, field_validator
@@ -10,6 +10,7 @@ from app.schemas.song import SongResponse
 
 class PlaylistCreate(BaseModel):
     """Request schema for creating a new playlist."""
+
     name: str
 
     @field_validator("name")
@@ -37,30 +38,16 @@ class PlaylistCreate(BaseModel):
 
 
 class PlaylistSongAdd(BaseModel):
-    """Request schema for adding a song to a playlist (with optional position)."""
-    position: int | None = None
+    """Request schema for adding a song to a playlist.
 
-    @field_validator("position")
-    @classmethod
-    def validate_position(cls, v: int | None) -> int | None:
-        """Validate the position when adding a song to a playlist.
-
-        Args:
-            v: The position value (can be None for append).
-
-        Returns:
-            The validated position or None.
-
-        Raises:
-            ValueError: If position is negative.
-        """
-        if v is not None and v < 0:
-            raise ValueError("position must be >= 0")
-        return v
+    Position is managed server-side (auto-increment); this schema is kept
+    for future extensibility but currently has no fields.
+    """
 
 
 class PlaylistResponse(BaseModel):
     """Response schema for basic playlist information."""
+
     id: UUID
     name: str
     created_at: str
@@ -71,6 +58,7 @@ class PlaylistResponse(BaseModel):
 
 class PlaylistDetailResponse(BaseModel):
     """Detailed response schema for a playlist including its songs."""
+
     id: UUID
     name: str
     created_at: str

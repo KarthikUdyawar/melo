@@ -72,14 +72,17 @@ class TestDeleteFavorite:
         resp = client.delete(f"/favorites/{song.id}")
         assert resp.status_code == 204
 
-    def test_delete_removes_row(self, client, db_session) -> None:
+    def test_delete_soft_deletes_row(self, client, db_session) -> None:
+        """DELETE soft-deletes: row remains but deleted_at is set."""
         from app.models.favorite import Favorite
 
         song = _make_song(db_session)
         client.post(f"/favorites/{song.id}")
         client.delete(f"/favorites/{song.id}")
-        count = db_session.query(Favorite).filter(Favorite.song_id == song.id).count()
-        assert count == 0
+
+        fav = db_session.query(Favorite).filter(Favorite.song_id == song.id).first()
+        assert fav is not None  # row still exists (soft delete)
+        assert fav.deleted_at is not None  # but marked deleted
 
     def test_delete_not_favorited_returns_404(self, client, db_session) -> None:
         song = _make_song(db_session)
@@ -140,7 +143,9 @@ class TestIsFavoriteInSongResponse:
         assert records[0]["is_favorite"] is False
 
     def test_list_songs_is_favorite_true_after_favoriting(
-        self, client, db_session,
+        self,
+        client,
+        db_session,
     ) -> None:
         song = _make_song(db_session)
         client.post(f"/favorites/{song.id}")

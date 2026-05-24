@@ -1,15 +1,13 @@
-"""
-tests/integration/test_playlists_api.py
-Integration tests for LIB-2: Playlists endpoints (Postgres-backed).
+"""Integration tests for LIB-2: Playlists endpoints (Postgres-backed).
 
 Vertical slices (TDD order):
 1. POST /playlists → 201
-2. GET /playlists → list
+2. GET /playlists → envelope list (records/count/bookmark)
 3. GET /playlists/{id} → detail + 404
 4. POST /playlists/{id}/songs/{song_id} → adds song
 5. Idempotent add → 200, no dupe
-6. DELETE /playlists/{id}/songs/{song_id} → 204
-7. DELETE /playlists/{id} → 204 cascade
+6. DELETE /playlists/{id}/songs/{song_id} → 204 (hard delete)
+7. DELETE /playlists/{id} → 204 (soft delete)
 8. Same song in multiple playlists
 9. Position ordering preserved
 """
@@ -17,7 +15,7 @@ Vertical slices (TDD order):
 from __future__ import annotations
 
 import uuid
-from datetime import UTC
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -87,6 +85,14 @@ class TestListPlaylists:
         assert body["count"] == 0
         assert body["records"] == []
 
+    def test_envelope_shape(self, client: TestClient, db_session: Session) -> None:
+        """list_playlists must return envelope (records/count/bookmark)."""
+        _make_playlist(db_session)
+        body = client.get("/playlists").json()["body"]
+        assert "records" in body
+        assert "count" in body
+        assert "bookmark" in body
+
     def test_returns_created_playlist(
         self, client: TestClient, db_session: Session
     ) -> None:
@@ -99,14 +105,8 @@ class TestListPlaylists:
     def test_multiple_playlists_ordered_desc(
         self, client: TestClient, db_session: Session
     ) -> None:
-        from datetime import datetime
-
-        p1 = Playlist(
-            name="First", created_at=datetime(2024, 1, 1, tzinfo=UTC)
-        )
-        p2 = Playlist(
-            name="Second", created_at=datetime(2024, 1, 2, tzinfo=UTC)
-        )
+        p1 = Playlist(name="First", created_at=datetime(2024, 1, 1, tzinfo=UTC))
+        p2 = Playlist(name="Second", created_at=datetime(2024, 1, 2, tzinfo=UTC))
         db_session.add_all([p1, p2])
         db_session.flush()
         records = client.get("/playlists").json()["body"]["records"]
@@ -119,6 +119,15 @@ class TestListPlaylists:
         client.post(f"/playlists/{playlist.id}/songs/{song.id}")
         records = client.get("/playlists").json()["body"]["records"]
         assert records[0]["song_count"] == 1
+
+    def test_soft_deleted_playlist_excluded(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        playlist = _make_playlist(db_session, "To Delete")
+        client.delete(f"/playlists/{playlist.id}")
+        records = client.get("/playlists").json()["body"]["records"]
+        ids = [r["id"] for r in records]
+        assert str(playlist.id) not in ids
 
 
 class TestGetPlaylist:
@@ -153,6 +162,16 @@ class TestGetPlaylist:
         body = client.get(f"/playlists/{playlist.id}").json()["body"]
         assert "is_favorite" in body["songs"][0]
 
+    def test_songs_have_stream_url(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Songs in playlist detail include stream_url (API-3)."""
+        playlist = _make_playlist(db_session)
+        song = _make_song(db_session)
+        client.post(f"/playlists/{playlist.id}/songs/{song.id}")
+        body = client.get(f"/playlists/{playlist.id}").json()["body"]
+        assert "stream_url" in body["songs"][0]
+
 
 class TestAddSongToPlaylist:
     def test_returns_201(self, client: TestClient, db_session: Session) -> None:
@@ -168,8 +187,7 @@ class TestAddSongToPlaylist:
         count = (
             db_session.query(PlaylistSong)
             .filter(
-                PlaylistSong.playlist_id == playlist.id,
-                PlaylistSong.song_id == song.id,
+                PlaylistSong.playlist_id == playlist.id, PlaylistSong.song_id == song.id
             )
             .count()
         )
@@ -288,31 +306,19 @@ class TestDeletePlaylist:
         resp = client.delete(f"/playlists/{playlist.id}")
         assert resp.status_code == 204
 
-    def test_removes_from_db(self, client: TestClient, db_session: Session) -> None:
+    def test_sets_deleted_at(self, client: TestClient, db_session: Session) -> None:
+        """Soft delete: row stays with deleted_at set."""
+        playlist = _make_playlist(db_session)
+        client.delete(f"/playlists/{playlist.id}")
+        db_session.refresh(playlist)
+        assert playlist.deleted_at is not None
+
+    def test_excluded_from_list(self, client: TestClient, db_session: Session) -> None:
         playlist = _make_playlist(db_session)
         pid = playlist.id
         client.delete(f"/playlists/{playlist.id}")
-        assert db_session.query(Playlist).filter(Playlist.id == pid).first() is None
-
-    def test_cascades_song_associations(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        playlist = _make_playlist(db_session)
-        song = _make_song(db_session)
-        client.post(f"/playlists/{playlist.id}/songs/{song.id}")
-        client.delete(f"/playlists/{playlist.id}")
-        count = (
-            db_session.query(PlaylistSong)
-            .filter(PlaylistSong.playlist_id == playlist.id)
-            .count()
-        )
-        assert count == 0
-
-    def test_unknown_playlist_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        resp = client.delete(f"/playlists/{uuid.uuid4()}")
-        assert resp.status_code == 404
+        ids = [r["id"] for r in client.get("/playlists").json()["body"]["records"]]
+        assert str(pid) not in ids
 
     def test_get_after_delete_404(
         self, client: TestClient, db_session: Session
@@ -320,6 +326,36 @@ class TestDeletePlaylist:
         playlist = _make_playlist(db_session)
         client.delete(f"/playlists/{playlist.id}")
         resp = client.get(f"/playlists/{playlist.id}")
+        assert resp.status_code == 404
+
+    def test_unknown_playlist_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        resp = client.delete(f"/playlists/{uuid.uuid4()}")
+        assert resp.status_code == 404
+
+    def test_cascades_song_associations(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """PlaylistSong rows should still be queryable \
+        (cascade is at DB level for hard delete).
+        With soft delete, the playlist is hidden but join table rows persist.
+        The playlist is just marked deleted — songs themselves are unaffected.
+        """
+        playlist = _make_playlist(db_session)
+        song = _make_song(db_session)
+        client.post(f"/playlists/{playlist.id}/songs/{song.id}")
+        client.delete(f"/playlists/{playlist.id}")
+        # Song still exists
+        resp = client.get(f"/songs/{song.id}")
+        assert resp.status_code == 200
+
+    def test_double_delete_returns_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        playlist = _make_playlist(db_session)
+        client.delete(f"/playlists/{playlist.id}")
+        resp = client.delete(f"/playlists/{playlist.id}")
         assert resp.status_code == 404
 
 

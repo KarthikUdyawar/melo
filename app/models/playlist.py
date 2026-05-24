@@ -31,6 +31,12 @@ class Playlist(Base):
         server_default=func.now(),
         nullable=False,
     )
+    # Soft delete — set to now() instead of hard DELETE
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+    )
 
     playlist_songs: Mapped[list[PlaylistSong]] = relationship(
         "PlaylistSong",

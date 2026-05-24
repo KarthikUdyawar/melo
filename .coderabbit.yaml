@@ -11,6 +11,19 @@
 language: en-US
 early_access: false
 
+# Add these missing properties:
+tone_instructions: > # Optional: Custom tone for reviews/chat
+  "Be precise, focus on correctness, resource safety, and async pipeline robustness.
+  Prefer explicit over implicit."
+enable_free_tier: true # Usually true unless you want to restrict
+inheritance: false # Set to true if using central org config
+knowledge_base: # Optional but recommended
+  code_guidelines: { enabled: true }
+code_generation: # Newer section
+  enabled: false # Set true if you want CodeRabbit to suggest/generate code
+issue_enrichment: # For better issue/PR context
+  enabled: true
+
 # ── Review Settings ───────────────────────────────────────────────────────────
 reviews:
   profile: chill # Suggestions only, never blocking
@@ -29,7 +42,6 @@ reviews:
   auto_apply_labels: true
 
   labeling_instructions:
-
     # Area
     - label: "area:api"
       instructions: >
@@ -185,7 +197,6 @@ reviews:
 
   # ── Path-based review instructions ──────────────────────────────────────────
   path_instructions:
-
     - path: "app/workers/tasks.py"
       instructions: |
         This is the core Celery ingest pipeline. Focus on:

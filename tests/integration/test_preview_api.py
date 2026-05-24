@@ -33,7 +33,7 @@ FULL_META = {
     "duration": 213.0,
     "thumbnail_url": "https://img.youtube.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
     "channel": "RickAstleyVEVO",
-    "upload_date": "20091025",
+    "upload_date": "2009-10-25",
 }
 
 SPARSE_META: dict[str, object] = {
@@ -253,4 +253,5 @@ class TestPreviewStateless:
         assert resp.status_code == 200
         # Still exactly 1 row — our pre-existing one
         assert db_session.query(Song).count() == 1
-        assert db_session.query(Song).first().id == existing.id
+        assert db_session.query(Song).one().id == existing.id
+        assert db_session.query(Song).one().youtube_id == VALID_ID

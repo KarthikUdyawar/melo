@@ -33,11 +33,7 @@ class Song(Base):
         default=uuid7,
     )
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    youtube_id: Mapped[str] = mapped_column(
-        String(64),
-        nullable=False,
-        index=True,
-    )
+    youtube_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     file_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     duration: Mapped[float | None] = mapped_column(Float, nullable=True)
     start: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -60,6 +56,12 @@ class Song(Base):
         nullable=False,
         server_default=func.now(),
         index=True,
+    )
+    # Soft delete — set to now() instead of hard DELETE
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
     )
 
     __table_args__ = (

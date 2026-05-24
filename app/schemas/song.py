@@ -5,15 +5,29 @@ processing, including URL validation, trim/speed settings, and preview responses
 """
 # app/schemas/song.py
 import re
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 YOUTUBE_REGEX = re.compile(
     r"^(https?://)?(www\.)?"
     r"(youtube\.com/(watch\?v=|shorts/|embed/|live/)|youtu\.be/)"
     r"[\w\-]{11}",
 )
+
+
+def _normalize_upload_date(v: str | None) -> str | None:
+    """Normalize yt-dlp YYYYMMDD date strings to ISO 8601 (YYYY-MM-DD).
+
+    Passes through None, already-ISO dates, and any malformed values unchanged
+    so callers never get a crash — only a best-effort normalization.
+    """
+    if v is None:
+        return None
+    if len(v) == 8 and v.isdigit():
+        return f"{v[:4]}-{v[4:6]}-{v[6:]}"
+    return v  # already ISO or unrecognised — passthrough
 
 
 class SongCreate(BaseModel):
@@ -88,6 +102,7 @@ class SongCreate(BaseModel):
 
 class PreviewRequest(BaseModel):
     """Schema for requesting metadata preview of a YouTube video."""
+
     url: str
 
     @field_validator("url")
@@ -114,30 +129,86 @@ class PreviewRequest(BaseModel):
 
 class SongPreviewResponse(BaseModel):
     """Response model containing metadata preview for a YouTube video."""
+
     youtube_id: str
     title: str | None = None
     duration: float | None = None
     thumbnail_url: str | None = None
     channel: str | None = None
-    upload_date: str | None = None  # YYYYMMDD string from yt-dlp
+    upload_date: str | None = Field(
+        default=None,
+        description="Upload date in ISO 8601 format (YYYY-MM-DD), \
+            normalized from yt-dlp YYYYMMDD.",
+    )
+
+    @field_validator("upload_date", mode="before")
+    @classmethod
+    def normalize_upload_date(cls, v: str | None) -> str | None:
+        """Normalize upload_date into ISO 8601 format."""
+        return _normalize_upload_date(v)
 
 
 class SongResponse(BaseModel):
     """Response model for a stored song with full metadata and status."""
-    id: UUID
-    title: str | None = None
-    youtube_id: str | None = None
-    file_url: str | None = None
-    duration: float | None = None
-    start: float | None = None
-    end: float | None = None
-    speed: float = 1.0
-    status: str
-    # Metadata fields — populated after probe, before download completes
-    thumbnail_url: str | None = None
-    channel: str | None = None
-    upload_date: str | None = None  # YYYYMMDD string from yt-dlp
-    created_at: str
-    is_favorite: bool = False
+
+    id: UUID = Field(description="Unique song identifier (UUID v7).")
+    title: str | None = Field(default=None, description="Video title from yt-dlp.")
+    youtube_id: str | None = Field(
+        default=None, description="11-character YouTube video ID."
+    )
+    file_url: str | None = Field(
+        default=None, description="MinIO object path, e.g. songs/<id>.mp3."
+    )
+    duration: float | None = Field(
+        default=None, description="Total audio duration in seconds."
+    )
+    start: float | None = Field(
+        default=None, description="Trim start offset in seconds."
+    )
+    end: float | None = Field(default=None, description="Trim end offset in seconds.")
+    speed: float = Field(
+        default=1.0, description="Playback speed multiplier (0.5–4.0)."
+    )
+    status: Literal["pending", "processing", "done", "failed"] = Field(
+        description="Processing job status.",
+    )
+    thumbnail_url: str | None = Field(
+        default=None, description="YouTube thumbnail URL."
+    )
+    channel: str | None = Field(default=None, description="YouTube channel name.")
+    upload_date: str | None = Field(
+        default=None,
+        description="Upload date in ISO 8601 format (YYYY-MM-DD).",
+    )
+    created_at: str = Field(
+        description="ISO 8601 timestamp when this record was created."
+    )
+    is_favorite: bool = Field(
+        default=False, description="Whether this song is favorited."
+    )
+    stream_url: str = Field(
+        description="URL to stream this song. Points to /stream when done, \
+            else /songs/{id}."
+    )
+    effective_duration: float | None = Field(
+        default=None,
+        description="Playback duration after trim (end - start). \
+            Falls back to full duration when trim not set.",
+    )
 
     model_config = {"from_attributes": True}
+
+    @field_validator("upload_date", mode="before")
+    @classmethod
+    def normalize_upload_date(cls, v: str | None) -> str | None:
+        """Normalize upload_date into ISO 8601 format."""
+        return _normalize_upload_date(v)
+
+    @model_validator(mode="after")
+    def compute_effective_duration(self) -> "SongResponse":
+        """Set effective_duration = end - start when both trim points are present."""
+        if self.start is not None and self.end is not None:
+            self.effective_duration = self.end - self.start
+        else:
+            self.effective_duration = self.duration
+        return self
