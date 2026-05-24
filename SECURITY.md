@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Melo is a personal self-hosted tool. Only the latest commit on `master` is supported.
+Melo is a personal self-hosted tool. **Only the latest commit on the default branch (`master`) is supported.**
 
 | Version | Supported |
 | ------- | --------- |

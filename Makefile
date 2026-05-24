@@ -1,7 +1,7 @@
 .PHONY: help up down down-v logs logs-api logs-worker ps shell-api shell-worker \
         health songs lint fmt reset-db seed clean-tmp \
         backup backup-db backup-minio restore-db restore-minio \
-        pre-commit-install pre-commit pre-commit-all \
+        pre-commit-install pre-commit \
         test test-unit test-integration test-cov smoke
 
 .DEFAULT_GOAL := help
@@ -97,12 +97,11 @@ backup-db: ## Backup PostgreSQL to ./backups/db_<timestamp>.sql.gz
 	@echo "   ✔  $(BACKUP_DIR)/db_$(TIMESTAMP).sql.gz"
 
 backup-minio: ## Backup MinIO bucket to ./backups/minio_<timestamp>.tar.gz
-	@mkdir -p $(BACKUP_DIR)
-	@echo "📦  Archiving MinIO bucket '$(MINIO_BUCKET)' → $(BACKUP_DIR)/minio_$(TIMESTAMP).tar.gz"
-	@docker cp $$(docker compose ps -q minio):/data/$(MINIO_BUCKET) - \
-	  | tar -xOf - \
+	`@mkdir` -p $(BACKUP_DIR)
+	`@echo` "📦  Archiving MinIO bucket '$(MINIO_BUCKET)' → $(BACKUP_DIR)/minio_$(TIMESTAMP).tar.gz"
+	`@docker` cp $$(docker compose ps -q minio):/data/$(MINIO_BUCKET) - \
 	  | gzip > $(BACKUP_DIR)/minio_$(TIMESTAMP).tar.gz
-	@echo "   ✔  $(BACKUP_DIR)/minio_$(TIMESTAMP).tar.gz"
+	`@echo` "   ✔  $(BACKUP_DIR)/minio_$(TIMESTAMP).tar.gz"
 
 restore-db: ## Restore DB from FILE=backups/<name>.sql.gz
 	@test -n "$(FILE)" || (echo "❌  Usage: make restore-db FILE=backups/<filename>.sql.gz" && exit 1)
@@ -136,8 +135,6 @@ pre-commit-install: ## Install pre-commit hooks (run once)
 
 pre-commit: ## Run all pre-commit hooks on all files
 	uv run pre-commit run --all-files
-
-pre-commit-all: pre-commit
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 test: ## Run full test suite + coverage report

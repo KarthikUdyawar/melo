@@ -2,9 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [develop, master]
+    branches:
+      - develop
+      - master
+
   pull_request:
-    branches: [develop, master]
+    branches:
+      - develop
+      - master
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,72 +19,35 @@ jobs:
   lint:
     name: Lint & type-check
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
       - name: Install dependencies
         run: uv sync --all-groups
 
-      - name: Ruff lint
-        run: uv run ruff check .
-
-      - name: Ruff format check
-        run: uv run ruff format --check .
-
-      - name: mypy
-        run: uv run mypy app
-
-      - name: bandit
-        run: uv run bandit -r app -c pyproject.toml
+      - name: Run pre-commit hooks
+        run: uv run pre-commit run --all-files --show-diff-on-failure
 
   test-unit:
     name: Unit tests
     runs-on: ubuntu-latest
     needs: lint
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
+    permissions:
+      contents: read
 
-      - name: Install dependencies
-        run: uv sync --all-groups
-
-      - name: Run unit tests
-        run: uv run pytest tests/unit -v --cov=app --cov-report=xml:coverage.xml --cov-fail-under=80
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: coverage.xml
-          flags: unit
-          fail_ci_if_error: false
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-  test-integration:
-    name: Integration tests
-    runs-on: ubuntu-latest
-    needs: lint
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: melo
-          POSTGRES_PASSWORD: melo
-          POSTGRES_DB: melo
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     env:
       APP_ENV: development
       DATABASE_URL: postgresql://melo:melo@localhost:5432/melo
@@ -94,10 +62,75 @@ jobs:
       MINIO_PUBLIC_URL: http://localhost:9000
       LOG_LEVEL: warning
       LOG_FILE_PATH: /tmp/melo-test.log
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start test dependencies
+        run: |
+          docker compose -f tests/docker-compose.test.yml up -d --wait
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Run unit tests
+        run: |
+          uv run pytest tests/unit \
+            -v \
+            --cov=app \
+            --cov-report=term \
+            --cov-report=xml:coverage-unit.xml
+
+      - name: Upload unit coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: .coverage
+
+      - name: Stop test dependencies
+        if: always()
+        run: |
+          docker compose -f tests/docker-compose.test.yml down -v
+
+  test-integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    permissions:
+      contents: read
+
+    env:
+      APP_ENV: development
+      DATABASE_URL: postgresql://melo:melo@localhost:5432/melo
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER: redis://localhost:6379/0
+      CELERY_BACKEND: redis://localhost:6379/1
+      MINIO_ENDPOINT: localhost:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: songs
+      MINIO_SECURE: "false"
+      MINIO_PUBLIC_URL: http://localhost:9000
+      LOG_LEVEL: warning
+      LOG_FILE_PATH: /tmp/melo-test.log
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start test dependencies
+        run: |
+          docker compose -f tests/docker-compose.test.yml up -d --wait
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
@@ -105,13 +138,81 @@ jobs:
         run: uv sync --all-groups
 
       - name: Run integration tests
-        run: uv run pytest tests/integration -v --cov=app --cov-report=xml:coverage-integration.xml --cov-fail-under=80
+        run: |
+          uv run pytest tests/integration \
+            -v \
+            --cov=app \
+            --cov-report=term \
+            --cov-report=xml:coverage-integration.xml
+
+      - name: Upload integration coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: .coverage
+
+      - name: Stop test dependencies
+        if: always()
+        run: |
+          docker compose -f tests/docker-compose.test.yml down -v
+
+  coverage:
+    name: Coverage check
+    runs-on: ubuntu-latest
+    needs:
+      - test-unit
+      - test-integration
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Download unit coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-unit
+          path: .coverage.unit
+
+      - name: Download integration coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-integration
+          path: .coverage.integration
+
+      - name: Combine coverage
+        run: |
+          cp .coverage.unit/.coverage .coverage.unit.file
+          cp .coverage.integration/.coverage .coverage.integration.file
+
+          uv run coverage combine \
+            .coverage.unit.file \
+            .coverage.integration.file
+
+          uv run coverage report --fail-under=80
+          uv run coverage xml -o coverage.xml
+          uv run coverage html
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: htmlcov
+          path: htmlcov
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          files: coverage-integration.xml
-          flags: integration
+          files: coverage.xml
           fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

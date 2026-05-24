@@ -57,7 +57,7 @@ make health
 
 ## Branch Naming
 
-```
+```text
 feature/<ticket-id>-short-description    # new functionality
 fix/<ticket-id>-short-description        # bug fix
 chore/<short-description>                # tooling, deps, docs
@@ -77,7 +77,7 @@ Base branch: **`develop`**. Never commit directly to `master`.
 
 Melo uses [Conventional Commits](https://www.conventionalcommits.org/).
 
-```
+```text
 <type>(<scope>): <short summary>
 
 [optional body]
@@ -90,7 +90,7 @@ Melo uses [Conventional Commits](https://www.conventionalcommits.org/).
 **Scope:** `api`, `worker`, `storage`, `processor`, `downloader`, `db`, `schemas`, `tests`, `ci`, `docker`
 
 Examples:
-```
+```text
 feat(api): add cursor pagination to GET /songs
 fix(downloader): set noplaylist=True to prevent playlist resolution
 chore(deps): bump yt-dlp to 2026.03.17

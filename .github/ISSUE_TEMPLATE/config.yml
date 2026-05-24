@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: 📖 Documentation
-    url: https://github.com/KarthikUdyawar/melo/blob/master/docs/ARCHITECTURE.md
+    url: https://github.com/KarthikUdyawar/melo/tree/master/docs
     about: Architecture, API surface, and design decisions
   - name: 💬 Discussions
     url: https://github.com/KarthikUdyawar/melo/discussions

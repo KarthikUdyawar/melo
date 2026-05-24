@@ -12,6 +12,11 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.21 /uv /uvx /usr/local/bin/
 
 WORKDIR /app
 
+# Create non-root user
+RUN groupadd --system app && \
+    useradd --system --gid app --create-home --shell /bin/false app && \
+    chown -R app:app /app
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_COMPILE_BYTECODE=1 \
@@ -24,3 +29,6 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # copy source last — layer invalidated only on app code change
 COPY app/ ./app/
+
+# Drop privileges
+USER app

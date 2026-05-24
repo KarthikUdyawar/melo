@@ -19,3 +19,30 @@ services:
         -c tcp_keepalives_count=6
     tmpfs:
       - /var/lib/postgresql/data # in-memory — fast, no disk I/O
+
+  redis_test:
+    image: redis:7-alpine
+    ports:
+      - "${TEST_REDIS_PORT:-16379}:6379"
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+
+  minio_test:
+    image: minio/minio:latest
+    ports:
+      - "${TEST_MINIO_PORT:-19000}:9000"
+      - "${TEST_MINIO_CONSOLE_PORT:-19001}:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    tmpfs: /data   # fast in-memory
