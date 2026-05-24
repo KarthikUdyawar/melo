@@ -77,6 +77,8 @@ jobs:
             --data-file=.coverage.unit-raw \
             -m pytest \
             -o addopts='' \
+            -o junit_family=legacy \
+            --junitxml=junit-unit.xml \
             tests/unit \
             -v
 
@@ -100,6 +102,22 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
+
+      - name: Upload unit JUnit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-unit
+          path: junit-unit.xml
+          retention-days: 7
+
+      - name: Upload unit test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: junit-unit.xml
+          flags: unit
 
   test-integration:
     name: Integration tests
@@ -160,6 +178,8 @@ jobs:
             --data-file=.coverage.integration-raw \
             -m pytest \
             -o addopts='' \
+            -o junit_family=legacy \
+            --junitxml=junit-integration.xml \
             tests/integration \
             -v
 
@@ -189,6 +209,22 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
+
+      - name: Upload integration JUnit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-integration
+          path: junit-integration.xml
+          retention-days: 7
+
+      - name: Upload integration test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: junit-integration.xml
+          flags: integration
 
       - name: Stop test services
         if: always()
@@ -261,9 +297,8 @@ jobs:
           retention-days: 7
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
           fail_ci_if_error: false
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ secrets.CODECOV_TOKEN }}
