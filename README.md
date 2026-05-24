@@ -2,6 +2,13 @@
 
 > Personal self-hosted audio library. Paste a YouTube URL → trimmed, speed-adjusted, playable mp3 stored in MinIO.
 
+[![CI](https://github.com/KarthikUdyawar/melo/actions/workflows/ci.yml/badge.svg)](https://github.com/KarthikUdyawar/melo/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/KarthikUdyawar/melo/branch/master/graph/badge.svg)](https://codecov.io/gh/KarthikUdyawar/melo)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://pre-commit.com)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 ---
 
 ## Stack
@@ -189,26 +196,38 @@ make smoke
 
 ## Make Targets
 
-| Target                    | Description                           |
-| ------------------------- | ------------------------------------- |
-| `make up`                 | Build + start all services detached   |
-| `make down`               | Stop all services                     |
-| `make down-v`             | Stop + delete all volumes             |
-| `make logs`               | Tail all logs                         |
-| `make logs-api`           | Tail API logs only                    |
-| `make logs-worker`        | Tail worker logs only                 |
-| `make ps`                 | Show service status                   |
-| `make shell-api`          | Bash into api container               |
-| `make shell-worker`       | Bash into worker container            |
-| `make health`             | Hit /health endpoint                  |
-| `make songs`              | List all songs                        |
-| `make smoke`              | End-to-end smoke test (curl + jq)     |
-| `make test`               | Run full test suite + coverage report |
-| `make test-unit`          | Unit tests only (no Docker needed)    |
-| `make test-integration`   | Integration tests (requires Docker)   |
-| `make test-cov`           | Tests + HTML coverage report          |
-| `make pre-commit`         | Run all pre-commit hooks on all files |
-| `make pre-commit-install` | Install pre-commit hooks (run once)   |
+Run `make` or `make help` to see all targets with descriptions.
+
+| Target                    | Description                                   |
+| ------------------------- | --------------------------------------------- |
+| `make up`                 | Build + start all services detached           |
+| `make down`               | Stop all services                             |
+| `make down-v`             | Stop + delete all volumes                     |
+| `make logs`               | Tail all logs                                 |
+| `make logs-api`           | Tail API logs only                            |
+| `make logs-worker`        | Tail worker logs only                         |
+| `make ps`                 | Show service status                           |
+| `make shell-api`          | Bash into api container                       |
+| `make shell-worker`       | Bash into worker container                    |
+| `make health`             | Hit /health endpoint                          |
+| `make songs`              | List all songs                                |
+| `make reset-db`           | Wipe all volumes and restart stack            |
+| `make seed`               | Submit sample songs for development           |
+| `make clean-tmp`          | Clear /tmp/melo inside worker container       |
+| `make backup`             | Backup DB + MinIO to ./backups/               |
+| `make backup-db`          | Backup PostgreSQL only                        |
+| `make backup-minio`       | Backup MinIO bucket only                      |
+| `make restore-db`         | Restore DB from FILE=backups/<name>.sql.gz    |
+| `make restore-minio`      | Restore MinIO from FILE=backups/<name>.tar.gz |
+| `make lint`               | Run ruff + mypy                               |
+| `make fmt`                | Auto-format with ruff                         |
+| `make smoke`              | End-to-end smoke test (curl + jq)             |
+| `make test`               | Run full test suite + coverage report         |
+| `make test-unit`          | Unit tests only (no Docker needed)            |
+| `make test-integration`   | Integration tests (requires Docker)           |
+| `make test-cov`           | Tests + HTML coverage report                  |
+| `make pre-commit`         | Run all pre-commit hooks on all files         |
+| `make pre-commit-install` | Install pre-commit hooks (run once)           |
 
 ---
 
@@ -231,7 +250,7 @@ make smoke
 | `DELETE` | `/playlists/{id}`                 | ✅      | Delete a playlist                          |
 | `POST`   | `/playlists/{id}/songs/{song_id}` | ✅      | Add song to playlist (ordered)             |
 | `DELETE` | `/playlists/{id}/songs/{song_id}` | ✅      | Remove song from playlist                  |
-| `GET`    | `/health`                         | ✅      | Health check                               |
+| `GET`    | `/health`                         | ✅      | Health check (DB + Redis + MinIO)          |
 
 Interactive docs: **http://localhost:8000/docs**
 
@@ -341,18 +360,19 @@ Songs can appear in multiple playlists. Position is maintained per-playlist and 
 melo/
 ├── app/
 │   ├── api/
-│   │   ├── favorites.py   # POST/DELETE/GET /favorites
-│   │   ├── playlists.py   # POST/DELETE/GET /playlists
-│   │   ├── songs.py       # songs router incl. /preview
-│   │   └── responses.py   # envelope_response, paginated_response
-│   ├── core/              # config, db, deps, logging, middleware
+│   │   ├── favorites.py    # POST/DELETE/GET /favorites
+│   │   ├── playlists.py    # POST/DELETE/GET /playlists
+│   │   ├── songs.py        # songs router incl. /preview
+│   │   ├── _song_utils.py  # shared serialize_song + _is_favorited
+│   │   └── responses.py    # envelope_response, paginated_response
+│   ├── core/               # config, db, deps, logging, middleware
 │   ├── models/
 │   │   ├── song.py
 │   │   ├── favorite.py
 │   │   └── playlist.py
-│   ├── schemas/           # Pydantic schemas
-│   ├── services/          # downloader, processor, storage
-│   └── workers/           # Celery app + tasks
+│   ├── schemas/            # Pydantic schemas
+│   ├── services/           # downloader, processor, storage
+│   └── workers/            # Celery app + tasks
 ├── tests/
 │   ├── conftest.py
 │   ├── docker-compose.test.yml
@@ -360,12 +380,21 @@ melo/
 │   ├── unit/
 │   └── integration/
 ├── docs/
+│   ├── ARCHITECTURE.md
 │   ├── PRD.md
 │   └── sprints/
+├── .github/
+│   ├── workflows/ci.yml
+│   ├── ISSUE_TEMPLATE/
+│   └── PULL_REQUEST_TEMPLATE.md
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile
 ├── pyproject.toml
+├── CONTRIBUTING.md
+├── CHANGELOG.md
+├── SECURITY.md
+├── LICENSE
 ├── .pre-commit-config.yaml
 ├── .coderabbit.yaml
 └── example.env
@@ -421,6 +450,12 @@ Test layout:
 
 ---
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, branch naming, commit convention, and PR checklist.
+
+---
+
 ## Decision Log
 
 | Decision                                   | Reason                                                                                       |
@@ -437,7 +472,7 @@ Test layout:
 | `created_paths` list in stream endpoint    | Guarantees cleanup of all temp files regardless of which pipeline steps ran                  |
 | Preview endpoint is stateless              | No DB writes; simpler system; worker re-probes as source of truth                            |
 | Favorites idempotent (check-then-insert)   | Solo user; race condition acceptable; avoids upsert complexity                               |
-| `is_favorite` queried per song             | N+1 acceptable at MVP scale; batch subquery deferred to API-2                                |
+| `is_favorite` queried per song             | N+1 acceptable at MVP scale                                                                  |
 | `DELETE /favorites` returns 204            | No body on delete; 404 if not favorited for explicit error feedback                          |
 | Playlist ordering via `position`           | Predictable playback; auto-increments on add                                                 |
 | `db.expire_all()` after playlist mutations | Clears stale relationship state from SQLAlchemy identity map post-commit                     |
@@ -446,7 +481,7 @@ Test layout:
 | Cursor pagination (`after=<uuid>`)         | Stable under concurrent inserts; no offset drift                                             |
 | `bookmark` = last record id or `null`      | Clients pass as next `after`; `null` signals end of results                                  |
 | DB-level filtering on `GET /songs`         | Scalability; avoids fetching and filtering in Python                                         |
-| SQLite truncation for unit test isolation  | Savepoint rollback unreliable when endpoint calls `db.commit()` release the savepoint        |
+| SQLite truncation for unit test isolation  | Savepoint rollback unreliable when endpoint calls `db.commit()` releases the savepoint       |
 | Root `conftest.py` for env setup           | `pytest_configure` runs before collection — only reliable hook for early env vars            |
 | `tasks.py` excluded from coverage          | Celery internals require live worker; covered by `make smoke` instead                        |
 | `# nosec B108/B603/B607` in processor      | `/tmp/melo` intentional; subprocess args are internal constants only, never user input       |
@@ -459,6 +494,11 @@ Test layout:
 | `_song_utils.py` shared serializer         | Eliminates three copies of `_serialize_song`; avoids circular import                         |
 | `docs_url=None` in production              | Swagger not needed in production; reduces attack surface                                     |
 | Health check adds Redis + MinIO probes     | Silent infrastructure failure previously undetectable via `/health`                          |
+| Node.js removed from Dockerfile            | Format selector is plain HTTPS — no JS runtime needed; saves ~180MB + ~40s build time        |
+| `uv sync --frozen --no-install-project`    | Reproducible builds from lockfile; skips building melo package (web app, not library)        |
+| `.dockerignore` populated                  | Empty file sent .git, tests, secrets to daemon; now excluded                                 |
+| `make help` as default target              | 20+ targets — discoverability without reading Makefile                                       |
+| Backup targets in Makefile                 | `pg_dump` + MinIO `tar` via `docker compose exec`; timestamped to `./backups/`               |
 
 ---
 

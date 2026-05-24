@@ -121,7 +121,7 @@ reviews:
 
     - label: "type:hotfix"
       instructions: >
-        Apply when the PR is an urgent fix targeting main or develop directly —
+        Apply when the PR is an urgent fix targeting master or develop directly —
         e.g. worker crash, MinIO connection failure, task never completing.
 
     # Risk

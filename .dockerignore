@@ -1,0 +1,41 @@
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Python artifacts
+__pycache__
+*.py[cod]
+*.pyo
+.mypy_cache
+.ruff_cache
+.pytest_cache
+htmlcov
+coverage.xml
+*.egg-info
+.venv
+
+# Tests (not needed in image)
+tests/
+
+# Local env files (secrets must not enter image)
+.env*
+!example.env
+
+# Backups
+backups/
+
+# Docs
+docs/
+*.md
+!README.md
+
+# Dev tooling
+.pre-commit-config.yaml
+.coderabbit.yaml
+Makefile
+
+# Temp / OS
+.DS_Store
+/tmp
+*.log
