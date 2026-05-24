@@ -1,8 +1,20 @@
 [project]
 name = "melo"
-version = "0.1.0"
-description = "Personal self-hosted audio library"
+version = "0.3.0"
+description = "Personal self-hosted audio library — paste a YouTube URL, get a trimmed playable mp3."
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.12"
+authors = [
+    { name = "Karthik Udyawar", email = "karthikajithudyawar@gmail.com" },
+]
+keywords = ["audio", "youtube", "self-hosted", "fastapi", "minio"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Framework :: FastAPI",
+]
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
@@ -17,6 +29,12 @@ dependencies = [
     "uuid6>=2025.0.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/KarthikUdyawar/melo"
+Repository = "https://github.com/KarthikUdyawar/melo"
+Issues = "https://github.com/KarthikUdyawar/melo/issues"
+Changelog = "https://github.com/KarthikUdyawar/melo/blob/main/CHANGELOG.md"
+
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",
@@ -27,7 +45,7 @@ dev = [
     "factory-boy>=3.3.0",
     "faker>=30.0.0",
     "pre-commit>=4.6.0",
-    "psycopg2-binary>=2.9.9",  # needed in test process for readiness check
+    "psycopg2-binary>=2.9.9", # needed in test process for readiness check
 ]
 
 [build-system]
@@ -77,13 +95,12 @@ addopts = [
 ]
 pythonpath = ["."]
 
-
 [tool.coverage.run]
 source = ["app"]
 omit = [
-    "app/core/logging.py",   # structlog config — hard to meaningfully test
-    "app/workers/tasks.py",   # add this — Celery task tested via integration
-    "app/workers/celery_app.py", # add this — Celery task tested via integration
+    "app/core/logging.py",
+    "app/workers/tasks.py",
+    "app/workers/celery_app.py",
     "*/migrations/*",
     "*/__init__.py",
 ]

@@ -150,34 +150,40 @@ speed=0.25 → atempo=0.5,atempo=0.5
 ```mermaid
 erDiagram
     songs {
-        uuid    id          PK
-        string  title
-        string  youtube_id  UK
-        string  file_url
-        float   duration
-        float   speed
-        string  status
-        int     start
-        int     end
+        uuid     id           PK
+        string   title
+        string   youtube_id   UK
+        string   file_url
+        float    duration
+        float    speed
+        string   status
+        int      start
+        int      end
+        string   thumbnail_url
+        string   channel
+        string   upload_date
         datetime created_at
+        datetime deleted_at
     }
 
     favorites {
-        uuid    id          PK
-        uuid    song_id     FK
+        uuid     id           PK
+        uuid     song_id      FK
         datetime created_at
+        datetime deleted_at
     }
 
     playlists {
-        uuid    id          PK
-        string  name
+        uuid     id           PK
+        string   name
         datetime created_at
+        datetime deleted_at
     }
 
     playlist_songs {
-        uuid    playlist_id FK
-        uuid    song_id     FK
-        int     position
+        uuid     playlist_id  FK
+        uuid     song_id      FK
+        int      position
     }
 
     songs ||--o{ favorites       : "favorited via"
@@ -189,7 +195,8 @@ Notes:
 - All PKs are **UUID v7** (via `uuid6` package) — string-sortable = chronological = natural cursor key.
 - `favorites.song_id` has a `unique=True` constraint (one row per song).
 - `playlist_songs.position` auto-increments on add; same song can appear in multiple playlists.
-- Indexes on `songs.status`, `songs.created_at`, `songs.title` (btree) for filtering/sorting.
+- `deleted_at` on `songs`, `favorites`, `playlists` — soft delete. `playlist_songs` is hard-deleted (join table, no audit need).
+- Indexes on `songs.youtube_id`, `songs.status`, `songs.created_at`, `songs.title` (btree) for dedup and filtering.
 
 ---
 
@@ -202,7 +209,8 @@ graph LR
         S2["POST /songs"]
         S3["GET /songs"]
         S4["GET /songs/{id}"]
-        S5["GET /songs/{id}/stream"]
+        S5["DELETE /songs/{id}"]
+        S6["GET /songs/{id}/stream"]
     end
 
     subgraph Favorites
@@ -251,13 +259,14 @@ Paginated list responses include:
 
 ## Folder Structure
 
-```test
+```text
 melo/
 ├── app/
 │   ├── api/
 │   │   ├── songs.py        # /songs + /songs/preview + /songs/{id}/stream
 │   │   ├── favorites.py    # /favorites
 │   │   ├── playlists.py    # /playlists
+│   │   ├── _song_utils.py  # shared serialize_song + _is_favorited
 │   │   └── responses.py    # envelope_response, paginated_response
 │   ├── core/
 │   │   ├── config.py       # APP_ENV-driven settings
@@ -282,7 +291,7 @@ melo/
 │       ├── celery_app.py   # Celery app + Redis broker config
 │       └── tasks.py        # process_song_task (download → process → upload)
 ├── tests/
-│   ├── unit/               # Mocked, no Docker needed
+│   ├── unit/               # Mocked, SQLite — no Docker needed
 │   └── integration/        # Postgres via pytest-docker
 ├── docs/
 │   └── sprints/
@@ -310,20 +319,26 @@ melo/
 
 ## Key Design Decisions
 
-| Decision                                   | Reason                                                              |
-| ------------------------------------------ | ------------------------------------------------------------------- |
-| UUID v7 for all PKs                        | String-sortable = chronological = natural cursor key for pagination |
-| Cursor pagination on `GET /songs`          | Stable under concurrent inserts; no offset drift                    |
-| Speed applied at stream time               | Avoid storing per-speed variants in MinIO                           |
-| Chain `atempo` filters                     | FFmpeg `atempo` capped at `[0.5, 2.0]` per stage                    |
-| Trim before speed                          | Correct order — reduces data before re-encoding                     |
-| Preview endpoint is stateless              | No DB writes; simpler system; worker re-probes as source of truth   |
-| API proxies MinIO stream                   | Presigned URLs signed to internal hostname break on host rewrite    |
-| Favorites idempotent (check-then-insert)   | Solo user; clean UX; avoids upsert complexity                       |
-| `is_favorite` queried per song             | N+1 acceptable at MVP scale                                         |
-| Playlist ordering via `position`           | Predictable playback; auto-increments on add                        |
-| `db.expire_all()` after playlist mutations | Clears stale SQLAlchemy identity map state post-commit              |
-| No Alembic                                 | Solo project; `create_all()` on startup is sufficient               |
-| `APP_ENV`-driven env files                 | Clean separation: dev (localhost) / staging (Docker) / prod         |
-| `tasks.py` excluded from coverage          | Celery internals require live worker; covered by `make smoke`       |
-| Unit test isolation via `_truncate_all()`  | Savepoint rollback unreliable when endpoints call `db.commit()`     |
+| Decision                                         | Reason                                                              |
+| ------------------------------------------------ | ------------------------------------------------------------------- |
+| UUID v7 for all PKs                              | String-sortable = chronological = natural cursor key for pagination |
+| Cursor pagination on `GET /songs`                | Stable under concurrent inserts; no offset drift                    |
+| Speed applied at stream time                     | Avoid storing per-speed variants in MinIO                           |
+| Chain `atempo` filters                           | FFmpeg `atempo` capped at `[0.5, 2.0]` per stage                    |
+| Trim before speed                                | Correct order — reduces data before re-encoding                     |
+| Preview endpoint is stateless                    | No DB writes; simpler system; worker re-probes as source of truth   |
+| API proxies MinIO stream                         | Presigned URLs signed to internal hostname break on host rewrite    |
+| Favorites idempotent (check-then-insert)         | Solo user; clean UX; avoids upsert complexity                       |
+| `is_favorite` queried per song                   | N+1 acceptable at MVP scale                                         |
+| Playlist ordering via `position`                 | Predictable playback; auto-increments on add                        |
+| `db.expire_all()` after playlist mutations       | Clears stale SQLAlchemy identity map state post-commit              |
+| Soft delete on `songs`, `favorites`, `playlists` | Safer than hard delete; preserves audit trail; `deleted_at` column  |
+| `playlist_songs` hard delete                     | Join table — no user-facing audit need; position logic unaffected   |
+| `_song_utils.py` shared serializer               | Eliminates duplicate `_serialize_song`; avoids circular import      |
+| `stream_url` status-driven, never null           | Client polls `GET /songs/{id}` until done, then hits stream         |
+| Health check probes Redis + MinIO                | Silent infra failure previously undetectable via `/health`          |
+| `docs_url=None` in production                    | Swagger not needed in prod; reduces attack surface                  |
+| No Alembic                                       | Solo project; `create_all()` on startup is sufficient               |
+| `APP_ENV`-driven env files                       | Clean separation: dev (localhost) / staging (Docker) / prod         |
+| `tasks.py` excluded from coverage                | Celery internals require live worker; covered by `make smoke`       |
+| Unit test isolation via `_truncate_all()`        | Savepoint rollback unreliable when endpoints call `db.commit()`     |
