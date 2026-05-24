@@ -97,6 +97,7 @@ jobs:
         with:
           name: coverage-unit
           path: .coverage.unit-raw
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 
@@ -185,6 +186,7 @@ jobs:
         with:
           name: coverage-integration
           path: .coverage.integration-raw
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 
