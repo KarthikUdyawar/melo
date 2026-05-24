@@ -5,16 +5,20 @@ description = "Personal self-hosted audio library — paste a YouTube URL, get a
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
+
 authors = [
     { name = "Karthik Udyawar", email = "karthikajithudyawar@gmail.com" },
 ]
+
 keywords = ["audio", "youtube", "self-hosted", "fastapi", "minio"]
+
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
     "Framework :: FastAPI",
 ]
+
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
@@ -45,7 +49,7 @@ dev = [
     "factory-boy>=3.3.0",
     "faker>=30.0.0",
     "pre-commit>=4.6.0",
-    "psycopg2-binary>=2.9.9", # needed in test process for readiness check
+    "psycopg2-binary>=2.9.9",
 ]
 
 [build-system]
@@ -85,6 +89,7 @@ disable_error_code = ["misc"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
 addopts = [
     "--cov=app",
     "--cov-report=term-missing",
@@ -92,10 +97,13 @@ addopts = [
     "--cov-fail-under=80",
     "-v",
 ]
+
 pythonpath = ["."]
 
 [tool.coverage.run]
 source = ["app"]
+relative_files = true
+
 omit = [
     "app/core/logging.py",
     "app/workers/tasks.py",
@@ -112,5 +120,6 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "@(abc\\.)?abstractmethod",
 ]
+
 show_missing = true
 skip_covered = false
