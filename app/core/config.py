@@ -14,7 +14,7 @@ from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Valid environments
-APP_ENVS = {"development", "staging", "production"}
+APP_ENVS = {"development", "staging", "production", "test"}
 
 
 def _env_file() -> str:

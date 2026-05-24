@@ -137,18 +137,39 @@ pre-commit: ## Run all pre-commit hooks on all files
 	uv run pre-commit run --all-files
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
-test: ## Run full test suite + coverage report
-	uv run pytest
+test: ## Run full test suite (unit + integration) with coverage
+	@echo "🐳  Starting test services..."
+	docker compose -f tests/docker-compose.test.yml up -d --wait
+	@echo "✅  Services ready — running full test suite"
+	uv run pytest; \
+	  EXIT_CODE=$$?; \
+	  echo "🧹  Tearing down test services..."; \
+	  docker compose -f tests/docker-compose.test.yml down -v; \
+	  exit $$EXIT_CODE
 
-test-unit: ## Unit tests only (no Docker needed)
-	uv run pytest tests/unit -v
+test-unit: ## Unit tests only (no Docker needed, fast)
+	uv run pytest -o addopts='' tests/unit -v
 
-test-integration: ## Integration tests (requires Docker)
-	uv run pytest tests/integration -v
+test-integration: ## Integration tests — spins up Docker, runs tests, tears down
+	@echo "🐳  Starting test services..."
+	docker compose -f tests/docker-compose.test.yml up -d --wait
+	@echo "✅  Services ready — running integration tests"
+	uv run pytest -o addopts='' tests/integration -v; \
+	  EXIT_CODE=$$?; \
+	  echo "🧹  Tearing down test services..."; \
+	  docker compose -f tests/docker-compose.test.yml down -v; \
+	  exit $$EXIT_CODE
 
-test-cov: ## Tests + HTML coverage report → htmlcov/index.html
-	uv run pytest --cov=app --cov-report=html:htmlcov --cov-report=term-missing
-	@echo "\n📊  Coverage report: htmlcov/index.html"
+test-cov: ## Full test suite + open HTML coverage report → htmlcov/index.html
+	@echo "🐳  Starting test services..."
+	docker compose -f tests/docker-compose.test.yml up -d --wait
+	@echo "✅  Services ready — running full test suite with coverage"
+	uv run pytest --cov-report=html:htmlcov; \
+	  EXIT_CODE=$$?; \
+	  echo "🧹  Tearing down test services..."; \
+	  docker compose -f tests/docker-compose.test.yml down -v; \
+	  [ $$EXIT_CODE -eq 0 ] && echo "\n📊  Coverage report: htmlcov/index.html" || true; \
+	  exit $$EXIT_CODE
 
 smoke: ## End-to-end smoke test (requires stack running)
 	chmod +x tests/smoke_test.sh
