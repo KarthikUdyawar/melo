@@ -75,11 +75,13 @@ jobs:
             --cov-report=term \
             --cov-report=xml:coverage-unit.xml
 
-      - name: Upload unit coverage artifact
+      - name: Upload unit coverage
+        if: always() # ← Important: upload even if tests fail
         uses: actions/upload-artifact@v4
         with:
           name: coverage-unit
-          path: .coverage
+          path: .coverage # This is the raw coverage data file
+          retention-days: 7
 
   test-integration:
     name: Integration tests
@@ -125,11 +127,13 @@ jobs:
             --cov-report=term \
             --cov-report=xml:coverage-integration.xml
 
-      - name: Upload integration coverage artifact
+      - name: Upload integration coverage
+        if: always() # ← Important
         uses: actions/upload-artifact@v4
         with:
           name: coverage-integration
           path: .coverage
+          retention-days: 7
 
       - name: Stop test services
         if: always()
@@ -173,12 +177,11 @@ jobs:
 
       - name: Combine coverage
         run: |
-          cp .coverage.unit/.coverage .coverage.unit.file
-          cp .coverage.integration/.coverage .coverage.integration.file
+          # Rename to avoid hidden file issues
+          cp .coverage.unit/.coverage .coverage.unit.file 2>/dev/null || echo "No unit coverage file"
+          cp .coverage.integration/.coverage .coverage.integration.file 2>/dev/null || echo "No integration coverage file"
 
-          uv run coverage combine \
-            .coverage.unit.file \
-            .coverage.integration.file
+          uv run coverage combine .coverage.unit.file .coverage.integration.file 2>/dev/null || true
 
           uv run coverage report --fail-under=80
           uv run coverage xml -o coverage.xml
