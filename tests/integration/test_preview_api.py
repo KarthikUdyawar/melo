@@ -33,7 +33,7 @@ FULL_META = {
     "duration": 213.0,
     "thumbnail_url": "https://img.youtube.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
     "channel": "RickAstleyVEVO",
-    "upload_date": "2009-10-25",
+    "upload_date": "20091025",
 }
 
 SPARSE_META: dict[str, object] = {
@@ -71,7 +71,7 @@ class TestPreviewHappyPath:
         assert data["duration"] == FULL_META["duration"]
         assert data["thumbnail_url"] == FULL_META["thumbnail_url"]
         assert data["channel"] == FULL_META["channel"]
-        assert data["upload_date"] == FULL_META["upload_date"]
+        assert data["upload_date"] == "2009-10-25"
 
     def test_youtube_id_extracted_correctly(self, client: TestClient) -> None:
         with patch("app.services.downloader.probe_metadata", return_value=FULL_META):

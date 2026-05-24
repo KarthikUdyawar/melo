@@ -167,7 +167,7 @@ class SongResponse(BaseModel):
     )
     end: float | None = Field(default=None, description="Trim end offset in seconds.")
     speed: float = Field(
-        default=1.0, description="Playback speed multiplier (0.5–4.0)."
+        default=1.0, description="Playback speed multiplier (0.5-4.0)."
     )
     status: Literal["pending", "processing", "done", "failed"] = Field(
         description="Processing job status.",

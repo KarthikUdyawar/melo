@@ -346,7 +346,19 @@ class TestDeletePlaylist:
         song = _make_song(db_session)
         client.post(f"/playlists/{playlist.id}/songs/{song.id}")
         client.delete(f"/playlists/{playlist.id}")
-        # Song still exists
+
+        # Join table row should persist (soft delete only marks playlist.deleted_at)
+        assoc_count = (
+            db_session.query(PlaylistSong)
+            .filter(
+                PlaylistSong.playlist_id == playlist.id,
+                PlaylistSong.song_id == song.id,
+            )
+            .count()
+        )
+        assert assoc_count == 1
+
+        # Song itself is unaffected
         resp = client.get(f"/songs/{song.id}")
         assert resp.status_code == 200
 

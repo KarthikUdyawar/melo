@@ -166,6 +166,15 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
         process_song_task.delay(str(song.id), payload.url)
     except Exception as exc:
         logger.error("celery_dispatch_failed", song_id=str(song.id), error=str(exc))
+        try:
+            song.status = SongStatus.failed
+            db.commit()
+        except Exception as db_exc:
+            logger.error(
+                "celery_dispatch_compensation_failed",
+                song_id=str(song.id),
+                error=str(db_exc),
+            )
         raise
 
     return envelope_response(
@@ -209,10 +218,8 @@ def list_songs(
     ] = 0,
     after: Annotated[
         UUID | None,
-        Query(
-            description="Cursor — UUID v7 of the last seen record. \
-                Enables stable pagination."
-        ),
+        Query(description="Cursor — UUID v7 of the last seen record. \
+                Enables stable pagination."),
     ] = None,
 ) -> JSONResponse:
     """List songs. `count` is total matching records. \
@@ -265,7 +272,8 @@ def list_songs(
                     )
                 else:
                     q = q.filter(
-                        (cursor_col < anchor_val)
+                        cursor_col.is_(None)
+                        | (cursor_col < anchor_val)
                         | (
                             tuple_(cursor_col, Song.id)
                             < tuple_(literal(anchor_val), literal(anchor.id))

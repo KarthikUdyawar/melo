@@ -114,17 +114,16 @@ def _ping_redis() -> bool:
         r = redis.from_url(s.redis_url, socket_connect_timeout=2)
         r.ping()
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 
 def _ping_minio() -> bool:
-    """Return True if MinIO bucket is accessible."""
+    """Return True if MinIO is reachable and the bucket exists."""
     try:
         from app.services.storage import _client
 
         s = get_settings()
-        _client().bucket_exists(s.minio_bucket)
-        return True
-    except Exception:
+        return bool(_client().bucket_exists(s.minio_bucket))
+    except Exception:  # noqa: BLE001
         return False

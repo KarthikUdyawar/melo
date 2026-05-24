@@ -25,6 +25,7 @@ VALID_URLS = [
     "http://www.youtube.com/watch?v=dQw4w9WgXcQ",
     "https://www.youtube.com/shorts/dQw4w9WgXcQ",
     "https://www.youtube.com/embed/dQw4w9WgXcQ",
+    "https://www.youtube.com/live/dQw4w9WgXcQ",
     "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLxxx",
     "  https://www.youtube.com/watch?v=dQw4w9WgXcQ  ",
 ]

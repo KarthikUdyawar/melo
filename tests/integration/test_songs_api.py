@@ -170,6 +170,7 @@ class TestListSongs:
         assert "records" in body["body"]
         assert "count" in body["body"]
         assert isinstance(body["body"]["count"], int)
+        assert "bookmark" in body["body"]
 
     def test_records_contain_expected_fields(
         self, client: TestClient, db_session: Session
@@ -360,12 +361,18 @@ class TestStreamSong:
         mock_minio = MagicMock()
         mock_minio.get_object.return_value = mock_response
 
-        with patch("app.api.songs._client", return_value=mock_minio):
+        with (
+            patch("app.api.songs._client", return_value=mock_minio),
+            patch("app.api.songs.trim_audio") as m_trim,
+            patch("app.api.songs.apply_speed") as m_speed,
+        ):
             resp = client.get(f"/songs/{song.id}/stream")
 
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "audio/mpeg"
         assert resp.content == fake_data
+        m_trim.assert_not_called()
+        m_speed.assert_not_called()
 
     def test_stream_processing_song_returns_409(
         self, client: TestClient, db_session: Session

@@ -137,11 +137,19 @@ def create_playlist(payload: PlaylistCreate, db: DbDep) -> JSONResponse:
     summary="List all playlists ordered by creation date",
 )
 def list_playlists(db: DbDep) -> JSONResponse:
-    """List non-deleted playlists, newest first. Includes song_count per playlist."""
+    """List non-deleted playlists, newest first.
+
+    song_count reflects only non-deleted songs — soft-deleted songs are excluded
+    even when their PlaylistSong join rows remain.
+    """
     rows = (
-        db.query(Playlist, func.count(PlaylistSong.song_id))
+        db.query(Playlist, func.count(Song.id))
         .filter(Playlist.deleted_at.is_(None))
         .outerjoin(PlaylistSong, PlaylistSong.playlist_id == Playlist.id)
+        .outerjoin(
+            Song,
+            (Song.id == PlaylistSong.song_id) & Song.deleted_at.is_(None),
+        )
         .group_by(Playlist.id)
         .order_by(Playlist.created_at.desc())
         .all()
@@ -247,6 +255,16 @@ def add_song_to_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> JSONRes
                     attempt=attempt + 1,
                 )
                 continue
+            if constraint == "uq_playlist_position":
+                logger.error(
+                    "playlist_position_retries_exhausted",
+                    playlist_id=str(playlist_id),
+                    song_id=str(song_id),
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Could not assign a unique position; please retry.",
+                ) from exc
             raise
     else:
         logger.error(
