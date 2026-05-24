@@ -68,6 +68,8 @@ jobs:
         run: uv sync --all-groups
 
       - name: Run unit tests
+        env:
+          COVERAGE_FILE: .coverage.unit-raw
         run: |
           uv run pytest -o addopts='' tests/unit \
             -v \
@@ -80,7 +82,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-unit
-          path: .coverage # This is the raw coverage data file
+          path: .coverage.unit-raw
           retention-days: 7
 
   test-integration:
@@ -120,6 +122,8 @@ jobs:
         run: uv sync --all-groups
 
       - name: Run integration tests
+        env:
+          COVERAGE_FILE: .coverage.integration-raw
         run: |
           uv run pytest -o addopts='' tests/integration \
             -v \
@@ -132,7 +136,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-integration
-          path: .coverage
+          path: .coverage.integration-raw
           retention-days: 7
 
       - name: Stop test services
@@ -167,21 +171,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: coverage-unit
-          path: .coverage.unit
 
       - name: Download integration coverage
         uses: actions/download-artifact@v4
         with:
           name: coverage-integration
-          path: .coverage.integration
 
       - name: Combine coverage
         run: |
-          # Rename to avoid hidden file issues
-          cp .coverage.unit/.coverage .coverage.unit.file 2>/dev/null || echo "No unit coverage file"
-          cp .coverage.integration/.coverage .coverage.integration.file 2>/dev/null || echo "No integration coverage file"
-
-          uv run coverage combine .coverage.unit.file .coverage.integration.file 2>/dev/null || true
+          # The files will download right into the root directory under the names you uploaded them with
+          uv run coverage combine .coverage.unit-raw .coverage.integration-raw
 
           uv run coverage report --fail-under=80
           uv run coverage xml -o coverage.xml
