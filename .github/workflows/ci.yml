@@ -94,7 +94,7 @@ jobs:
             --data-file=.coverage.unit-raw
 
       - name: Upload unit coverage
-        if: always()
+        if: ${{ always() && !vars.ACT }}
         uses: actions/upload-artifact@v4
         with:
           name: coverage-unit
@@ -104,7 +104,7 @@ jobs:
           retention-days: 7
 
       - name: Upload unit JUnit XML
-        if: always()
+        if: ${{ always() && !vars.ACT }}
         uses: actions/upload-artifact@v4
         with:
           name: junit-unit
@@ -112,7 +112,7 @@ jobs:
           retention-days: 7
 
       - name: Upload unit test results to Codecov
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !vars.ACT }}
         uses: codecov/test-results-action@v1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -149,18 +149,14 @@ jobs:
           echo "Waiting for Postgres on port 15432..."
 
           timeout 60 bash -c \
-            'until pg_isready -h localhost -p 15432 -U melo_test -q; do
+            'until (echo > /dev/tcp/localhost/15432) 2>/dev/null; do
               sleep 2
             done'
 
       - name: Verify database connectivity
         run: |
-          PGPASSWORD=melo_test psql \
-            -h localhost \
-            -p 15432 \
-            -U melo_test \
-            -d melo_test \
-            -c "SELECT 1;"
+          docker exec tests-postgres_test-1 \
+            psql -U melo_test -d melo_test -c "SELECT 1;"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -201,7 +197,7 @@ jobs:
           docker compose -f tests/docker-compose.test.yml logs
 
       - name: Upload integration coverage
-        if: always()
+        if: ${{ always() && !vars.ACT }}
         uses: actions/upload-artifact@v4
         with:
           name: coverage-integration
@@ -211,7 +207,7 @@ jobs:
           retention-days: 7
 
       - name: Upload integration JUnit XML
-        if: always()
+        if: ${{ always() && !vars.ACT }}
         uses: actions/upload-artifact@v4
         with:
           name: junit-integration
@@ -219,7 +215,7 @@ jobs:
           retention-days: 7
 
       - name: Upload integration test results to Codecov
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !vars.ACT }}
         uses: codecov/test-results-action@v1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -232,6 +228,7 @@ jobs:
 
   coverage:
     name: Coverage check
+    if: ${{ !vars.ACT }}
     runs-on: ubuntu-latest
 
     needs:
@@ -257,18 +254,21 @@ jobs:
         run: uv sync --group dev
 
       - name: Download unit coverage
+        if: ${{ !vars.ACT }}
         uses: actions/download-artifact@v4
         with:
           name: coverage-unit
           path: artifacts/unit
 
       - name: Download integration coverage
+        if: ${{ !vars.ACT }}
         uses: actions/download-artifact@v4
         with:
           name: coverage-integration
           path: artifacts/integration
 
       - name: Verify downloaded artifacts
+        if: ${{ !vars.ACT }}
         run: |
           set -euxo pipefail
 
@@ -290,6 +290,7 @@ jobs:
           uv run coverage html
 
       - name: Upload HTML coverage report
+        if: ${{ !vars.ACT }}
         uses: actions/upload-artifact@v4
         with:
           name: htmlcov
@@ -297,6 +298,7 @@ jobs:
           retention-days: 7
 
       - name: Upload coverage to Codecov
+        if: ${{ !vars.ACT }}
         uses: codecov/codecov-action@v5
         with:
           files: coverage.xml

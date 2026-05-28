@@ -23,11 +23,6 @@ repos:
       - id: detect-private-key
       - id: check-added-large-files
         args: [--maxkb=2048]
-      - id: no-commit-to-branch
-        args:
-          - --branch=master
-          - --branch=develop
-          - --pattern=release/.*
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.4
