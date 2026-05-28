@@ -16,7 +16,7 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.3.0] — Sprint 3 — 2026-05-24
+## [0.3.0] — Sprint 3 — 2026-05-29
 
 ### Added
 - `POST /songs/preview` — stateless YouTube metadata fetch (no DB write)
