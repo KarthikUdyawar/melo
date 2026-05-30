@@ -79,7 +79,7 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2024-05-01T01-11-10Z
     env_file: .env.staging
     command: server /data --console-address ":9001"
     ports:

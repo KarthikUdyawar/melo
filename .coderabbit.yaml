@@ -1,0 +1,416 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit Configuration — 🎵 Melo
+# Docs: https://docs.coderabbit.ai/configure-coderabbit/
+#
+# Philosophy:
+#   Melo is a self-hosted audio library (FastAPI + Celery + yt-dlp + FFmpeg + MinIO).
+#   pre-commit handles → formatting, linting, types, secrets, whitespace
+#   CodeRabbit handles → pipeline correctness, resource leaks, task safety, API contracts
+
+language: en-US
+early_access: false
+
+# Add these missing properties:
+tone_instructions: > # Optional: Custom tone for reviews/chat
+  "Be precise, focus on correctness, resource safety, and async pipeline robustness.
+  Prefer explicit over implicit."
+enable_free_tier: true # Usually true unless you want to restrict
+inheritance: false # Set to true if using central org config
+knowledge_base: # Optional but recommended
+  code_guidelines: { enabled: true }
+code_generation: # Newer section
+  enabled: false # Set true if you want CodeRabbit to suggest/generate code
+issue_enrichment: # For better issue/PR context
+  enabled: true
+
+# ── Review Settings ───────────────────────────────────────────────────────────
+reviews:
+  profile: chill # Suggestions only, never blocking
+  request_changes_workflow: false
+
+  high_level_summary: true
+  high_level_summary_placeholder: "@coderabbitai summary"
+  poem: false
+  collapse_walkthrough: true
+  review_status: true
+  sequence_diagrams: true # Useful for async pipeline PRs
+  abort_on_close: true
+
+  # ── Labels ─────────────────────────────────────────────────────────────────
+  suggested_labels: true
+  auto_apply_labels: true
+
+  labeling_instructions:
+    # Area
+    - label: "area:api"
+      instructions: >
+        Apply when the PR changes FastAPI routers, request/response schemas,
+        envelope format, validation logic, or any endpoint in app/api/.
+
+    - label: "area:worker"
+      instructions: >
+        Apply when the PR changes Celery tasks, task state machine, retry logic,
+        dedup logic, or anything in app/workers/.
+
+    - label: "area:downloader"
+      instructions: >
+        Apply when the PR changes yt-dlp options, probe_metadata,
+        download_audio, format selectors, or playlist handling in
+        app/services/downloader.py.
+
+    - label: "area:processor"
+      instructions: >
+        Apply when the PR changes FFmpeg trim, atempo speed filters, the
+        stream-copy/re-encode fallback strategy, or app/services/processor.py.
+
+    - label: "area:storage"
+      instructions: >
+        Apply when the PR changes MinIO client usage, bucket management,
+        presigned URLs, or app/services/storage.py.
+
+    - label: "area:db"
+      instructions: >
+        Apply when the PR changes SQLAlchemy models, migrations, DB session
+        management, or anything in app/models/ or app/core/db.py.
+
+    - label: "area:streaming"
+      instructions: >
+        Apply when the PR changes the stream endpoint, generator-based response,
+        temp file lifecycle, or trim/speed pipeline in GET /songs/{id}/stream.
+
+    - label: "area:infra"
+      instructions: >
+        Apply when the PR changes Dockerfile, docker-compose.yml, Makefile,
+        pyproject.toml, uv.lock, or CI workflows.
+
+    - label: "area:config"
+      instructions: >
+        Apply when the PR changes .coderabbit.yaml, .pre-commit-config.yaml,
+        pyproject.toml settings, or app/core/config.py.
+
+    - label: "area:tests"
+      instructions: >
+        Apply when the PR adds or changes pytest tests, conftest.py, fixtures,
+        or test docker-compose.
+
+    - label: "area:docs"
+      instructions: >
+        Apply when the PR changes README.md, sprint docs, PRD, or docstrings.
+
+    # Type
+    - label: "type:feature"
+      instructions: >
+        Apply when the PR introduces new functionality — new endpoint, new
+        processing step, new service integration, or new CLI target.
+
+    - label: "type:bug"
+      instructions: >
+        Apply when the PR fixes a defect — incorrect pipeline behavior, wrong
+        status transition, resource leak, or broken response shape.
+
+    - label: "type:refactor"
+      instructions: >
+        Apply when the PR restructures code without changing behavior —
+        extracting helpers, renaming, reorganising modules or imports.
+
+    - label: "type:chore"
+      instructions: >
+        Apply when the PR is maintenance with no user-facing impact — dependency
+        bumps, lock file updates, comment or log cleanup.
+
+    - label: "type:hotfix"
+      instructions: >
+        Apply when the PR is an urgent fix targeting master or develop directly —
+        e.g. worker crash, MinIO connection failure, task never completing.
+
+    # Risk
+    - label: "risk:breaking-change"
+      instructions: >
+        Apply when the PR changes DB schema without migration, renames/removes
+        API fields, changes envelope structure, or alters Celery task signatures
+        in a way that breaks in-flight tasks.
+
+    - label: "risk:needs-review"
+      instructions: >
+        Apply when the PR touches the Celery pipeline, FFmpeg subprocess calls,
+        MinIO upload/stream logic, or yt-dlp format selectors.
+
+    - label: "risk:safe"
+      instructions: >
+        Apply when the PR is isolated to docs, README, Makefile targets, test
+        fixtures, or purely cosmetic changes.
+
+    # Size
+    - label: "size:small"
+      instructions: >
+        Apply when the PR changes fewer than 50 lines (excluding uv.lock).
+
+    - label: "size:medium"
+      instructions: >
+        Apply when the PR changes 50–200 lines (excluding uv.lock).
+
+    - label: "size:large"
+      instructions: >
+        Apply when the PR changes more than 200 lines (excluding uv.lock).
+
+    # Status
+    - label: "status:wip"
+      instructions: >
+        Apply when the PR title contains WIP, the PR is a draft, or the
+        description states the work is not yet complete.
+
+    - label: "status:ready"
+      instructions: >
+        Apply when the PR is not a draft and the description states it is ready
+        for review.
+
+    # Priority
+    - label: "priority:low"
+      instructions: >
+        Apply when the PR is a nice-to-have with no urgency — cosmetic tweaks,
+        optional features, doc improvements.
+
+    - label: "priority:medium"
+      instructions: >
+        Apply when the PR is planned sprint work to be merged this week.
+
+    - label: "priority:high"
+      instructions: >
+        Apply when the PR fixes an important bug or unblocks other sprint
+        tickets.
+
+    - label: "priority:critical"
+      instructions: >
+        Apply when the PR fixes a crash, data loss, or broken core pipeline that
+        must be merged immediately.
+
+  # ── Auto-review ─────────────────────────────────────────────────────────────
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    base_branches:
+      - master
+      - develop
+      - "release/.*"
+
+  # ── Path-based review instructions ──────────────────────────────────────────
+  path_instructions:
+    - path: "app/workers/tasks.py"
+      instructions: |
+        This is the core Celery ingest pipeline. Focus on:
+
+        TASK STATE MACHINE
+        - Status transitions must follow: pending → processing → done/failed
+        - failed status must always be set on any unhandled exception path
+        - _mark_failed() must be called in every except branch, never skipped
+
+        DEDUP LOGIC
+        - Dedup query must filter Song.status == done AND Song.id != song.id
+        - Dedup must copy file_url, title, duration, thumbnail_url, channel,
+          upload_date from the source record — flag any missing field copies
+
+        RETRY POLICY
+        - Only unknown exceptions should be retried (max_retries=3)
+        - DownloadError and StorageError are non-retryable — must mark failed immediately
+        - MaxRetriesExceededError must also mark failed before re-raising
+
+        RESOURCE CLEANUP
+        - local_path (the /tmp/melo/*.mp3 download) must be deleted in the
+          finally block regardless of success or failure
+        - Flag any code path that could leave a temp file on disk
+
+        SESSION SAFETY
+        - _BaseTask.db is a long-lived session shared across tasks in the same
+          worker process — flag any place that closes or replaces it mid-task
+        - expire_on_commit=False must be set on the session factory
+
+    - path: "app/services/processor.py"
+      instructions: |
+        FFmpeg audio processing service. Focus on:
+
+        ATEMPO FILTER CHAIN
+        - Each atempo stage must be within [0.5, 2.0] — flag any value outside
+          this range in _build_atempo_filters()
+        - speed=1.0 must produce an empty filter string (no processing)
+        - Chaining must be verified: speed=4.0 → "atempo=2.0,atempo=2.0"
+
+        TRIM STRATEGY
+        - Stream copy (-c copy) must be attempted first
+        - Re-encode fallback (-c:a libmp3lame -q:a 2) only on non-zero exit
+        - Corrupt/empty partial output must be deleted before retry
+
+        RESOURCE SAFETY
+        - output_path must be unlinked on any ProcessingError before raising
+        - Flag any exception path that could leave a partial file on disk
+
+        SUBPROCESS SAFETY
+        - All subprocess.run calls must use capture_output=True
+        - Never use shell=True — all args must be a list, never a string
+
+    - path: "app/services/downloader.py"
+      instructions: |
+        yt-dlp wrapper. Focus on:
+
+        FORMAT SELECTOR
+        - Format string must be "140/251/250/249/139/18" — flag any change
+          that adds formats requiring JS runtime (e.g. hls, dash, 22, 137)
+        - extractor_args must always include {"youtube": {"skip": ["hls", "dash"]}}
+
+        PLAYLIST SAFETY
+        - noplaylist: True must be present in both probe and download opts
+        - Flag any removal of this key — playlist URLs hang indefinitely
+
+        ERROR WRAPPING
+        - YtDlpDownloadError must be caught and re-raised as DownloadError
+        - Unexpected exceptions must also be caught and re-raised as DownloadError
+        - Never let raw yt-dlp exceptions propagate to the task layer
+
+        OUTPUT VERIFICATION
+        - After download, out_path.exists() must be checked before returning
+        - Flag any path where a missing output file goes undetected
+
+    - path: "app/api/songs.py"
+      instructions: |
+        FastAPI router for song management. Focus on:
+
+        STREAM ENDPOINT — case matrix must be respected:
+        - (no trim, speed=1.0) → direct MinIO proxy, no temp files
+        - (trim only) → fetch → trim → stream
+        - (speed only) → fetch → speed → stream
+        - (trim + speed) → fetch → trim → speed → stream
+        - Flag any path that skips temp file cleanup on error
+
+        TEMP FILE LIFECYCLE
+        - created_paths list must track every file written to /tmp/melo
+        - finally block in generator must unlink all created_paths
+        - HTTPException path must also unlink synchronously before raising
+
+        RESPONSE CONTRACT
+        - All non-stream endpoints must return envelope_response()
+        - StreamingResponse must NOT be wrapped in envelope
+        - _serialize() must include all Song model fields — flag omissions
+
+        YOUTUBE ID EXTRACTION
+        - _extract_youtube_id() must handle: ?v=, youtu.be, /shorts/, /embed/, /live/
+        - Must raise ValueError (not HTTPException) — caller handles conversion
+
+    - path: "app/services/storage.py"
+      instructions: |
+        MinIO storage service. Focus on:
+
+        UPLOAD
+        - fput_object must always set content_type="audio/mpeg"
+        - S3Error must be caught and re-raised as StorageError
+        - File existence must be verified before attempting upload
+
+        PRESIGNED URLS
+        - Internal MinIO hostname must be rewritten to minio_public_url when set
+        - URL rewrite must preserve path and query string — only scheme+netloc changes
+
+        ERROR PROPAGATION
+        - S3Error → StorageError (always)
+        - Unexpected exceptions → re-raise as-is (never swallow)
+
+    - path: "app/core/db.py"
+      instructions: |
+        SQLAlchemy DB setup. Focus on:
+
+        SESSION FACTORY
+        - expire_on_commit=False is required — flag any removal
+        - get_session() must yield and close in finally, never return
+
+        ENGINE SINGLETON
+        - _engine singleton must be reset in tests via reset_db() — flag
+          any test that uses get_engine() without resetting first
+
+    - path: "app/schemas/song.py"
+      instructions: |
+        Pydantic schemas. Focus on:
+
+        SONGCREATE VALIDATION
+        - speed must be validated in [0.5, 4.0] — flag changes to bounds
+        - start must be >= 0, end must be > 0, start must be < end
+        - URL validator must handle: ?v=, youtu.be, /shorts/, /embed/, /live/
+
+        SONGRESPONSE
+        - All nullable fields must have = None default
+        - created_at must be a str (isoformat), not datetime
+
+    - path: "app/core/config.py"
+      instructions: |
+        Pydantic Settings config. Focus on:
+
+        ENV FILE PRIORITY
+        - APP_ENV must be read from os.environ before pydantic parses anything
+        - force_env_file_priority must merge .env.* values over defaults
+
+        PRODUCTION GUARDS
+        - minio_secure=False in production must emit a warning, not silently pass
+        - Flag any removal of the _validate_minio_secure_in_prod validator
+
+    - path: "tests/**"
+      instructions: |
+        Pytest test suite. Focus on:
+
+        ISOLATION
+        - Each test must use the rolled-back db_session fixture — flag any
+          test that calls db.commit() without using the savepoint pattern
+        - Unit tests must not make real network calls — flag missing mocks
+          for yt_dlp.YoutubeDL, Minio, and subprocess.run
+
+        COVERAGE
+        - New service functions must have corresponding unit tests
+        - New API endpoints must have corresponding integration tests
+
+        FIXTURE SCOPE
+        - Module-level fixtures must not be defined inside a class
+        - docker_services fixtures are session-scoped — flag function-scoped usage
+
+    - path: "docker-compose.yml"
+      instructions: |
+        Focus on:
+        - All services must have restart: unless-stopped or on-failure
+        - Secrets must use environment variables, never hardcoded values
+        - worker_tmp volume must be shared between api and worker services
+        - MinIO healthcheck must be present
+
+    - path: "Dockerfile"
+      instructions: |
+        Focus on:
+        - Base image must be pinned to a specific version tag
+        - ffmpeg must be installed via apt (not pip)
+        - App must not run as root — check for USER directive
+        - No secrets in ENV or RUN steps
+        - uv must be used for dependency installation, not pip
+
+    - path: "pyproject.toml"
+      instructions: |
+        Focus on:
+        - requires-python must be >= 3.12
+        - New dependencies must go in [project.dependencies], dev-only in [dependency-groups.dev]
+        - mypy overrides must not blanket-disable error codes beyond the approved list
+        - Coverage fail-under must not be lowered below 80
+
+    - path: ".pre-commit-config.yaml"
+      instructions: |
+        Focus on:
+        - Hook versions must be pinned (no "latest")
+        - mypy additional_dependencies must stay in sync with pyproject.toml deps
+        - language_version must match requires-python (3.12)
+        - no-commit-to-branch must protect master, develop, and release/*
+
+  # ── Ignored paths ────────────────────────────────────────────────────────────
+  path_filters:
+    - "!uv.lock"
+    - "!**/__pycache__/**"
+    - "!*.pyc"
+    - "!htmlcov/**"
+    - "!coverage.xml"
+    - "!.pytest_cache/**"
+    - "!**/.mypy_cache/**"
+
+# ── Chat ──────────────────────────────────────────────────────────────────────
+chat:
+  auto_reply: true

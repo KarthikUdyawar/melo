@@ -1,10 +1,14 @@
-# app/services/downloader.py
-"""
-Audio downloader — wraps yt-dlp for Melo.
+"""Audio downloader service — wraps yt-dlp for Melo.
+
+This module provides functions to extract YouTube video IDs, probe metadata
+without downloading, and download audio tracks as MP3 files.
 """
 
+# app/services/downloader.py
+import re
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypedDict, cast
+from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 from yt_dlp.utils import DownloadError as YtDlpDownloadError
@@ -14,11 +18,91 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 # Worker container writes downloads here; volume `worker_tmp` is mounted at /tmp/melo
-_DOWNLOAD_DIR = Path("/tmp/melo")
+_DOWNLOAD_DIR = Path("/tmp/melo")  # nosec B108
+"""Module-level constants and configuration for the downloader service."""
+
+YOUTUBE_DOMAINS = {
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "youtu.be",
+}
+_YOUTUBE_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+class SongMeta(TypedDict, total=False):
+    """Metadata returned by probe_metadata() and download_audio().
+
+    All fields are optional.
+    """
+
+    title: str | None
+    duration: float | None
+    thumbnail_url: str | None
+    channel: str | None
+    upload_date: str | None
 
 
 class DownloadError(Exception):
-    """Raised when yt-dlp fails to download or extract audio."""
+    """Raised when yt-dlp fails to download or extract audio.
+
+    This is the public-facing exception for the downloader service.
+    """
+
+
+# ---------------------------------------------------------------------------
+# YouTube ID extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_youtube_id(url: str) -> str:
+    """Extract YouTube video ID from any supported URL format.
+
+    Supports:
+        - ?v= query parameter
+        - youtu.be short URLs
+        - /shorts/, /embed/, /live/, /v/ paths
+
+    Args:
+        url: YouTube URL (with or without protocol).
+
+    Returns:
+        The 11-character YouTube video ID.
+
+    Raises:
+        ValueError: If no valid 11-character video ID can be extracted or
+            the domain is not a supported YouTube domain.
+    """
+    normalized_url = url if "://" in url else f"https://{url}"
+    parsed = urlparse(normalized_url)
+    domain = parsed.netloc.lower()
+
+    if domain not in YOUTUBE_DOMAINS:
+        raise ValueError(f"Invalid YouTube domain: {domain!r}")
+
+    # 1. Query param (?v=...)
+    query = parse_qs(parsed.query)
+    if "v" in query:
+        vid = query["v"][0]
+        if _YOUTUBE_ID_REGEX.match(vid):
+            return vid
+
+    # 2. Path-based formats (/shorts/, /embed/, /live/, /v/)
+    path_match = re.search(
+        r"/(?:shorts|embed|live|v)/([A-Za-z0-9_-]{11})(?:$|[/?#&])",
+        parsed.path,
+    )
+    if path_match:
+        return path_match.group(1)
+
+    # 3. Short URL direct path segment (youtu.be/ID)
+    path_segments = [s for s in parsed.path.split("/") if s]
+    if path_segments:
+        last_segment = path_segments[-1]
+        if _YOUTUBE_ID_REGEX.match(last_segment):
+            return last_segment
+
+    raise ValueError(f"Could not extract valid YouTube video ID from: {url!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -26,15 +110,18 @@ class DownloadError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def probe_metadata(url: str) -> dict:
-    """
-    Extract metadata for *url* without downloading any media.
+def probe_metadata(url: str) -> SongMeta:
+    """Extract metadata for a YouTube URL without downloading media.
 
-    Returns a dict with keys:
-        title, duration, thumbnail_url, channel, upload_date
+    Args:
+        url: YouTube URL to probe.
+
+    Returns:
+        SongMeta dictionary containing title, duration, thumbnail_url,
+        channel, and upload_date.
 
     Raises:
-        DownloadError: on any yt-dlp failure.
+        DownloadError: On any yt-dlp failure or unexpected error.
     """
     ydl_opts: dict[str, object] = {
         "quiet": True,
@@ -65,7 +152,7 @@ def probe_metadata(url: str) -> dict:
     if not info:
         raise DownloadError(f"yt-dlp returned no info for {url!r}")
 
-    result = {
+    result: SongMeta = {
         "title": info.get("title"),
         "duration": info.get("duration"),
         "thumbnail_url": info.get("thumbnail"),
@@ -90,19 +177,17 @@ def probe_metadata(url: str) -> dict:
 
 
 def download_audio(url: str, song_id: str) -> tuple[Path, float | None]:
-    """
-    Download the best audio track for *url* and transcode it to mp3.
+    """Download the best available audio track and convert it to MP3.
 
     Args:
-        url:     Full YouTube URL (already validated by SongCreate).
-        song_id: UUID string — used as the output filename so the worker
-                 can locate the file without guessing.
+        url: Full YouTube URL (should already be validated).
+        song_id: UUID string used as the output filename.
 
     Returns:
-        Tuple of (path to <song_id>.mp3, duration in seconds or None).
+        Tuple of (path to the downloaded MP3 file, duration in seconds or None).
 
     Raises:
-        DownloadError: on any yt-dlp failure.
+        DownloadError: On any yt-dlp failure or if the output file is missing.
     """
     _DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -124,7 +209,7 @@ def download_audio(url: str, song_id: str) -> tuple[Path, float | None]:
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
-            }
+            },
         ],
         "quiet": True,
         "no_warnings": False,
@@ -182,7 +267,7 @@ def download_audio(url: str, song_id: str) -> tuple[Path, float | None]:
             expected_path=str(out_path),
         )
         raise DownloadError(
-            f"Expected output file not found after download: {out_path}"
+            f"Expected output file not found after download: {out_path}",
         )
 
     duration: float | None = None
@@ -204,7 +289,7 @@ def download_audio(url: str, song_id: str) -> tuple[Path, float | None]:
 
 
 class _YtDlpLogger:
-    """Bridge yt-dlp's internal logger to structlog."""
+    """Internal adapter that bridges yt-dlp's logger calls to structlog."""
 
     def debug(self, msg: str) -> None:
         logger.debug(msg, source="yt-dlp")

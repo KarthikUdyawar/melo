@@ -1,3 +1,6 @@
+"""FastAPI response helpers for consistent API envelopes."""
+
+# app/api/responses.py
 from typing import Any
 
 from fastapi.responses import JSONResponse
@@ -10,22 +13,12 @@ def envelope_response(
     message: str,
     status_code: int = 200,
 ) -> JSONResponse:
-    envelope = Envelope(status_code=status_code, message=message, body=data)
-    return JSONResponse(
+    """Wrap data in a standard Envelope response."""
+    envelope: Envelope[dict[str, object]] = Envelope(
         status_code=status_code,
-        content=envelope.model_dump(mode="json"),
+        message=message,
+        body=data,
     )
-
-
-def paginated_response(
-    records: list[Any],
-    count: int,
-    message: str,
-    status_code: int = 200,
-) -> JSONResponse:
-    body = {"records": records, "count": count}
-    envelope = Envelope(status_code=status_code, message=message, body=body)
     return JSONResponse(
-        status_code=status_code,
-        content=envelope.model_dump(mode="json"),
+        status_code=status_code, content=envelope.model_dump(mode="json")
     )

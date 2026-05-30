@@ -1,0 +1,70 @@
+name: Bug Report
+description: Something is broken — file it here
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Fill in as much detail as possible — incomplete reports are hard to action.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Clear description of the bug.
+      placeholder: "GET /songs/{id}/stream returns 500 when speed=1.0 and no trim is set."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to trigger the bug.
+      placeholder: |
+        1. POST /songs with url=... speed=1.0
+        2. Wait for status=done
+        3. GET /songs/{id}/stream
+        4. Observe 500
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      placeholder: "Should stream the mp3 directly from MinIO."
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "`make logs-api` or `make logs-worker` output. **Redact secrets, tokens, credentials, and PII before posting** (issues are public)."
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: Melo version / commit SHA
+      placeholder: "0.1.0 / abc1234"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Docker Compose (staging)
+        - Local dev (development)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else — OS, Python version, yt-dlp version, etc.

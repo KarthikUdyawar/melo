@@ -1,0 +1,305 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - develop
+      - master
+
+  pull_request:
+    branches:
+      - develop
+      - master
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Run pre-commit hooks
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
+  test-unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    permissions:
+      contents: read
+
+    env:
+      APP_ENV: test
+      DATABASE_URL: "sqlite:///:memory:"
+      LOG_LEVEL: warning
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Run unit tests with coverage
+        run: |
+          set -euxo pipefail
+
+          uv run coverage run \
+            --data-file=.coverage.unit-raw \
+            -m pytest \
+            -o addopts='' \
+            -o junit_family=legacy \
+            --junitxml=junit-unit.xml \
+            tests/unit \
+            -v
+
+          ls -lah
+
+          test -f .coverage.unit-raw
+
+          uv run coverage xml \
+            --data-file=.coverage.unit-raw \
+            -o coverage-unit.xml
+
+          uv run coverage report \
+            --data-file=.coverage.unit-raw
+
+      - name: Upload unit coverage
+        if: ${{ always() && !env.ACT }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: coverage-unit
+          path: .coverage.unit-raw
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload unit JUnit XML
+        if: ${{ always() && !env.ACT }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: junit-unit
+          path: junit-unit.xml
+          retention-days: 7
+
+      - name: Upload unit test results to Codecov
+        if: ${{ !cancelled() && !env.ACT }}
+        uses: codecov/test-results-action@v1.2.1 # v1.2.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: junit-unit.xml
+          flags: unit
+
+  test-integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    permissions:
+      contents: read
+
+    env:
+      APP_ENV: test
+      LOG_LEVEL: warning
+      LOG_FILE_PATH: /tmp/melo-test.log
+      DATABASE_URL: postgresql://melo_test:melo_test@localhost:15432/melo_test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Start test services
+        run: |
+          set -euxo pipefail
+          docker compose -f tests/docker-compose.test.yml up -d
+          echo "Waiting for Postgres on port 15432..."
+          timeout 60 bash -c \
+            'until [ "$(docker inspect --format="{{.State.Health.Status}}" tests-postgres_test-1)" = "healthy" ]; do
+              sleep 2
+            done'
+
+      - name: Verify database connectivity
+        run: |
+          docker compose -f tests/docker-compose.test.yml exec -T postgres_test \
+          psql -U melo_test -d melo_test -c "SELECT 1;"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Run integration tests with coverage
+        run: |
+          set -euxo pipefail
+
+          uv run coverage run \
+            --data-file=.coverage.integration-raw \
+            -m pytest \
+            -o addopts='' \
+            -o junit_family=legacy \
+            --junitxml=junit-integration.xml \
+            tests/integration \
+            -v
+
+          ls -lah
+
+          test -f .coverage.integration-raw
+
+          uv run coverage xml \
+            --data-file=.coverage.integration-raw \
+            -o coverage-integration.xml
+
+          uv run coverage report \
+            --data-file=.coverage.integration-raw
+
+      - name: Debug docker services
+        if: failure()
+        run: |
+          docker compose -f tests/docker-compose.test.yml ps
+          docker compose -f tests/docker-compose.test.yml logs
+
+      - name: Upload integration coverage
+        if: ${{ always() && !env.ACT }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: coverage-integration
+          path: .coverage.integration-raw
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload integration JUnit XML
+        if: ${{ always() && !env.ACT }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: junit-integration
+          path: junit-integration.xml
+          retention-days: 7
+
+      - name: Upload integration test results to Codecov
+        if: ${{ !cancelled() && !env.ACT }}
+        uses: codecov/test-results-action@v1.2.1 # v1.2.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: junit-integration.xml
+          flags: integration
+
+      - name: Stop test services
+        if: always()
+        run: docker compose -f tests/docker-compose.test.yml down -v
+
+  coverage:
+    name: Coverage check
+    runs-on: ubuntu-latest
+
+    needs:
+      - test-unit
+      - test-integration
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+        if: ${{ !env.ACT }}
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup uv
+        if: ${{ !env.ACT }}
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        if: ${{ !env.ACT }}
+        run: uv sync --group dev
+
+      - name: Download unit coverage
+        if: ${{ !env.ACT }}
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: coverage-unit
+          path: artifacts/unit
+
+      - name: Download integration coverage
+        if: ${{ !env.ACT }}
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: coverage-integration
+          path: artifacts/integration
+
+      - name: Verify downloaded artifacts
+        if: ${{ !env.ACT }}
+        run: |
+          set -euxo pipefail
+
+          find artifacts -type f
+
+          test -f artifacts/unit/.coverage.unit-raw
+          test -f artifacts/integration/.coverage.integration-raw
+
+      - name: Combine coverage
+        if: ${{ !env.ACT }}
+        run: |
+          set -euxo pipefail
+
+          uv run coverage combine \
+            artifacts/unit/.coverage.unit-raw \
+            artifacts/integration/.coverage.integration-raw
+
+          uv run coverage report --fail-under=80
+          uv run coverage xml -o coverage.xml
+          uv run coverage html
+
+      - name: Upload HTML coverage report
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: htmlcov
+          path: htmlcov
+          retention-days: 7
+
+      - name: Upload coverage to Codecov
+        if: ${{ !env.ACT }}
+        uses: codecov/codecov-action@v6.0.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml

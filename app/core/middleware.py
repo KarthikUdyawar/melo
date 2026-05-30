@@ -1,15 +1,16 @@
-"""
-Request logging middleware for Melo.
+"""Request logging middleware for Melo.
 
 Logs one structured line on request receipt and one on response dispatch.
 Skips verbose logging for ``/health`` (still logs errors there).
 
 Fields logged:
-  request  → method, path, query_params, client_ip
-  response → status_code, duration_ms
+    request  → method, path, query_params, client_ip
+    response → status_code, duration_ms
 """
 
+# app/core/middleware.py
 import time
+from collections.abc import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -23,7 +24,30 @@ _SKIP_PATHS = frozenset({"/health"})
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next) -> Response:  # noqa: ANN001
+    """Middleware that logs structured request and response information.
+
+    Logs one line when a request is received and one line when the response is
+    sent. Skips verbose request/response logging for the ``/health`` endpoint
+    (errors are still logged).
+
+    Note:
+        This middleware uses structlog-style logging via ``get_logger``.
+    """
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        """Process the request, log it, and log the response.
+
+        Args:
+            request: The incoming Starlette request object.
+            call_next: The next middleware/handler in the chain to call.
+
+        Returns:
+            The response from the downstream handler.
+        """
         path = request.url.path
         skip = path in _SKIP_PATHS
 
@@ -32,7 +56,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 "request",
                 method=request.method,
                 path=path,
-                query_params=str(request.query_params) or None,
+                query_params=_redacted_query_params(request) or None,
                 client_ip=_client_ip(request),
             )
 
@@ -54,10 +78,28 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 
 def _client_ip(request: Request) -> str:
-    """Return real client IP, respecting X-Forwarded-For if present."""
+    """Return the real client IP, preferring X-Forwarded-For header.
+
+    Respects the ``X-Forwarded-For`` header if present (takes the first IP).
+    Falls back to ``request.client.host`` or "unknown".
+
+    Args:
+        request: The Starlette request object.
+
+    Returns:
+        Client IP address as string.
+    """
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
     if request.client:
         return request.client.host
     return "unknown"
+
+
+def _redacted_query_params(request: Request) -> dict[str, str]:
+    sensitive = {"token", "access_token", "password", "secret", "api_key", "key"}
+    redacted: dict[str, str] = {}
+    for key, value in request.query_params.multi_items():
+        redacted[key] = "***" if key.lower() in sensitive else value
+    return redacted

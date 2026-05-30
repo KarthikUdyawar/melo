@@ -1,67 +1,157 @@
+"""Song-related API endpoints."""
+
 # app/api/songs.py
-import re
+from collections.abc import Generator
+from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from typing import Annotated, Any
+from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import literal, tuple_
+from sqlalchemy.sql.elements import ColumnElement
 
-from app.api.responses import envelope_response, paginated_response
+from app.api._song_utils import serialize_song
+from app.api.responses import envelope_response
 from app.core.config import get_settings
 from app.core.deps import DbDep
 from app.core.logging import get_logger
+from app.models.favorite import Favorite
 from app.models.song import Song, SongStatus
-from app.schemas.song import SongCreate, SongResponse
+from app.schemas.song import (
+    PreviewRequest,
+    SongCreate,
+    SongPreviewResponse,
+)
+from app.services.downloader import extract_youtube_id
+from app.services.processor import ProcessingError, apply_speed, trim_audio
 from app.services.storage import _client
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/songs", tags=["songs"])
 
-YOUTUBE_DOMAINS = {
-    "youtube.com",
-    "www.youtube.com",
-    "m.youtube.com",
-    "youtu.be",
-}
-
-YOUTUBE_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{11}$")
-
-_TMP_DIR = Path("/tmp/melo")
+_TMP_DIR = Path("/tmp/melo")  # nosec B108
 
 
-def _serialize(song: Song) -> dict:
-    return SongResponse(
-        id=song.id,
-        title=song.title,
-        youtube_id=song.youtube_id,
-        file_url=song.file_url,
-        duration=song.duration,
-        start=song.start,
-        end=song.end,
-        speed=song.speed,
-        status=song.status.value,
-        thumbnail_url=song.thumbnail_url,
-        channel=song.channel,
-        upload_date=song.upload_date,
-        created_at=song.created_at.isoformat(),
-    ).model_dump(mode="json")
+# ── query param enums ─────────────────────────────────────────────────────────
 
 
-@router.post("", status_code=status.HTTP_202_ACCEPTED)
+class SortBy(StrEnum):
+    """Allowed sort fields for GET /songs."""
+
+    created_at = "created_at"
+    song_title = "title"
+    duration = "duration"
+
+
+class SortOrder(StrEnum):
+    """Sort direction for GET /songs."""
+
+    asc = "asc"
+    desc = "desc"
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+
+def build_content_disposition(filename: str) -> str:
+    """Build RFC 5987 compliant Content-Disposition header with UTF-8 support."""
+    cleaned = (
+        filename.replace("\\", "_")
+        .replace('"', "'")
+        .replace("\r", "")
+        .replace("\n", "")
+    )
+    ascii_fallback = cleaned.encode("latin-1", "ignore").decode() or "download.mp3"
+    utf8_encoded = quote(cleaned)
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
+
+
+def _sort_column(sort_by: SortBy, order: SortOrder) -> ColumnElement[Any]:
+    col = {
+        SortBy.created_at: Song.created_at,
+        SortBy.song_title: Song.title,
+        SortBy.duration: Song.duration,
+    }[sort_by]
+    return col.asc().nulls_last() if order == SortOrder.asc else col.desc().nulls_last()
+
+
+def _cursor_column(sort_by: SortBy) -> ColumnElement[Any]:
+    return {  # type: ignore[return-value]
+        SortBy.created_at: Song.created_at,
+        SortBy.song_title: Song.title,
+        SortBy.duration: Song.duration,
+    }[sort_by]
+
+
+def _cursor_value(song: Song, sort_by: SortBy) -> object:
+    return {
+        SortBy.created_at: song.created_at,
+        SortBy.song_title: song.title,
+        SortBy.duration: song.duration,
+    }[sort_by]
+
+
+# ── endpoints ─────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/preview",
+    summary="Preview YouTube metadata without persisting",
+    responses={
+        422: {"description": "Invalid YouTube URL"},
+        502: {"description": "yt-dlp fetch failed"},
+    },
+)
+def preview_song(payload: PreviewRequest) -> JSONResponse:
+    """Fetch YouTube metadata (title, duration, thumbnail) without any DB write."""
+    from app.services.downloader import DownloadError, probe_metadata
+
+    logger.info("preview_request", url=payload.url)
+
+    try:
+        youtube_id = extract_youtube_id(payload.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        meta = probe_metadata(payload.url)
+    except DownloadError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Failed to fetch metadata: {exc}"
+        ) from exc
+
+    preview = SongPreviewResponse(
+        youtube_id=youtube_id,
+        title=meta.get("title"),
+        duration=meta.get("duration"),
+        thumbnail_url=meta.get("thumbnail_url"),
+        channel=meta.get("channel"),
+        upload_date=meta.get("upload_date"),
+    )
+    return envelope_response(
+        preview.model_dump(mode="json"), "Metadata fetched successfully."
+    )
+
+
+@router.post(
+    "",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Submit a YouTube URL for async download and processing",
+    responses={422: {"description": "Validation error"}},
+)
 def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
-    """
-    Submit a YouTube URL for async download + processing.
-
-    - First submission: creates record, enqueues Celery task.
-    - Same youtube_id + different trim: creates new record, task handles dedup
-      (reuses existing MinIO object, no re-download).
-    """
+    """Submit a YouTube URL — returns 202 immediately, processing happens async."""
     logger.info("create_song_request", url=payload.url, speed=payload.speed)
 
-    youtube_id = _extract_youtube_id(payload.url)
-    logger.debug("youtube_id_extracted", youtube_id=youtube_id)
+    try:
+        youtube_id = extract_youtube_id(payload.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     song = Song(
         youtube_id=youtube_id,
@@ -70,95 +160,229 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
         speed=payload.speed,
         status=SongStatus.pending,
     )
-
     db.add(song)
     db.commit()
     db.refresh(song)
 
-    logger.info(
-        "song_created",
-        song_id=str(song.id),
-        youtube_id=youtube_id,
-        status=song.status.value,
-    )
+    logger.info("song_created", song_id=str(song.id), youtube_id=youtube_id)
 
     from app.workers.tasks import process_song_task
 
     try:
-        process_song_task.delay(
-            str(song.id),
-            payload.url,
-            payload.start,
-            payload.end,
-            payload.speed,
-        )
-        logger.info("song_processing_dispatched", song_id=str(song.id))
+        process_song_task.delay(str(song.id), payload.url)
     except Exception as exc:
         logger.error("celery_dispatch_failed", song_id=str(song.id), error=str(exc))
+        try:
+            song.status = SongStatus.failed
+            db.commit()
+        except Exception as db_exc:
+            logger.error(
+                "celery_dispatch_compensation_failed",
+                song_id=str(song.id),
+                error=str(db_exc),
+            )
         raise
 
     return envelope_response(
-        _serialize(song), "Song submitted.", status.HTTP_202_ACCEPTED
+        serialize_song(song, db), "Song submitted.", status.HTTP_202_ACCEPTED
     )
 
 
-@router.get("")
-def list_songs(db: DbDep) -> JSONResponse:
-    """List all songs with their current processing status."""
-    logger.debug("list_songs_request")
-    songs = db.query(Song).order_by(Song.created_at.desc()).all()
-    logger.info("songs_retrieved", count=len(songs))
-    records = [_serialize(s) for s in songs]
-    return paginated_response(records, len(records), "Songs retrieved.")
+@router.get(
+    "",
+    summary="List songs with filtering, sorting, and cursor pagination",
+)
+def list_songs(
+    db: DbDep,
+    status_filter: Annotated[
+        SongStatus | None,
+        Query(alias="status", description="Filter by processing status."),
+    ] = None,
+    favorite: Annotated[
+        bool | None,
+        Query(description="Filter to favorited (true) or unfavorited (false) songs."),
+    ] = None,
+    search: Annotated[
+        str | None,
+        Query(
+            min_length=1, max_length=200, description="Case-insensitive title search."
+        ),
+    ] = None,
+    sort_by: Annotated[
+        SortBy,
+        Query(description="Field to sort by. Defaults to created_at."),
+    ] = SortBy.created_at,
+    order: Annotated[
+        SortOrder,
+        Query(description="Sort direction. Defaults to desc."),
+    ] = SortOrder.desc,
+    limit: Annotated[
+        int, Query(ge=1, le=1000, description="Max records per page.")
+    ] = 50,
+    offset: Annotated[
+        int, Query(ge=0, description="Offset (ignored when after is set).")
+    ] = 0,
+    after: Annotated[
+        UUID | None,
+        Query(description="Cursor — UUID v7 of the last seen record. \
+                Enables stable pagination."),
+    ] = None,
+) -> JSONResponse:
+    """List songs. `count` is total matching records. \
+        `bookmark` is last record's ID for next page."""
+    logger.debug("list_songs_request", status=status_filter, search=search)
+
+    q = db.query(Song).filter(Song.deleted_at.is_(None))
+
+    if status_filter is not None:
+        q = q.filter(Song.status == status_filter)
+
+    if favorite is True:
+        q = q.join(Favorite, Favorite.song_id == Song.id).filter(
+            Favorite.deleted_at.is_(None)
+        )
+    elif favorite is False:
+        q = q.outerjoin(
+            Favorite,
+            (Favorite.song_id == Song.id) & Favorite.deleted_at.is_(None),
+        ).filter(Favorite.id.is_(None))
+
+    if search is not None:
+        q = q.filter(Song.title.ilike(f"%{search}%"))
+
+    total = q.count()
+
+    id_tiebreaker = Song.id.asc() if order == SortOrder.asc else Song.id.desc()
+    q = q.order_by(_sort_column(sort_by, order), id_tiebreaker)
+
+    if after is not None:
+        anchor = db.query(Song).filter(Song.id == after).first()
+        if anchor is not None:
+            anchor_val = _cursor_value(anchor, sort_by)
+            cursor_col = _cursor_column(sort_by)
+
+            if anchor_val is None:
+                if order == SortOrder.asc:
+                    q = q.filter(cursor_col.is_(None), Song.id > anchor.id)
+                else:
+                    q = q.filter(cursor_col.is_(None), Song.id < anchor.id)
+            else:
+                if order == SortOrder.asc:
+                    q = q.filter(
+                        cursor_col.is_(None)
+                        | (cursor_col > anchor_val)
+                        | (
+                            tuple_(cursor_col, Song.id)
+                            > tuple_(literal(anchor_val), literal(anchor.id))
+                        ),
+                    )
+                else:
+                    q = q.filter(
+                        cursor_col.is_(None)
+                        | (cursor_col < anchor_val)
+                        | (
+                            tuple_(cursor_col, Song.id)
+                            < tuple_(literal(anchor_val), literal(anchor.id))
+                        ),
+                    )
+    else:
+        q = q.offset(offset)
+
+    songs = q.limit(limit).all()
+
+    song_ids = [s.id for s in songs]
+    favorite_ids: set[UUID] = set()
+    if song_ids:
+        favorite_ids = {
+            sid
+            for (sid,) in db.query(Favorite.song_id)
+            .filter(Favorite.song_id.in_(song_ids), Favorite.deleted_at.is_(None))
+            .all()
+        }
+
+    records = [serialize_song(s, db, is_favorite=(s.id in favorite_ids)) for s in songs]
+    bookmark = records[-1]["id"] if records else None
+
+    return envelope_response(
+        {"records": records, "count": total, "bookmark": bookmark},
+        "Songs retrieved.",
+    )
 
 
-@router.get("/{song_id}")
+@router.get(
+    "/{song_id}",
+    summary="Get song detail and current status",
+    responses={404: {"description": "Song not found"}},
+)
 def get_song(song_id: UUID, db: DbDep) -> JSONResponse:
     """Retrieve a single song by ID."""
-    logger.debug("get_song_request", song_id=str(song_id))
-    song = db.query(Song).filter(Song.id == song_id).first()
-
+    song = db.query(Song).filter(Song.id == song_id, Song.deleted_at.is_(None)).first()
     if not song:
-        logger.warning("song_not_found", song_id=str(song_id))
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Song {song_id} not found.",
-        )
-
-    logger.info("song_retrieved", song_id=str(song_id))
-    return envelope_response(_serialize(song), "Song retrieved.")
+        raise HTTPException(status_code=404, detail=f"Song {song_id} not found.")
+    return envelope_response(serialize_song(song, db), "Song retrieved.")
 
 
-@router.get("/{song_id}/stream")
+@router.delete(
+    "/{song_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Soft-delete a song and remove its file from MinIO",
+    responses={404: {"description": "Song not found or already deleted"}},
+)
+def delete_song(song_id: UUID, db: DbDep) -> Response:
+    """Soft-delete a song. Sets deleted_at timestamp and removes the MinIO object."""
+    song = db.query(Song).filter(Song.id == song_id, Song.deleted_at.is_(None)).first()
+    if not song:
+        raise HTTPException(status_code=404, detail=f"Song {song_id} not found.")
+
+    if song.file_url:
+        try:
+            s = get_settings()
+            client = _client()
+            client.remove_object(s.minio_bucket, song.file_url)
+            logger.info(
+                "song_file_removed", song_id=str(song_id), file_url=song.file_url
+            )
+        except Exception as exc:
+            # Log but don't block the soft delete — object may already be gone
+            logger.warning("minio_remove_failed", song_id=str(song_id), error=str(exc))
+
+    song.deleted_at = datetime.now(UTC)
+    db.commit()
+
+    logger.info("song_soft_deleted", song_id=str(song_id))
+    return Response(status_code=204)
+
+
+@router.get(
+    "/{song_id}/stream",
+    summary="Stream song audio with optional on-the-fly trim and speed",
+    responses={
+        404: {"description": "Song not found"},
+        409: {"description": "Song not ready (status is not done)"},
+        500: {"description": "Song has no file_url"},
+        502: {"description": "MinIO or FFmpeg error"},
+    },
+    openapi_extra={
+        "responses": {
+            "200": {
+                "description": "Audio stream",
+                "content": {"audio/mpeg": {}},
+            }
+        }
+    },
+)
 def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
-    """
-    Stream the audio for a done song.
-
-    Trim-on-stream logic
-    --------------------
-    - No trim params (start=None, end=None): stream raw MinIO object directly.
-    - Trim params set: fetch to /tmp/melo, run FFmpeg trim, stream result, cleanup.
-
-    NOTE: StreamingResponse intentionally skips envelope (binary stream).
-    """
-    logger.debug("stream_request", song_id=str(song_id))
-
-    song = db.query(Song).filter(Song.id == song_id).first()
-
+    """Stream mp3. Direct MinIO proxy when no trim/speed; FFmpeg pipeline otherwise."""
+    song = db.query(Song).filter(Song.id == song_id, Song.deleted_at.is_(None)).first()
     if not song:
-        logger.warning("stream_song_not_found", song_id=str(song_id))
         raise HTTPException(status_code=404, detail=f"Song {song_id} not found.")
 
     if song.status != SongStatus.done:
-        logger.warning(
-            "stream_not_ready", song_id=str(song_id), status=song.status.value
-        )
         raise HTTPException(
             status_code=409, detail=f"Song not ready. Status: {song.status.value}"
         )
 
     if not song.file_url:
-        logger.error("missing_file_url", song_id=str(song_id))
         raise HTTPException(
             status_code=500, detail="Song marked done but has no file_url."
         )
@@ -167,126 +391,96 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
     client = _client()
     filename = f"{song.title or song_id}.mp3"
 
-    # ── No trim: stream directly from MinIO ──────────────────────────────────
-    if song.start is None and song.end is None:
+    has_trim = song.start is not None or song.end is not None
+    has_speed = song.speed is not None and song.speed != 1.0
+
+    if not has_trim and not has_speed:
         try:
-            logger.debug(
-                "stream_direct",
-                song_id=str(song_id),
-                bucket=s.minio_bucket,
-                file_url=song.file_url,
-            )
             response = client.get_object(s.minio_bucket, song.file_url)
         except Exception as exc:
-            logger.error("stream_fetch_error", song_id=str(song_id), error=str(exc))
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        logger.info(
-            "stream_started", song_id=str(song_id), filename=filename, mode="direct"
-        )
-        return StreamingResponse(
-            response.stream(32 * 1024),
-            media_type="audio/mpeg",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
+        def _proxy_stream() -> Generator[bytes, None, None]:
+            try:
+                yield from response.stream(32 * 1024)
+            finally:
+                response.close()
+                response.release_conn()
 
-    # ── Trim: fetch → FFmpeg → stream → cleanup ──────────────────────────────
-    from app.services.processor import ProcessingError, trim_audio
+        return StreamingResponse(
+            _proxy_stream(),
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": build_content_disposition(filename)},
+        )
 
     original_path = _TMP_DIR / f"{song_id}_original.mp3"
     trimmed_path = _TMP_DIR / f"{song_id}_trimmed.mp3"
+    speed_path = _TMP_DIR / f"{song_id}_speed.mp3"
+    created_paths: list[Path] = []
 
     try:
-        # 1. Fetch from MinIO to local tmp
         _TMP_DIR.mkdir(parents=True, exist_ok=True)
-        logger.debug(
-            "stream_fetch_for_trim",
-            song_id=str(song_id),
-            start=song.start,
-            end=song.end,
-        )
+
         try:
             minio_response = client.get_object(s.minio_bucket, song.file_url)
-            with original_path.open("wb") as f:
-                for chunk in minio_response.stream(32 * 1024):
-                    f.write(chunk)
+            try:
+                created_paths.append(original_path)
+                with original_path.open("wb") as f:
+                    for chunk in minio_response.stream(32 * 1024):
+                        f.write(chunk)
+            finally:
+                minio_response.close()
+                minio_response.release_conn()
         except Exception as exc:
-            logger.error("stream_fetch_error", song_id=str(song_id), error=str(exc))
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        # 2. Trim
-        try:
-            trim_audio(
-                input_path=original_path,
-                output_path=trimmed_path,
-                start=song.start,
-                end=song.end,
-            )
-        except ProcessingError as exc:
-            logger.error("trim_error", song_id=str(song_id), error=str(exc))
-            raise HTTPException(status_code=502, detail=f"Trim failed: {exc}") from exc
-
-        # 3. Stream trimmed file, cleanup in generator finally block
-        logger.info(
-            "stream_started",
-            song_id=str(song_id),
-            filename=filename,
-            mode="trimmed",
-            start=song.start,
-            end=song.end,
-        )
-
-        def _iter_and_cleanup():
+        post_trim_path = original_path
+        if has_trim:
             try:
-                with trimmed_path.open("rb") as f:
+                created_paths.append(trimmed_path)
+                trim_audio(
+                    input_path=original_path,
+                    output_path=trimmed_path,
+                    start=song.start,
+                    end=song.end,
+                )
+                post_trim_path = trimmed_path
+            except (ProcessingError, Exception) as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"Trim failed: {exc}"
+                ) from exc
+
+        final_path = post_trim_path
+        if has_speed:
+            try:
+                created_paths.append(speed_path)
+                apply_speed(
+                    input_path=post_trim_path, output_path=speed_path, speed=song.speed
+                )
+                final_path = speed_path
+            except (ProcessingError, Exception) as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"Speed processing failed: {exc}"
+                ) from exc
+
+        paths_to_cleanup = list(created_paths)
+
+        def _iter_and_cleanup() -> Generator[bytes, None, None]:
+            try:
+                with final_path.open("rb") as f:
                     while chunk := f.read(32 * 1024):
                         yield chunk
             finally:
-                original_path.unlink(missing_ok=True)
-                trimmed_path.unlink(missing_ok=True)
-                logger.debug("stream_trim_cleanup", song_id=str(song_id))
+                for p in paths_to_cleanup:
+                    p.unlink(missing_ok=True)
 
         return StreamingResponse(
             _iter_and_cleanup(),
             media_type="audio/mpeg",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": build_content_disposition(filename)},
         )
 
     except HTTPException:
-        # Cleanup on error before streaming starts
-        original_path.unlink(missing_ok=True)
-        trimmed_path.unlink(missing_ok=True)
+        for p in created_paths:
+            p.unlink(missing_ok=True)
         raise
-
-
-def _extract_youtube_id(url: str) -> str:
-    """
-    Extract YouTube video ID from any URL format.
-    Works with playlists but only returns video_id.
-    """
-    parsed = urlparse(url)
-    domain = parsed.netloc.lower()
-
-    if domain not in YOUTUBE_DOMAINS:
-        raise ValueError(f"Invalid YouTube domain: {domain}")
-
-    # --- 1. Query param (?v=...) → MOST IMPORTANT (covers playlists)
-    query = parse_qs(parsed.query)
-    video_ids = query.get("v")
-    if video_ids:
-        vid = video_ids[0]
-        if YOUTUBE_ID_REGEX.match(vid):
-            return vid
-
-    # --- 2. Short URL (youtu.be/<id>)
-    if domain == "youtu.be":
-        vid = parsed.path.lstrip("/").split("/")[0]
-        if YOUTUBE_ID_REGEX.match(vid):
-            return vid
-
-    # --- 3. Path-based formats (/shorts/, /embed/, /live/)
-    match = re.search(r"/(shorts|embed|live)/([\w\-]{11})", parsed.path)
-    if match:
-        return match.group(2)
-
-    raise ValueError("Could not extract valid YouTube video ID")

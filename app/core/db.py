@@ -1,3 +1,10 @@
+"""Database configuration and session management for SQLAlchemy.
+
+This module provides lazy-initialized engine and session factory singletons,
+dependency injection helpers for FastAPI, and utility functions for database
+initialization and health checks.
+"""
+
 # app/core/db.py
 from collections.abc import Generator
 
@@ -7,15 +14,23 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
 class Base(DeclarativeBase):
-    """Shared declarative base for all SQLAlchemy models."""
+    """Shared declarative base for all SQLAlchemy models in the application."""
 
 
 # Lazy singletons — built on first access so tests can set env vars first.
 _engine: Engine | None = None
-_SessionLocal: sessionmaker[Session] | None = None  # type: ignore[type-arg]
+_SessionLocal: sessionmaker[Session] | None = None
 
 
 def get_engine() -> Engine:
+    """Return the SQLAlchemy Engine instance (lazy singleton).
+
+    The engine is created on first access using the database URL from
+    application settings. Subsequent calls return the cached instance.
+
+    Returns:
+        SQLAlchemy Engine connected to the configured database.
+    """
     global _engine
     if _engine is None:
         from app.core.config import get_settings
@@ -34,6 +49,14 @@ def get_engine() -> Engine:
 
 
 def get_session_factory() -> "sessionmaker[Session]":
+    """Return the SQLAlchemy sessionmaker (lazy singleton).
+
+    The session factory is created on first access and bound to the engine
+    returned by ``get_engine()``.
+
+    Returns:
+        Configured sessionmaker instance.
+    """
     global _SessionLocal
     if _SessionLocal is None:
         _SessionLocal = sessionmaker(
@@ -46,7 +69,13 @@ def get_session_factory() -> "sessionmaker[Session]":
 
 
 def get_session() -> Generator[Session, None, None]:
-    """Yield a SQLAlchemy session and close it when done."""
+    """Provide a SQLAlchemy session for FastAPI dependency injection.
+
+    Yields a session and ensures it is closed after the request is completed.
+
+    Yields:
+        Active SQLAlchemy Session.
+    """
     session: Session = get_session_factory()()
     try:
         yield session
@@ -54,38 +83,56 @@ def get_session() -> Generator[Session, None, None]:
         session.close()
 
 
-def init_db() -> None:
+def _create_pg_extensions(engine: Engine) -> None:
+    """Create required PostgreSQL extensions if running against Postgres.
+
+    pg_trgm is needed for the GIN trigram index on songs.title, which
+    supports leading-and-trailing ILIKE '%search%' queries.  The statement
+    is idempotent (IF NOT EXISTS) and skipped entirely on SQLite so unit
+    tests are unaffected.
+
+    Args:
+        engine: Active SQLAlchemy Engine to execute against.
     """
-    Create all tables that are registered on Base.metadata.
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.connect() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        conn.commit()
 
-    Called once at application startup (e.g. in the FastAPI lifespan handler).
-    Safe to call multiple times — CREATE TABLE IF NOT EXISTS semantics via
-    SQLAlchemy's checkfirst=True default.
 
-    Models must be imported before this is called so SQLAlchemy knows about
-    them. Import them explicitly in the lifespan or in app/models/__init__.py.
+def init_db() -> None:
+    """Create all tables defined by models inheriting from Base.
+
+    Should be called once during application startup (typically in the
+    FastAPI lifespan handler). Safe to call multiple times due to
+    ``checkfirst=True``.
+
+    Note:
+        All models must be imported before calling this function so that
+        SQLAlchemy registers them on ``Base.metadata``.
     """
     import app.models  # noqa: F401 — ensure all models are registered
 
-    Base.metadata.create_all(bind=get_engine(), checkfirst=True)
+    engine = get_engine()
+    _create_pg_extensions(engine)
+    Base.metadata.create_all(bind=engine, checkfirst=True)
 
 
 def reset_db() -> None:
-    """
-    Drop and recreate all tables. **Test-only** — never call in production.
+    """Drop and recreate all tables.
 
-    Typical usage in conftest.py:
+    **For testing purposes only.** Never use in production.
 
-        @pytest.fixture(autouse=True)
-        def fresh_db():
-            reset_db()
-            yield
+    This is typically used in pytest fixtures to ensure a clean database
+    state before each test.
     """
     global _engine, _SessionLocal
     import app.models  # noqa: F401
 
     engine = get_engine()
     Base.metadata.drop_all(bind=engine)
+    _create_pg_extensions(engine)
     Base.metadata.create_all(bind=engine, checkfirst=True)
 
     # Flush session factory so next get_session() uses fresh tables
@@ -93,7 +140,11 @@ def reset_db() -> None:
 
 
 def ping_db() -> bool:
-    """Return True if the database is reachable."""
+    """Check if the database is reachable.
+
+    Returns:
+        True if the database responds to a simple query, False otherwise.
+    """
     try:
         with get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))

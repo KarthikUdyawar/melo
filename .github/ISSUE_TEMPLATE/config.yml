@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Documentation
+    url: https://github.com/KarthikUdyawar/melo/tree/master/docs
+    about: Architecture, API surface, and design decisions
+  - name: 💬 Discussions
+    url: https://github.com/KarthikUdyawar/melo/discussions
+    about: Questions, ideas, show-and-tell

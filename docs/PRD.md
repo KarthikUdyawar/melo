@@ -46,7 +46,7 @@ Lyrics, waveforms, AI recommendations, multi-user auth, mobile UI.
 
 ## API Surface
 
-```
+```text
 POST   /songs              # submit URL + trim/speed params → job_id
 GET    /songs              # list all
 GET    /songs/{id}/stream  # returns pre-signed URL
@@ -64,7 +64,7 @@ GET    /playlists
 
 ## Data Model
 
-```
+```text
 songs(id, title, youtube_id, file_url, duration, speed, status, created_at)
 favorites(id, song_id, created_at)
 playlists(id, name, created_at)
@@ -75,7 +75,7 @@ playlist_songs(playlist_id, song_id, position)
 
 ## Async Job Flow
 
-```
+```text
 POST /songs → push Celery task
   └── download (yt-dlp) → process (FFmpeg) → upload (MinIO) → update DB status
 ```
@@ -84,7 +84,7 @@ POST /songs → push Celery task
 
 ## Folder Structure
 
-```
+```text
 melo/
   app/
     api/          # FastAPI routers

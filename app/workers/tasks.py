@@ -1,44 +1,67 @@
-# app/workers/tasks.py
-"""
-Celery tasks for Melo.
+"""Celery tasks for the Melo project.
 
-Worker logs emit structured JSON with fields: task_name, song_id, status, duration_ms.
+This module contains the main song processing pipeline task (`process_song_task`)
+and supporting base class + utilities.
 """
+
+# app/workers/tasks.py
 
 import time
+from typing import Any, cast
 from uuid import UUID
 
+from billiard.einfo import ExceptionInfo
 from celery import Task
+from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
+from app.models.song import Song
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
 
 
-class _BaseTask(Task):
-    """
-    Shared base that holds one SQLAlchemy session per worker process.
+class _BaseTask(Task):  # type: ignore[type-arg]
+    """Base Celery task class that provides a shared SQLAlchemy session.
 
     The session is created lazily on first use and reused across tasks
-    in the same process — this avoids a connection-per-task overhead.
-    Celery workers are long-lived processes, so this is safe.
+    within the same worker process. It is automatically closed in
+    ``after_return()``.
+
+    This pattern reduces connection overhead in long-lived Celery workers.
     """
 
     _db = None
 
     @property
-    def db(self):
+    def db(self) -> Session:
         if self._db is None:
             from app.core.db import get_session_factory
 
             self._db = get_session_factory()()
         return self._db
 
-    def after_return(self, *args, **kwargs):
+    def after_return(
+        self,
+        status: str,
+        retval: Any,
+        task_id: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        einfo: ExceptionInfo | None,
+    ) -> None:
         if self._db is not None:
             self._db.close()
             self._db = None
+
+        super().after_return(
+            status,
+            retval,
+            task_id,
+            args,
+            kwargs,
+            cast("ExceptionInfo", einfo),
+        )
 
 
 @celery_app.task(
@@ -50,29 +73,35 @@ class _BaseTask(Task):
     acks_late=True,
 )
 def process_song_task(
-    self, song_id: str, url: str, start: float | None, end: float | None, speed: float
-) -> dict:
-    """
-    Full ingest pipeline for a single song.
+    self: _BaseTask,
+    song_id: str,
+    url: str,
+) -> dict[str, object]:
+    """Process a single song: download from YouTube, upload to MinIO, and update DB.
 
-    Steps
-    -----
-    1. Mark DB record → ``processing``
-    2. probe_metadata (yt-dlp, download=False) → populate
-       title/thumbnail/channel/upload_date
-    3. Check for existing done record with same youtube_id → dedup fast path
-    4. Download audio with yt-dlp  (→ /tmp/melo/<song_id>.mp3)
-    5. Upload mp3 to MinIO          (→ songs/<song_id>.mp3)
-    6. Update DB: file_url, duration, status → ``done``
-    7. Clean up the local tmp file
+    Full pipeline:
+    1. Mark song as ``processing`` in database
+    2. Probe metadata using yt-dlp
+    3. Deduplication check (reuse existing file if same YouTube video)
+    4. Download audio
+    5. Upload to MinIO
+    6. Mark as ``done`` with file reference
+    7. Clean up temporary file
 
-    Dedup (same youtube_id, different trim)
-    ----------------------------------------
-    If a ``done`` record already exists for the same youtube_id, reuse its
-    file_url and metadata — no re-download, no re-upload, status → done immediately.
+    Note:
+        Trimming and speed adjustment are **not** done in this task.
+        They are applied on-the-fly during streaming.
 
-    On any unhandled exception the record is marked ``failed`` and the
-    exception is re-raised so Celery can log it and (optionally) retry.
+    Args:
+        song_id: UUID string of the song record.
+        url: YouTube URL to download from.
+
+    Returns:
+        Status dictionary (e.g. ``{"song_id": "...", "status": "done"}``).
+
+    Raises:
+        DownloadError, StorageError: On known failures (task marked failed).
+        Exception: On unexpected errors (retried up to 3 times, then failed).
     """
     from pathlib import Path
 
@@ -326,9 +355,16 @@ def process_song_task(
                 )
 
 
-def _mark_failed(db, song) -> None:
-    """Best-effort status update to failed; swallows DB errors
-    to avoid masking the original."""
+def _mark_failed(db: Session, song: Song) -> None:
+    """Mark a song record as failed in the database.
+
+    This is a best-effort operation. Any database errors are logged
+    and swallowed so they do not mask the original task exception.
+
+    Args:
+        db: SQLAlchemy session.
+        song: Song model instance to update.
+    """
     try:
         from app.models.song import SongStatus
 

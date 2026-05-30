@@ -1,6 +1,13 @@
 # 🎵 Melo
 
-> Personal self-hosted audio library. Paste a YouTube URL → trimmed, playable mp3 stored in MinIO.
+> Personal self-hosted audio library. Paste a YouTube URL → trimmed, speed-adjusted, playable mp3 stored in MinIO.
+
+[![CI](https://github.com/KarthikUdyawar/melo/actions/workflows/ci.yml/badge.svg)](https://github.com/KarthikUdyawar/melo/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/KarthikUdyawar/melo/branch/master/graph/badge.svg)](https://codecov.io/gh/KarthikUdyawar/melo)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://pre-commit.com)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 ---
 
@@ -23,17 +30,21 @@
 
 ```mermaid
 graph TD
+    Client -->|POST /songs/preview| API
     Client -->|POST /songs| API
     API -->|create record status=pending| PG[(PostgreSQL)]
     API -->|enqueue task| Redis[(Redis)]
     Redis -->|consume| Worker
-    Worker -->|probe_metadata yt-dlp| YT[YouTube]
-    Worker -->|yt-dlp download| YT
+    Worker -->|yt-dlp download| YT[YouTube]
     Worker -->|upload mp3| MinIO[(MinIO)]
     Worker -->|update status=done| PG
     Client -->|GET /songs/id/stream| API
-    API -->|fetch + FFmpeg trim| MinIO
+    API -->|fetch + trim + speed| MinIO
     API -->|StreamingResponse| Client
+    Client -->|POST /favorites/id| API
+    API -->|INSERT favorites| PG
+    Client -->|POST /playlists| API
+    API -->|INSERT playlist| PG
 ```
 
 ---
@@ -49,6 +60,9 @@ sequenceDiagram
     participant M as MinIO
     participant D as DB
 
+    C->>A: POST /songs/preview {url}
+    A-->>C: 200 {youtube_id, title, duration, channel, thumbnail_url}
+
     C->>A: POST /songs {url, start, end, speed}
     A->>D: INSERT song status=pending
     A->>R: enqueue process_song_task
@@ -56,49 +70,34 @@ sequenceDiagram
 
     R->>W: dequeue task
     W->>D: UPDATE status=processing
-    W->>W: probe_metadata (yt-dlp, download=False)
-    W->>D: UPDATE title, duration, thumbnail_url, channel, upload_date
+    W->>W: probe_metadata (yt-dlp, no download)
     W->>W: yt-dlp download → /tmp/melo/<id>.mp3
     W->>M: upload songs/<id>.mp3
     W->>D: UPDATE file_url, duration, status=done
 
     C->>A: GET /songs/{id}/stream
     A->>D: SELECT song WHERE id=...
-    alt no trim params
-        A->>M: get_object(songs/<id>.mp3)
-        A-->>C: StreamingResponse audio/mpeg (direct)
-    else trim params set
-        A->>M: get_object → write /tmp/melo/<id>_original.mp3
-        A->>A: FFmpeg trim → /tmp/melo/<id>_trimmed.mp3
-        A-->>C: StreamingResponse audio/mpeg (trimmed)
-        A->>A: cleanup tmp files
-    end
+    A->>M: get_object(songs/<id>.mp3)
+    note over A: trim and/or speed applied on-the-fly
+    A-->>C: StreamingResponse audio/mpeg
 ```
 
 ---
 
-## Dedup Flow (same youtube_id, different trim)
+## Stream Case Matrix
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant A as API
-    participant R as Redis
-    participant W as Worker
-    participant D as DB
+| has_trim | has_speed | Behaviour                     |
+| -------- | --------- | ----------------------------- |
+| ❌        | ❌         | Direct MinIO proxy (fastest)  |
+| ✅        | ❌         | Fetch → trim → stream         |
+| ❌        | ✅         | Fetch → speed → stream        |
+| ✅        | ✅         | Fetch → trim → speed → stream |
 
-    C->>A: POST /songs {url, start=30, end=90}
-    A->>D: INSERT new song record status=pending
-    A->>R: enqueue process_song_task
-    A-->>C: 202 {id, status=pending}
+Speed uses FFmpeg `atempo` filter, chained for values outside `[0.5, 2.0]`:
 
-    R->>W: dequeue task
-    W->>D: UPDATE status=processing
-    W->>W: probe_metadata
-    W->>D: UPDATE metadata fields
-    W->>D: SELECT existing done song WHERE youtube_id matches
-    W->>D: UPDATE new song: copy file_url + metadata, status=done
-    Note over W: No download. No MinIO upload.
+```text
+speed=4.0  → atempo=2.0,atempo=2.0
+speed=0.25 → atempo=0.5,atempo=0.5
 ```
 
 ---
@@ -109,8 +108,7 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> pending: POST /songs
     pending --> processing: worker picks up task
-    processing --> done: probe + download + upload success
-    processing --> done: dedup hit (existing file reused)
+    processing --> done: download + upload success
     processing --> failed: DownloadError / StorageError
     processing --> processing: retry (max 3×, unknown errors only)
     processing --> failed: MaxRetriesExceeded
@@ -149,7 +147,7 @@ graph LR
 
 ```bash
 # 1. Clone
-git clone https://github.com/yourname/melo && cd melo
+git clone https://github.com/KarthikUdyawar/melo && cd melo
 
 # 2. Configure
 cp example.env .env.staging   # already set for Docker Compose
@@ -157,91 +155,248 @@ cp example.env .env.staging   # already set for Docker Compose
 # 3. Run
 make up
 
-# 4. Submit a song
-curl -X POST http://localhost:8000/songs \
+# 4. Preview metadata before ingest
+curl -X POST http://localhost:8000/songs/preview \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "speed": 1.0}'
+  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 
-# 5. Submit same song with trim (no re-download — dedup kicks in)
+# 5. Submit a song (with optional trim + speed)
 curl -X POST http://localhost:8000/songs \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "start": 30, "end": 90}'
+  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "start": 10, "end": 60, "speed": 1.5}'
 
 # 6. Check status
 curl http://localhost:8000/songs/<id>
 
-# 7. Stream when done (trim applied on-the-fly if start/end set)
+# 7. Stream when done
 curl -OJ http://localhost:8000/songs/<id>/stream
+
+# 8. Favorite a song
+curl -X POST http://localhost:8000/favorites/<id>
+
+# 9. List favorites
+curl http://localhost:8000/favorites
+
+# 10. Create a playlist
+curl -X POST http://localhost:8000/playlists \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Morning Mix"}'
+
+# 11. Add a song to a playlist
+curl -X POST http://localhost:8000/playlists/<playlist_id>/songs/<song_id>
+
+# 12. List playlists
+curl http://localhost:8000/playlists
+
+# 13. Run smoke test
+make smoke
 ```
 
 ---
 
 ## Make Targets
 
-| Target              | Description                         |
-| ------------------- | ----------------------------------- |
-| `make up`           | Build + start all services detached |
-| `make down`         | Stop all services                   |
-| `make down-v`       | Stop + delete all volumes           |
-| `make logs`         | Tail all logs                       |
-| `make logs-api`     | Tail API logs only                  |
-| `make logs-worker`  | Tail worker logs only               |
-| `make ps`           | Show service status                 |
-| `make shell-api`    | Bash into api container             |
-| `make shell-worker` | Bash into worker container          |
-| `make health`       | Hit /health endpoint                |
-| `make songs`        | List all songs                      |
+Run `make` or `make help` to see all targets with descriptions.
+
+| Target                    | Description                                   |
+| ------------------------- | --------------------------------------------- |
+| `make up`                 | Build + start all services detached           |
+| `make down`               | Stop all services                             |
+| `make down-v`             | Stop + delete all volumes                     |
+| `make logs`               | Tail all logs                                 |
+| `make logs-api`           | Tail API logs only                            |
+| `make logs-worker`        | Tail worker logs only                         |
+| `make ps`                 | Show service status                           |
+| `make shell-api`          | Bash into api container                       |
+| `make shell-worker`       | Bash into worker container                    |
+| `make health`             | Hit /health endpoint                          |
+| `make songs`              | List all songs                                |
+| `make reset-db`           | Wipe all volumes and restart stack            |
+| `make seed`               | Submit sample songs for development           |
+| `make clean-tmp`          | Clear /tmp/melo inside worker container       |
+| `make backup`             | Backup DB + MinIO to ./backups/               |
+| `make backup-db`          | Backup PostgreSQL only                        |
+| `make backup-minio`       | Backup MinIO bucket only                      |
+| `make restore-db`         | Restore DB from FILE=backups/<name>.sql.gz    |
+| `make restore-minio`      | Restore MinIO from FILE=backups/<name>.tar.gz |
+| `make lint`               | Run ruff + mypy                               |
+| `make fmt`                | Auto-format with ruff                         |
+| `make smoke`              | End-to-end smoke test (curl + jq)             |
+| `make test`               | Run full test suite + coverage report         |
+| `make test-unit`          | Unit tests only (no Docker needed)            |
+| `make test-integration`   | Integration tests (requires Docker)           |
+| `make test-cov`           | Tests + HTML coverage report                  |
+| `make pre-commit`         | Run all pre-commit hooks on all files         |
+| `make pre-commit-install` | Install pre-commit hooks (run once)           |
 
 ---
 
 ## API
 
-| Method | Path                 | Description                                                                                                                    |
-| ------ | -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `POST` | `/songs`             | Submit YouTube URL → async job. Supports `start`, `end`, `speed` params. Same `youtube_id` + new trim → dedup, no re-download. |
-| `GET`  | `/songs`             | List all songs with metadata                                                                                                   |
-| `GET`  | `/songs/{id}`        | Get song detail + status + metadata                                                                                            |
-| `GET`  | `/songs/{id}/stream` | Stream mp3. No trim params → direct from MinIO. `start`/`end` set → FFmpeg trim applied on-the-fly, ephemerally.               |
-| `GET`  | `/health`            | Health check                                                                                                                   |
+| Method   | Path                              | Status | Description                                |
+| -------- | --------------------------------- | ------ | ------------------------------------------ |
+| `POST`   | `/songs/preview`                  | ✅      | Fetch YouTube metadata (no DB write)       |
+| `POST`   | `/songs`                          | ✅      | Submit YouTube URL → async job             |
+| `GET`    | `/songs`                          | ✅      | List songs — filter, sort, cursor-paginate |
+| `GET`    | `/songs/{id}`                     | ✅      | Get song detail + status                   |
+| `DELETE` | `/songs/{id}`                     | ✅      | Soft-delete a song + remove from MinIO     |
+| `GET`    | `/songs/{id}/stream`              | ✅      | Stream mp3 (trim + speed applied)          |
+| `POST`   | `/favorites/{song_id}`            | ✅      | Favorite a song (idempotent)               |
+| `DELETE` | `/favorites/{song_id}`            | ✅      | Unfavorite a song                          |
+| `GET`    | `/favorites`                      | ✅      | List favorited songs                       |
+| `POST`   | `/playlists`                      | ✅      | Create a playlist                          |
+| `GET`    | `/playlists`                      | ✅      | List all playlists                         |
+| `GET`    | `/playlists/{id}`                 | ✅      | Get playlist detail with songs             |
+| `DELETE` | `/playlists/{id}`                 | ✅      | Delete a playlist                          |
+| `POST`   | `/playlists/{id}/songs/{song_id}` | ✅      | Add song to playlist (ordered)             |
+| `DELETE` | `/playlists/{id}/songs/{song_id}` | ✅      | Remove song from playlist                  |
+| `GET`    | `/health`                         | ✅      | Health check (DB + Redis + MinIO)          |
 
 Interactive docs: **http://localhost:8000/docs**
 
-### Song fields
+### Filtering, Sorting & Pagination
 
-| Field           | Type           | Notes                                                       |
-| --------------- | -------------- | ----------------------------------------------------------- |
-| `id`            | UUID           |                                                             |
-| `youtube_id`    | string         | Extracted from URL                                          |
-| `title`         | string \| null | Populated by probe before download completes                |
-| `duration`      | float \| null  | Seconds. Probe estimate, overwritten post-download          |
-| `thumbnail_url` | string \| null | YouTube thumbnail                                           |
-| `channel`       | string \| null | Uploader channel name                                       |
-| `upload_date`   | string \| null | YYYYMMDD                                                    |
-| `start`         | float \| null  | Trim start in seconds — applied at stream time by FFmpeg    |
-| `end`           | float \| null  | Trim end in seconds — applied at stream time by FFmpeg      |
-| `speed`         | float          | Playback speed (0.5–4.0), applied in Sprint 3               |
-| `status`        | enum           | `pending` → `processing` → `done` / `failed`                |
-| `file_url`      | string \| null | MinIO object key (full-length source file), set when `done` |
+`GET /songs` supports query parameters:
+
+```text
+status        pending | processing | done | failed
+favorite      true | false
+search        case-insensitive title match
+sort_by       created_at (default) | title | duration
+order         desc (default) | asc
+limit         max records per page (default: 20)
+after         cursor — UUID v7 id of last seen record
+```
+
+Response shape:
+
+```json
+{
+  "records": [...],
+  "count": 42,
+  "bookmark": "<uuid-or-null>"
+}
+```
+
+`bookmark` is the `id` of the last record returned. Pass it as `?after=<bookmark>` on the next request to get the next page. `null` means you've reached the end.
+
+```bash
+# First page — done songs, newest first
+curl "http://localhost:8000/songs?status=done&limit=10"
+
+# Next page
+curl "http://localhost:8000/songs?status=done&limit=10&after=<bookmark>"
+
+# Search by title
+curl "http://localhost:8000/songs?search=lofi&sort_by=title&order=asc"
+
+# Only favorites
+curl "http://localhost:8000/songs?favorite=true"
+```
+
+### Preview Flow
+
+```text
+POST /songs/preview → inspect title, duration, thumbnail
+        ↓
+User decides trim/speed params
+        ↓
+POST /songs → async download + processing
+        ↓
+GET /songs/{id}/stream → playback
+```
+
+### Favorites
+
+```bash
+# Favorite
+curl -X POST http://localhost:8000/favorites/<song_id>
+# → 201 first time, 200 if already favorited (idempotent)
+
+# Unfavorite
+curl -X DELETE http://localhost:8000/favorites/<song_id>
+# → 204
+
+# List
+curl http://localhost:8000/favorites
+# → {records: [...songs with is_favorite=true], count: N}
+```
+
+`is_favorite` is also reflected in `GET /songs` and `GET /songs/{id}`.
+
+### Playlists
+
+```bash
+# Create
+curl -X POST http://localhost:8000/playlists \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Morning Mix"}'
+# → 201 {id, name, created_at, songs: []}
+
+# Add song (appended at end; position maintained automatically)
+curl -X POST http://localhost:8000/playlists/<playlist_id>/songs/<song_id>
+# → 201
+
+# View playlist with ordered songs
+curl http://localhost:8000/playlists/<playlist_id>
+# → {id, name, songs: [...ordered by position]}
+
+# Remove song
+curl -X DELETE http://localhost:8000/playlists/<playlist_id>/songs/<song_id>
+# → 204
+
+# List all playlists
+curl http://localhost:8000/playlists
+# → {records: [...], count: N}
+```
+
+Songs can appear in multiple playlists. Position is maintained per-playlist and auto-increments on add.
 
 ---
 
 ## Folder Structure
 
-```
+```text
 melo/
 ├── app/
-│   ├── api/          # FastAPI routers
-│   ├── core/         # config, db, deps
-│   ├── models/       # SQLAlchemy models
-│   ├── schemas/      # Pydantic schemas
-│   ├── services/     # downloader, processor, storage
-│   └── workers/      # Celery app + tasks
+│   ├── api/
+│   │   ├── favorites.py    # POST/DELETE/GET /favorites
+│   │   ├── playlists.py    # POST/DELETE/GET /playlists
+│   │   ├── songs.py        # songs router incl. /preview
+│   │   ├── _song_utils.py  # shared serialize_song + _is_favorited
+│   │   └── responses.py    # envelope_response, paginated_response
+│   ├── core/               # config, db, deps, logging, middleware
+│   ├── models/
+│   │   ├── song.py
+│   │   ├── favorite.py
+│   │   └── playlist.py
+│   ├── schemas/            # Pydantic schemas
+│   ├── services/           # downloader, processor, storage
+│   └── workers/            # Celery app + tasks
+├── tests/
+│   ├── conftest.py
+│   ├── docker-compose.test.yml
+│   ├── smoke_test.sh
+│   ├── unit/
+│   └── integration/
 ├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── PRD.md
 │   └── sprints/
+├── .github/
+│   ├── workflows/ci.yml
+│   ├── ISSUE_TEMPLATE/
+│   └── PULL_REQUEST_TEMPLATE.md
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile
 ├── pyproject.toml
+├── CONTRIBUTING.md
+├── CHANGELOG.md
+├── SECURITY.md
+├── LICENSE
+├── .pre-commit-config.yaml
+├── .coderabbit.yaml
 └── example.env
 ```
 
@@ -260,31 +415,94 @@ melo/
 
 ---
 
+## Testing
+
+```bash
+# Unit tests only — no Docker needed, fast
+make test-unit
+
+# Full suite — spins up Postgres via pytest-docker
+make test
+
+# HTML coverage report → htmlcov/index.html
+make test-cov
+```
+
+Coverage target: **80%** (currently **94.77%**).
+
+Test layout:
+
+| Module                                          | Type        |
+| ----------------------------------------------- | ----------- |
+| `tests/unit/test_schemas.py`                    | Unit        |
+| `tests/unit/test_processor.py`                  | Unit        |
+| `tests/unit/test_storage.py`                    | Unit        |
+| `tests/unit/test_downloader.py`                 | Unit        |
+| `tests/unit/test_preview.py`                    | Unit        |
+| `tests/unit/test_favorites.py`                  | Unit        |
+| `tests/unit/test_playlist_schemas.py`           | Unit        |
+| `tests/integration/test_db.py`                  | Integration |
+| `tests/integration/test_songs_api.py`           | Integration |
+| `tests/integration/test_songs_api_filtering.py` | Integration |
+| `tests/integration/test_preview_api.py`         | Integration |
+| `tests/integration/test_favorites_api.py`       | Integration |
+| `tests/integration/test_playlists_api.py`       | Integration |
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, branch naming, commit convention, and PR checklist.
+
+---
+
 ## Decision Log
 
-| Decision                               | Reason                                                                                                                             |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| No Alembic                             | Solo project; `create_all()` on startup sufficient                                                                                 |
-| `APP_ENV`-driven env files             | Clean separation: dev (localhost) / staging (Docker) / prod                                                                        |
-| Pinned yt-dlp format selector          | `bestaudio` needs JS runtime; explicit IDs (`140/251/…`) use plain HTTPS                                                           |
-| Same format selector on probe          | `download=False` still triggers JS-runtime format checks; pinned IDs + `skip:[hls,dash]` suppress 5min hang and warning            |
-| `noplaylist: True` on probe + download | Playlist URLs must resolve to single `?v=` video; without this yt-dlp picks wrong video from playlist context                      |
-| `worker_ready` signal for MinIO bucket | Create once per process, not per task                                                                                              |
-| Proxy stream via FastAPI               | Presigned URLs signed to internal hostname break on host rewrite; API proxies bytes directly                                       |
-| `expire_on_commit=False`               | Avoids lazy-load errors post-commit in Celery context                                                                              |
-| Removed `unique=True` on `youtube_id`  | Dedup-with-trim requires multiple DB rows per video; uniqueness enforced at task level                                             |
-| Dedup at task level, not router level  | Router inserts new record for every submission; worker detects existing `done` record and fast-paths to `done` without re-download |
-| `probe_metadata` before download       | Populates title, thumbnail, channel immediately — `GET /songs/{id}` returns useful data while still `processing`                   |
-| All new `SongResponse` fields nullable | Record serialized at creation (pre-probe); fields populated async — cannot be required                                             |
-| FFmpeg trim on stream, not on ingest   | One source file in MinIO; trim applied ephemerally per request. No N trimmed variants stored.                                      |
-| Stream copy first, re-encode fallback  | `-c copy` is instant and lossless; libmp3lame re-encode only fires on codec mismatch. `-q:a 2` matches ~192kbps download quality.  |
-| Cleanup in generator `finally` block   | Ensures `/tmp/melo` files deleted after last byte sent, even on client disconnect.                                                 |
+| Decision                                   | Reason                                                                                       |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| No Alembic                                 | Solo project; `create_all()` on startup sufficient                                           |
+| `APP_ENV`-driven env files                 | Clean separation: dev (localhost) / staging (Docker) / prod                                  |
+| Pinned yt-dlp format selector              | `bestaudio` needs JS runtime; explicit IDs (`140/251/…`) use plain HTTPS                     |
+| `worker_ready` signal for MinIO bucket     | Create once per process, not per task                                                        |
+| Proxy stream via FastAPI                   | Presigned URLs signed to internal hostname break on host rewrite; API proxies bytes directly |
+| `expire_on_commit=False`                   | Avoids lazy-load errors post-commit in Celery context                                        |
+| Speed applied at stream time               | Avoid storing per-speed variants in MinIO                                                    |
+| Chain `atempo` filters                     | FFmpeg atempo limited to 0.5–2.0 per stage                                                   |
+| Trim before speed                          | Correct processing order — trim reduces data before re-encoding                              |
+| `created_paths` list in stream endpoint    | Guarantees cleanup of all temp files regardless of which pipeline steps ran                  |
+| Preview endpoint is stateless              | No DB writes; simpler system; worker re-probes as source of truth                            |
+| Favorites idempotent (check-then-insert)   | Solo user; race condition acceptable; avoids upsert complexity                               |
+| `is_favorite` queried per song             | N+1 acceptable at MVP scale                                                                  |
+| `DELETE /favorites` returns 204            | No body on delete; 404 if not favorited for explicit error feedback                          |
+| Playlist ordering via `position`           | Predictable playback; auto-increments on add                                                 |
+| `db.expire_all()` after playlist mutations | Clears stale relationship state from SQLAlchemy identity map post-commit                     |
+| Same song reusable across playlists        | `playlist_songs` join table scoped per playlist; no uniqueness constraint on `song_id`       |
+| UUID v7 for all PKs (`uuid6` package)      | String-sortable = chronological = natural cursor key for pagination                          |
+| Cursor pagination (`after=<uuid>`)         | Stable under concurrent inserts; no offset drift                                             |
+| `bookmark` = last record id or `null`      | Clients pass as next `after`; `null` signals end of results                                  |
+| DB-level filtering on `GET /songs`         | Scalability; avoids fetching and filtering in Python                                         |
+| SQLite truncation for unit test isolation  | Savepoint rollback unreliable when endpoint calls `db.commit()` releases the savepoint       |
+| Root `conftest.py` for env setup           | `pytest_configure` runs before collection — only reliable hook for early env vars            |
+| `tasks.py` excluded from coverage          | Celery internals require live worker; covered by `make smoke` instead                        |
+| `# nosec B108/B603/B607` in processor      | `/tmp/melo` intentional; subprocess args are internal constants only, never user input       |
+| `stream_url` relative path                 | No config dependency; works regardless of deployment base URL                                |
+| `stream_url` status-driven (not nullable)  | Always a usable URL — client polls `GET /songs/{id}` until done, then hits stream            |
+| `effective_duration` computed in schema    | Reflects real playback length after trim; `end - start` when both set, else `duration`       |
+| `_normalize_upload_date` in schema         | Converts yt-dlp `"20091025"` format to ISO `"2009-10-25"` at the schema boundary             |
+| Soft delete on Song, Favorite, Playlist    | Safer than hard delete; preserves audit trail; `deleted_at` column; no Alembic needed        |
+| `DELETE /songs/{id}` + MinIO delete        | Endpoint was in PRD but never implemented; MinIO object freed alongside soft delete          |
+| `_song_utils.py` shared serializer         | Eliminates three copies of `_serialize_song`; avoids circular import                         |
+| `docs_url=None` in production              | Swagger not needed in production; reduces attack surface                                     |
+| Health check adds Redis + MinIO probes     | Silent infrastructure failure previously undetectable via `/health`                          |
+| Node.js removed from Dockerfile            | Format selector is plain HTTPS — no JS runtime needed; saves ~180MB + ~40s build time        |
+| `uv sync --frozen --no-install-project`    | Reproducible builds from lockfile; skips building melo package (web app, not library)        |
+| `.dockerignore` populated                  | Empty file sent .git, tests, secrets to daemon; now excluded                                 |
+| `make help` as default target              | 20+ targets — discoverability without reading Makefile                                       |
+| Backup targets in Makefile                 | `pg_dump` + MinIO `tar` via `docker compose exec`; timestamped to `./backups/`               |
 
 ---
 
 ## Out of Scope (v1)
 
-- Speed processing (`atempo`) → Sprint 3
-- Favorites + playlists endpoints → Sprint 3
-- Frontend UI → Sprint 3
+- Frontend UI → Sprint 4
 - Multi-user auth, lyrics, waveforms → never (personal tool)
