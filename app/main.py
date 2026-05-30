@@ -83,7 +83,7 @@ app = create_app()
 
 
 @app.get("/health", tags=["system"], summary="Health check — DB, Redis, MinIO")
-async def health() -> JSONResponse:
+def health() -> JSONResponse:
     """Return liveness status for all infrastructure dependencies."""
     from app.core.db import ping_db
 

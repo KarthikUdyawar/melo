@@ -7,6 +7,7 @@ This module provides functions to:
 All operations use temporary files in `/tmp/melo`, include retry logic for robustness,
 and raise ``ProcessingError`` on failure with proper cleanup.
 """
+
 # app/services/processor.py
 
 import subprocess  # nosec B404
@@ -16,15 +17,18 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-_TMP_DIR = Path("/tmp/melo") # nosec B108
+_TMP_DIR = Path("/tmp/melo")  # nosec B108
 
 
 class ProcessingError(Exception):
-   """Raised when FFmpeg exits with non-zero code or produces invalid output."""
+    """Raised when FFmpeg exits with non-zero code or produces invalid output."""
 
 
 def trim_audio(
-    input_path: Path, output_path: Path, start: float | None, end: float | None,
+    input_path: Path,
+    output_path: Path,
+    start: float | None,
+    end: float | None,
 ) -> Path:
     """Trim audio file to the given time range and save to output_path.
 
@@ -76,7 +80,16 @@ def trim_audio(
 
     logger.debug("ffmpeg_stream_copy", cmd=" ".join(cmd_copy))
 
-    result = subprocess.run(cmd_copy, capture_output=True, text=True) # nosec B603
+    try:
+        result = subprocess.run(
+            cmd_copy,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )  # nosec B603
+    except subprocess.TimeoutExpired as exc:
+        output_path.unlink(missing_ok=True)
+        raise ProcessingError(f"FFmpeg timed out after {exc.timeout}s") from exc
 
     if (
         result.returncode == 0
@@ -92,10 +105,13 @@ def trim_audio(
         return output_path
 
     if result.returncode == 0:
-        output_path.unlink(missing_ok=True)
-        raise ProcessingError(
-            f"FFmpeg stream-copy produced empty/missing output: {output_path}"
+        logger.warning(
+            "stream_copy_invalid_output",
+            output=str(output_path),
+            reason="empty_or_missing",
         )
+        output_path.unlink(missing_ok=True)
+        # Fall through to re-encode retry path.
 
     logger.warning(
         "stream_copy_failed",
@@ -122,7 +138,7 @@ def trim_audio(
 
     logger.debug("ffmpeg_reencode", cmd=" ".join(cmd_reencode))
 
-    result = subprocess.run(cmd_reencode, capture_output=True, text=True) # nosec B603
+    result = subprocess.run(cmd_reencode, capture_output=True, text=True)  # nosec B603
 
     if result.returncode != 0:
         output_path.unlink(missing_ok=True)
@@ -205,6 +221,20 @@ def apply_speed(input_path: Path, output_path: Path, speed: float) -> Path:
     Raises:
         ProcessingError: If FFmpeg fails or produces empty/missing output.
     """
+    # Fast path: no speed change needed
+    if speed == 1.0:
+        logger.info(
+            "speed_skip",
+            input=str(input_path),
+            output=str(output_path),
+            reason="speed_equals_1.0",
+        )
+        # Copy the file instead of re-encoding
+        import shutil
+
+        shutil.copy2(input_path, output_path)
+        return output_path
+
     _TMP_DIR.mkdir(parents=True, exist_ok=True)
 
     filter_str = _build_atempo_filters(speed)

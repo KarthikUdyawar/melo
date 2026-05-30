@@ -14,6 +14,7 @@ Tests cover:
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -203,6 +204,26 @@ class TestDedupQuery:
         )
 
         assert existing is not None
+
+    def test_dedup_ignores_soft_deleted_done_record(self, db_session: Session) -> None:
+        deleted_done = _make_song(status=SongStatus.done, file_url="songs/deleted.mp3")
+        deleted_done.deleted_at = datetime.now(UTC)
+        db_session.add(deleted_done)
+        new_song = _make_song(start=12.0, end=45.0)
+        db_session.add(new_song)
+        db_session.flush()
+
+        existing = (
+            db_session.query(Song)
+            .filter(
+                Song.youtube_id == new_song.youtube_id,
+                Song.status == SongStatus.done,
+                Song.deleted_at.is_(None),
+                Song.id != new_song.id,
+            )
+            .first()
+        )
+        assert existing is None
 
 
 class TestSongQueries:

@@ -6,17 +6,7 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased]
-
-### Planned (Sprint 4)
-- Frontend UI
-- `make seed` sample data
-- `GET /favorites` cursor pagination
-- HTTP 206 range streaming
-
----
-
-## [0.3.0] — Sprint 3 — 2026-05-29
+## [Unreleased] — Sprint 3
 
 ### Added
 - `POST /songs/preview` — stateless YouTube metadata fetch (no DB write)

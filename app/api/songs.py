@@ -60,8 +60,14 @@ class SortOrder(StrEnum):
 
 def build_content_disposition(filename: str) -> str:
     """Build RFC 5987 compliant Content-Disposition header with UTF-8 support."""
-    ascii_fallback = filename.encode("latin-1", "ignore").decode()
-    utf8_encoded = quote(filename)
+    cleaned = (
+        filename.replace("\\", "_")
+        .replace('"', "'")
+        .replace("\r", "")
+        .replace("\n", "")
+    )
+    ascii_fallback = cleaned.encode("latin-1", "ignore").decode() or "download.mp3"
+    utf8_encoded = quote(cleaned)
     return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
 
 

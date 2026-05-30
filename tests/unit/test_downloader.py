@@ -142,6 +142,7 @@ class TestDownloadAudio:
         ):
             path, duration = download_audio(url=TEST_URL, song_id=song_id)
 
+        assert mock_ydl.extract_info.called
         assert path == expected_path
         assert duration == 213.0
 

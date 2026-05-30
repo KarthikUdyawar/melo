@@ -8,6 +8,7 @@ SHELL := /bin/bash
 	health songs wait-api \
 	reset-db seed clean-tmp \
 	backup backup-db backup-minio restore-db restore-minio \
+	lint fmt \
 	pre-commit-install pre-commit \
 	test test-unit test-integration test-cov \
 	test-up test-down smoke \
@@ -214,6 +215,14 @@ pre-commit-install: ## Install pre-commit hooks
 
 pre-commit: ## Run all pre-commit hooks
 	uv run pre-commit run --all-files --show-diff-on-failure
+
+lint: ## Run lint + type checks
+	uv run ruff check app tests
+	uv run mypy app
+
+fmt: ## Auto-format code
+	uv run ruff format app tests
+	uv run ruff check --fix app tests
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Test helpers

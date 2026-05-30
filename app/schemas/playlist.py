@@ -3,7 +3,7 @@
 # app/schemas/playlist.py
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.song import SongResponse
 
@@ -62,6 +62,6 @@ class PlaylistDetailResponse(BaseModel):
     id: UUID
     name: str
     created_at: str
-    songs: list[SongResponse] = []
+    songs: list[SongResponse] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}

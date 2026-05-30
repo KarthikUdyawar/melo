@@ -63,10 +63,12 @@ def add_favorite(song_id: UUID, db: DbDep) -> JSONResponse:
         db.refresh(fav)
     except IntegrityError:
         db.rollback()
-        logger.info("favorite_already_exists_race", song_id=str(song_id))
-        return envelope_response(
-            {"song_id": str(song_id)}, "Already favorited.", status_code=200
-        )
+        if _active_favorite(song_id, db):
+            logger.info("favorite_already_exists_race", song_id=str(song_id))
+            return envelope_response(
+                {"song_id": str(song_id)}, "Already favorited.", status_code=200
+            )
+        raise
 
     logger.info("favorite_created", song_id=str(song_id))
     return envelope_response(

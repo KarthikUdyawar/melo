@@ -7,6 +7,7 @@ Fields logged:
     request  → method, path, query_params, client_ip
     response → status_code, duration_ms
 """
+
 # app/core/middleware.py
 import time
 from collections.abc import Awaitable, Callable
@@ -55,7 +56,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 "request",
                 method=request.method,
                 path=path,
-                query_params=str(request.query_params) or None,
+                query_params=_redacted_query_params(request) or None,
                 client_ip=_client_ip(request),
             )
 
@@ -94,3 +95,11 @@ def _client_ip(request: Request) -> str:
     if request.client:
         return request.client.host
     return "unknown"
+
+
+def _redacted_query_params(request: Request) -> dict[str, str]:
+    sensitive = {"token", "access_token", "password", "secret", "api_key", "key"}
+    redacted: dict[str, str] = {}
+    for key, value in request.query_params.multi_items():
+        redacted[key] = "***" if key.lower() in sensitive else value
+    return redacted

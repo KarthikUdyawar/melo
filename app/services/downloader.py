@@ -140,7 +140,7 @@ def probe_metadata(url: str) -> SongMeta:
     logger.info("probe_start", url=url)
 
     try:
-        with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
+        with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
             info = ydl.extract_info(url, download=False)
     except YtDlpDownloadError as exc:
         logger.error("probe_failed_yt_dlp", url=url, error=str(exc))
@@ -228,7 +228,7 @@ def download_audio(url: str, song_id: str) -> tuple[Path, float | None]:
     )
 
     try:
-        with yt_dlp.YoutubeDL(cast("Any", ydl_opts)) as ydl:
+        with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
             logger.debug(
                 "yt_dlp_extract_info_begin",
                 song_id=song_id,

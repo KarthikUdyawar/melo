@@ -194,7 +194,7 @@ def get_presigned_url(object_key: str, expires_seconds: int = 3600) -> str:
         logger.debug(
             "presigned_url_generated_internal",
             key=object_key,
-            url=url,
+            url_host=urlparse(url).netloc,
         )
 
         # Rewrite internal Docker hostname → externally accessible host
@@ -211,8 +211,8 @@ def get_presigned_url(object_key: str, expires_seconds: int = 3600) -> str:
 
             logger.debug(
                 "presigned_url_rewritten",
-                original=url,
-                rewritten=rewritten_url,
+                original_host=urlparse(url).netloc,
+                rewritten_host=urlparse(rewritten_url).netloc,
                 public_base=s.minio_public_url,
             )
 

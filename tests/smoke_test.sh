@@ -84,7 +84,7 @@ api_delete_raw() {
 section "S1. Health check"
 
 HEALTH=$(api_get "/health") || fail "GET /health failed"
-STATUS=$(echo "$HEALTH" | jq -r '.status')
+STATUS=$(echo "$HEALTH" | jq -r '.body.status // .status')
 [[ "$STATUS" == "ok" ]] || fail "Health status: $STATUS (expected ok)"
 pass "GET /health → ok"
 

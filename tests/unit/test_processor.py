@@ -96,13 +96,17 @@ def tmp_audio(tmp_path: Path) -> Path:
 class TestTrimAudio:
     def test_stream_copy_success(self, tmp_path: Path, tmp_audio: Path) -> None:
         out = tmp_path / "out.mp3"
-        with patch("subprocess.run", side_effect=_mock_run_success(out)):
+        with patch(
+            "app.services.processor.subprocess.run", side_effect=_mock_run_success(out)
+        ):
             result = trim_audio(tmp_audio, out, start=0.0, end=30.0)
         assert result == out
         assert out.exists()
 
     def test_fallback_to_reencode_on_stream_copy_fail(
-        self, tmp_path: Path, tmp_audio: Path,
+        self,
+        tmp_path: Path,
+        tmp_audio: Path,
     ) -> None:
         out = tmp_path / "out.mp3"
         call_count = 0
@@ -123,18 +127,23 @@ class TestTrimAudio:
             r.stderr = ""
             return r
 
-        with patch("subprocess.run", side_effect=_side_effect):
+        with patch("app.services.processor.subprocess.run", side_effect=_side_effect):
             result = trim_audio(tmp_audio, out, start=None, end=30.0)
 
         assert call_count == 2
         assert result == out
 
     def test_raises_processing_error_on_both_fail(
-        self, tmp_path: Path, tmp_audio: Path,
+        self,
+        tmp_path: Path,
+        tmp_audio: Path,
     ) -> None:
         out = tmp_path / "out.mp3"
         with (
-            patch("subprocess.run", return_value=_mock_run_failure()),
+            patch(
+                "app.services.processor.subprocess.run",
+                return_value=_mock_run_failure(),
+            ),
             pytest.raises(ProcessingError, match="FFmpeg re-encode failed"),
         ):
             trim_audio(tmp_audio, out, start=0.0, end=30.0)
@@ -144,7 +153,10 @@ class TestTrimAudio:
         # Write a file to simulate partial output
         out.write_bytes(b"corrupt")
         with (
-            patch("subprocess.run", return_value=_mock_run_failure()),
+            patch(
+                "app.services.processor.subprocess.run",
+                return_value=_mock_run_failure(),
+            ),
             pytest.raises(ProcessingError),
         ):
             trim_audio(tmp_audio, out, start=0.0, end=30.0)
@@ -152,7 +164,9 @@ class TestTrimAudio:
 
     def test_no_start_no_end(self, tmp_path: Path, tmp_audio: Path) -> None:
         out = tmp_path / "out.mp3"
-        with patch("subprocess.run", side_effect=_mock_run_success(out)):
+        with patch(
+            "app.services.processor.subprocess.run", side_effect=_mock_run_success(out)
+        ):
             result = trim_audio(tmp_audio, out, start=None, end=None)
         assert result == out
 
@@ -168,7 +182,7 @@ class TestTrimAudio:
             r.stderr = ""
             return r
 
-        with patch("subprocess.run", side_effect=_capture):
+        with patch("app.services.processor.subprocess.run", side_effect=_capture):
             trim_audio(tmp_audio, out, start=10.0, end=None)
 
         assert "-ss" in captured_cmds[0]
@@ -187,7 +201,7 @@ class TestTrimAudio:
 
         # Both attempts return empty file
         with (
-            patch("subprocess.run", side_effect=_empty_output),
+            patch("app.services.processor.subprocess.run", side_effect=_empty_output),
             pytest.raises(ProcessingError),
         ):
             trim_audio(tmp_audio, out, start=0.0, end=30.0)
@@ -199,7 +213,9 @@ class TestTrimAudio:
 class TestApplySpeed:
     def test_success(self, tmp_path: Path, tmp_audio: Path) -> None:
         out = tmp_path / "speed.mp3"
-        with patch("subprocess.run", side_effect=_mock_run_success(out)):
+        with patch(
+            "app.services.processor.subprocess.run", side_effect=_mock_run_success(out)
+        ):
             result = apply_speed(tmp_audio, out, speed=2.0)
         assert result == out
         assert out.exists()
@@ -216,7 +232,7 @@ class TestApplySpeed:
             r.stderr = ""
             return r
 
-        with patch("subprocess.run", side_effect=_capture):
+        with patch("app.services.processor.subprocess.run", side_effect=_capture):
             apply_speed(tmp_audio, out, speed=4.0)
 
         cmd = captured[0]
@@ -226,7 +242,10 @@ class TestApplySpeed:
     def test_raises_on_ffmpeg_failure(self, tmp_path: Path, tmp_audio: Path) -> None:
         out = tmp_path / "speed.mp3"
         with (
-            patch("subprocess.run", return_value=_mock_run_failure()),
+            patch(
+                "app.services.processor.subprocess.run",
+                return_value=_mock_run_failure(),
+            ),
             pytest.raises(ProcessingError, match="FFmpeg atempo failed"),
         ):
             apply_speed(tmp_audio, out, speed=1.5)
@@ -235,7 +254,10 @@ class TestApplySpeed:
         out = tmp_path / "speed.mp3"
         out.write_bytes(b"partial")
         with (
-            patch("subprocess.run", return_value=_mock_run_failure()),
+            patch(
+                "app.services.processor.subprocess.run",
+                return_value=_mock_run_failure(),
+            ),
             pytest.raises(ProcessingError),
         ):
             apply_speed(tmp_audio, out, speed=1.5)
@@ -252,16 +274,21 @@ class TestApplySpeed:
             return r
 
         with (
-            patch("subprocess.run", side_effect=_empty),
+            patch("app.services.processor.subprocess.run", side_effect=_empty),
             pytest.raises(ProcessingError, match="empty"),
         ):
             apply_speed(tmp_audio, out, speed=2.0)
 
     @pytest.mark.parametrize("speed", [0.5, 0.75, 1.5, 2.0, 4.0])
     def test_various_speeds_succeed(
-        self, tmp_path: Path, tmp_audio: Path, speed: float,
+        self,
+        tmp_path: Path,
+        tmp_audio: Path,
+        speed: float,
     ) -> None:
         out = tmp_path / f"speed_{speed}.mp3"
-        with patch("subprocess.run", side_effect=_mock_run_success(out)):
+        with patch(
+            "app.services.processor.subprocess.run", side_effect=_mock_run_success(out)
+        ):
             result = apply_speed(tmp_audio, out, speed=speed)
         assert result.exists()
