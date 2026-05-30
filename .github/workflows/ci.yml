@@ -302,6 +302,4 @@ jobs:
         uses: codecov/codecov-action@v6.0.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: junit-unit.xml # or junit-integration.xml
-          report_type: test_results
-          flags: unit # or integration
+          files: coverage.xml
