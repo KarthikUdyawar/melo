@@ -11,8 +11,9 @@ SHELL := /bin/bash
 	lint fmt \
 	pre-commit-install pre-commit \
 	test test-unit test-integration test-cov \
-	test-up test-down smoke \
-	act-lint act-unit act-integration act-coverage act-ci
+	test-up test-down smoke smoke-ui \
+	act-lint act-unit act-integration act-coverage act-ci \
+	tree
 
 .DEFAULT_GOAL := help
 
@@ -62,6 +63,7 @@ up: ## Build + start all services detached
 
 	echo ""
 	echo -e "$(GREEN)✅ Melo stack is up$(NC)"
+	echo "   UI:           http://localhost:3000"
 	echo "   API:          http://localhost:8000"
 	echo "   API docs:     http://localhost:8000/docs"
 	echo "   MinIO:        http://localhost:9001"
@@ -88,6 +90,9 @@ logs-api: ## Tail API logs
 
 logs-worker: ## Tail worker logs
 	$(COMPOSE) logs -f worker
+
+logs-ui: ## Tail UI logs
+	$(COMPOSE) logs -f ui
 
 ps: ## Show container status
 	$(COMPOSE) ps
@@ -290,6 +295,10 @@ smoke: ## Run smoke test against running stack
 	chmod +x tests/smoke_test.sh
 	bash tests/smoke_test.sh $(if $(URL),--url "$(URL)",)
 
+smoke-ui: ## Run UI smoke test against running stack (requires make up)
+	chmod +x tests/smoke_ui.sh
+	bash tests/smoke_ui.sh
+
 # ──────────────────────────────────────────────────────────────────────────────
 # GitHub Actions locally via act
 # ──────────────────────────────────────────────────────────────────────────────
@@ -311,3 +320,7 @@ act-coverage: ## Run coverage GitHub Action locally
 
 act-ci: ## Run full GitHub Actions pipeline locally
 	act --reuse --var ACT=true
+
+## Show project tree (respects .gitignore)
+tree:
+	tree --gitignore -I '__pycache__|*.pyc|*.egg-info'

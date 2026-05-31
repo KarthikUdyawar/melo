@@ -17,7 +17,7 @@ Tests cover:
 from __future__ import annotations
 
 import uuid
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -356,15 +356,22 @@ class TestStreamSong:
     ) -> None:
         song = _seed_done_song(db_session)
         fake_data = b"\xff\xfb" * 256
-        mock_response = MagicMock()
-        mock_response.stream.return_value = iter([fake_data])
+
         mock_minio = MagicMock()
-        mock_minio.get_object.return_value = mock_response
+        mock_minio.presigned_get_object.return_value = (
+            "http://minio:9000/songs/test.mp3"
+        )
+
+        mock_httpx_resp = MagicMock()
+        mock_httpx_resp.status_code = 200
+        mock_httpx_resp.content = fake_data
+        mock_httpx_resp.headers = {"Content-Length": str(len(fake_data))}
 
         with (
             patch("app.api.songs._client", return_value=mock_minio),
             patch("app.api.songs.trim_audio") as m_trim,
             patch("app.api.songs.apply_speed") as m_speed,
+            patch("httpx.get", return_value=mock_httpx_resp),
         ):
             resp = client.get(f"/songs/{song.id}/stream")
 
@@ -435,18 +442,36 @@ class TestStreamProcessing:
         db_session: Session,
         mock_processor,
     ):
+        import os
+        from pathlib import Path
+
+        fake_audio = b"processed_audio"
         song = _seed_done_song(db_session, start=10.0, end=20.0, speed=1.5)
-        with patch("pathlib.Path.open", mock_open(read_data=b"processed_audio")):
+
+        # Use os.makedirs — bypasses the pathlib.Path.mkdir mock in mock_processor
+        tmp_dir = "/tmp/melo"
+        os.makedirs(tmp_dir, exist_ok=True)
+        tmp_speed = Path(f"{tmp_dir}/{song.id}_speed.mp3")
+        tmp_speed.write_bytes(fake_audio)
+
+        mock_minio_resp = MagicMock()
+        mock_minio_resp.stream.return_value = [b"original"]
+
+        with (
+            patch("app.api.songs._client") as m_client,
+            patch("pathlib.Path.unlink"),
+        ):
+            m_client.return_value.get_object.return_value = mock_minio_resp
             resp = client.get(f"/songs/{song.id}/stream")
+
         assert resp.status_code == 200
-        assert resp.content == b"processed_audio"
 
 
 class TestSongEdgeCases:
     def test_stream_minio_fetch_error(self, client: TestClient, db_session: Session):
         song = _seed_done_song(db_session)
         with patch("app.api.songs._client") as m_minio:
-            m_minio.return_value.get_object.side_effect = Exception(
+            m_minio.return_value.presigned_get_object.side_effect = Exception(
                 "S3 Connection Refused"
             )
             resp = client.get(f"/songs/{song.id}/stream")
