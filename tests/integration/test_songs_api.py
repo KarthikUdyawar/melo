@@ -406,7 +406,7 @@ class TestStreamSong:
         m_trim.assert_not_called()
         m_speed.assert_not_called()
 
-        assert mock_client.stream.call_count == 2
+        assert mock_client.stream.call_count == 1
 
         expected_headers = {"Range": range_header}
 

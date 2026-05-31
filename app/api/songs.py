@@ -415,17 +415,13 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
     has_speed = song.speed is not None and song.speed != 1.0
 
     # ── Case 1: no processing — proxy MinIO directly, forwarding Range header ─
-    # Stream from MinIO instead of buffering the entire object in memory.
     if not has_trim and not has_speed:
+        from datetime import timedelta
+
         import httpx
         from fastapi.responses import StreamingResponse
 
         try:
-            from datetime import timedelta
-
-            # Use internal presigned URL (signed against minio:9000).
-            # Do NOT rewrite to public URL — API container fetches this
-            # server-side, so it must use the internal Docker hostname.
             presigned = client.presigned_get_object(
                 s.minio_bucket,
                 song.file_url,
@@ -434,7 +430,6 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        # Forward Range header from browser so MinIO returns 206 Partial Content
         headers: dict[str, str] = {}
         if range_header := request.headers.get("range"):
             headers["Range"] = range_header
@@ -446,18 +441,23 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
             pool=30.0,
         )
 
-        http_client = httpx.Client(timeout=timeout)
         try:
-            upstream = http_client.stream(
+            client_cm = httpx.Client(timeout=timeout)
+            http_client = client_cm.__enter__()
+
+            stream_cm = http_client.stream(
                 "GET",
                 presigned,
                 headers=headers,
                 follow_redirects=False,
-            ).__enter__()
+            )
+
+            upstream = stream_cm.__enter__()
 
             if upstream.status_code not in (200, 206):
-                upstream.close()
-                http_client.close()
+                stream_cm.__exit__(None, None, None)
+                client_cm.__exit__(None, None, None)
+
                 raise HTTPException(
                     status_code=502,
                     detail=f"Storage service returned HTTP {upstream.status_code}",
@@ -468,12 +468,17 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
                 "Accept-Ranges": "bytes",
                 "Content-Disposition": build_content_disposition(filename),
             }
-            for h in ("Content-Length", "Content-Range", "ETag", "Last-Modified"):
+
+            for h in (
+                "Content-Length",
+                "Content-Range",
+                "ETag",
+                "Last-Modified",
+            ):
                 if h in upstream.headers:
                     response_headers[h] = upstream.headers[h]
 
         except httpx.HTTPError as exc:
-            http_client.close()
             raise HTTPException(
                 status_code=502,
                 detail=f"Failed to fetch audio from storage: {exc}",
@@ -483,8 +488,8 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
             try:
                 yield from upstream.iter_bytes()
             finally:
-                upstream.close()
-                http_client.close()
+                stream_cm.__exit__(None, None, None)
+                client_cm.__exit__(None, None, None)
 
         return StreamingResponse(
             stream_and_close(),
