@@ -1,53 +1,81 @@
-# Melo — Handoff
+# Melo — Handoff Document
 
+**Date:** 2026-05-31
 **Repo:** `KarthikUdyawar/melo`
-**Branch:** `feature/api-polish` (API-3 complete)
-**Sprint doc:** `docs/sprints/Sprint-3.md`
+**Active branch:** `feature/ui-scaffold` (seeking fix in progress, not yet committed)
+**Active skills:** `/caveman ultra`, `/clean-code`, `/tdd`
 
 ---
 
-## State
+## Session Summary
 
-Sprint 3 is **done**. All API-3 slices (1–7) are implemented and the test suite is green.
-
-Two housekeeping tasks remain before closing the sprint branch:
-- [ ] Merge `feature/api-polish` → `develop`
-- [ ] Move `Sprint-3.md` to `docs/sprints/Sprint-3.md`
-
----
-
-## What was done this session
-
-### Bug fix (code)
-`app/api/_song_utils.py` — `_is_favorited` was missing `.filter(Favorite.deleted_at.is_(None))`, causing `is_favorite` to stay `True` after a soft-delete. Fixed.
-
-### Test fixes (9 failures → 0)
-Files updated (outputs already produced):
-
-| Output file                 | Destination                                                         |
-| --------------------------- | ------------------------------------------------------------------- |
-| `_song_utils.py`            | `app/api/_song_utils.py`                                            |
-| `test_favorites.py`         | `tests/unit/test_favorites.py`                                      |
-| `test_preview.py`           | `tests/unit/test_preview.py`                                        |
-| `test_preview_api.py`       | `tests/integration/test_preview_api.py`                             |
-| `test_playlist_schemas.py`  | `tests/unit/test_playlist_schemas.py`                               |
-| `TestHealth_replacement.py` | Replace `TestHealth` class in `tests/integration/test_songs_api.py` |
-
-### Docs updated
-- `README.md` — `DELETE /songs/{id}` in API table, `make clean-tmp` in targets, API-3 decision log rows, Out of Scope cleaned up
-- `Sprint-3.md` — All API-3 slices checked off, Definition of Done updated, test fix table added
+1. **`make tree`** added to Makefile.
+2. **UI-0 confirmed complete** — `feature/ui-scaffold` → `develop` ready to merge.
+3. **Audio playback bug fixed** — `handleGlobalClick` early `return` blocked card clicks. Fixed by moving card/playlist checks above action guard.
+4. **Audio seeking root cause diagnosed** — stream endpoint returns `200 OK` with no `Accept-Ranges`, browser treats stream as non-seekable.
+5. **`songs.py` rewritten** for range support — see below.
+6. **Seeking still unverified** — session ended before final confirmation.
 
 ---
 
-## Next session — Sprint 4
+## Seeking Fix — Status
 
-Sprint 4 focus: **Frontend UI**.
-Reference: `docs/sprints/SPRINT_X.md` (template) — create `Sprint-4.md` from it.
+Latest `songs.py` at `/mnt/user-data/outputs/songs.py`:
 
-Likely scope:
-- Streamlit or React frontend
-- `make seed` for sample data
-- `GET /favorites` cursor pagination (deferred from Sprint 3)
-- HTTP 206 range streaming (deferred)
+- **No trim/speed:** `httpx.get(internal_presigned_url, headers={"Range": ...})` → proxied `Response` with `Accept-Ranges: bytes`. Uses `minio:9000` (internal) — API container can reach it, signature valid.
+- **Trim/speed:** `FileResponse(final_path, background=BackgroundTask(_cleanup))` — Starlette handles `206` natively.
+- `StreamingResponse` removed from both paths.
+- `stream_song` now takes `request: Request` for Range header forwarding.
 
-**Skills to activate:** `/clean-code /tdd` (if building backend additions), `/caveman` for token efficiency.
+Apply:
+```bash
+cp /mnt/user-data/outputs/songs.py app/api/songs.py
+# auto-reloads via uvicorn --reload
+```
+
+Verify:
+```bash
+curl -H "Range: bytes=0-1023" -I http://localhost:8000/songs/<done-id>/stream
+# Must return: HTTP/1.1 206 Partial Content + Accept-Ranges: bytes
+```
+
+If 502: `docker compose logs api --tail=30` for httpx traceback.
+
+---
+
+## Sprint 4 Status
+
+| Ticket | Status | Notes |
+|--------|--------|-------|
+| UI-0 — Scaffold | ✅ done | Merge to develop |
+| UI-1 — Library | 🟡 partial | Missing: Retry on failed cards |
+| UI-2 — Add Song Modal | 🟡 partial | Missing: loading spinner |
+| UI-3 — Player Bar | 🟡 partial | Play/pause works. **Seeking broken (P0)** |
+| UI-4 — Favorites | ⬜ todo | |
+| UI-5 — Playlists | ⬜ todo | |
+| UI-6 — Polish | ⬜ todo | |
+
+---
+
+## Files Changed This Session (uncommitted)
+
+| File | Where | Notes |
+|------|-------|-------|
+| `app/api/songs.py` | `/mnt/user-data/outputs/songs.py` | Copy + verify seeking |
+| `ui/player.js` | `/mnt/user-data/outputs/player.js` | Improved scrubber — apply after seeking confirmed |
+| `ui/app.js` | In repo | Card click fix applied; debug `console.log` lines present — remove before merge |
+
+---
+
+## Known Bugs
+
+- "Load more" shows with 1 song (bookmark null check too late) — UI-6 scope
+- Active card highlight only updates visible cards on play — UI-6 scope
+- `share-modal.js` console error — browser extension, not Melo
+
+## Constraints
+- Caveman ultra active
+- Clean code — SRP, ≤20 line functions
+- No build tooling, no TypeScript, no frontend tests
+- Design tokens only — no raw hex in CSS
+- Python changes hot-reload; UI changes need `docker compose build ui && docker compose up -d ui`

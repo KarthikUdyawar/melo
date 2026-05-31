@@ -1,7 +1,7 @@
 """Song-related API endpoints."""
 
 # app/api/songs.py
-from collections.abc import Generator
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -9,8 +9,8 @@ from typing import Annotated, Any
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import literal, tuple_
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -35,6 +35,8 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/songs", tags=["songs"])
 
 _TMP_DIR = Path("/tmp/melo")  # nosec B108
+
+_PRESIGNED_EXPIRY = 3600  # seconds
 
 
 # ── query param enums ─────────────────────────────────────────────────────────
@@ -94,6 +96,18 @@ def _cursor_value(song: Song, sort_by: SortBy) -> object:
         SortBy.song_title: song.title,
         SortBy.duration: song.duration,
     }[sort_by]
+
+
+def _rewrite_minio_url(url: str) -> str:
+    """Rewrite internal MinIO hostname to public URL if configured."""
+    s = get_settings()
+    if not s.minio_public_url:
+        return url
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(url)
+    public = urlparse(s.minio_public_url)
+    return urlunparse(parsed._replace(scheme=public.scheme, netloc=public.netloc))
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
@@ -357,6 +371,8 @@ def delete_song(song_id: UUID, db: DbDep) -> Response:
     "/{song_id}/stream",
     summary="Stream song audio with optional on-the-fly trim and speed",
     responses={
+        302: {"description": "Redirect to presigned MinIO URL (no processing needed)"},
+        200: {"description": "Audio file (trim/speed applied)"},
         404: {"description": "Song not found"},
         409: {"description": "Song not ready (status is not done)"},
         500: {"description": "Song has no file_url"},
@@ -371,8 +387,12 @@ def delete_song(song_id: UUID, db: DbDep) -> Response:
         }
     },
 )
-def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
-    """Stream mp3. Direct MinIO proxy when no trim/speed; FFmpeg pipeline otherwise."""
+def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
+    """Stream mp3.
+
+    - No trim/speed → presigned MinIO redirect (browser gets range support natively).
+    - Trim/speed → process to tmp file → FileResponse (Starlette handles ranges).
+    """
     song = db.query(Song).filter(Song.id == song_id, Song.deleted_at.is_(None)).first()
     if not song:
         raise HTTPException(status_code=404, detail=f"Song {song_id} not found.")
@@ -394,24 +414,93 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
     has_trim = song.start is not None or song.end is not None
     has_speed = song.speed is not None and song.speed != 1.0
 
+    # ── Case 1: no processing — proxy MinIO directly, forwarding Range header ─
     if not has_trim and not has_speed:
+        from datetime import timedelta
+
+        import httpx
+        from fastapi.responses import StreamingResponse
+
         try:
-            response = client.get_object(s.minio_bucket, song.file_url)
+            presigned = client.presigned_get_object(
+                s.minio_bucket,
+                song.file_url,
+                expires=timedelta(seconds=_PRESIGNED_EXPIRY),
+            )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        def _proxy_stream() -> Generator[bytes, None, None]:
+        headers: dict[str, str] = {}
+        if range_header := request.headers.get("range"):
+            headers["Range"] = range_header
+
+        timeout = httpx.Timeout(
+            connect=5.0,
+            read=None,
+            write=30.0,
+            pool=30.0,
+        )
+
+        try:
+            client_cm = httpx.Client(timeout=timeout)
+            http_client = client_cm.__enter__()
+
+            stream_cm = http_client.stream(
+                "GET",
+                presigned,
+                headers=headers,
+                follow_redirects=False,
+            )
+
+            upstream = stream_cm.__enter__()
+
+            if upstream.status_code not in (200, 206):
+                stream_cm.__exit__(None, None, None)
+                client_cm.__exit__(None, None, None)
+
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Storage service returned HTTP {upstream.status_code}",
+                )
+
+            response_headers = {
+                "Content-Type": "audio/mpeg",
+                "Accept-Ranges": "bytes",
+                "Content-Disposition": build_content_disposition(filename),
+            }
+
+            for h in (
+                "Content-Length",
+                "Content-Range",
+                "ETag",
+                "Last-Modified",
+            ):
+                if h in upstream.headers:
+                    response_headers[h] = upstream.headers[h]
+
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to fetch audio from storage: {exc}",
+            ) from exc
+
+        def stream_and_close() -> Iterator[bytes]:
             try:
-                yield from response.stream(32 * 1024)
+                yield from upstream.iter_bytes()
             finally:
-                response.close()
-                response.release_conn()
+                stream_cm.__exit__(None, None, None)
+                client_cm.__exit__(None, None, None)
 
         return StreamingResponse(
-            _proxy_stream(),
+            stream_and_close(),
+            status_code=206 if "Content-Range" in response_headers else 200,
             media_type="audio/mpeg",
-            headers={"Content-Disposition": build_content_disposition(filename)},
+            headers=response_headers,
         )
+
+    # ── Case 2: trim/speed — write to tmp file, serve with FileResponse ───────
+    # Starlette's FileResponse handles Accept-Ranges / 206 Partial Content.
+    _TMP_DIR.mkdir(parents=True, exist_ok=True)
 
     original_path = _TMP_DIR / f"{song_id}_original.mp3"
     trimmed_path = _TMP_DIR / f"{song_id}_trimmed.mp3"
@@ -419,12 +508,11 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
     created_paths: list[Path] = []
 
     try:
-        _TMP_DIR.mkdir(parents=True, exist_ok=True)
-
+        # Download from MinIO
         try:
             minio_response = client.get_object(s.minio_bucket, song.file_url)
+            created_paths.append(original_path)
             try:
-                created_paths.append(original_path)
                 with original_path.open("wb") as f:
                     for chunk in minio_response.stream(32 * 1024):
                         f.write(chunk)
@@ -434,6 +522,7 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+        # Trim
         post_trim_path = original_path
         if has_trim:
             try:
@@ -450,12 +539,15 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
                     status_code=502, detail=f"Trim failed: {exc}"
                 ) from exc
 
+        # Speed
         final_path = post_trim_path
         if has_speed:
             try:
                 created_paths.append(speed_path)
                 apply_speed(
-                    input_path=post_trim_path, output_path=speed_path, speed=song.speed
+                    input_path=post_trim_path,
+                    output_path=speed_path,
+                    speed=song.speed,
                 )
                 final_path = speed_path
             except (ProcessingError, Exception) as exc:
@@ -463,21 +555,22 @@ def stream_song(song_id: UUID, db: DbDep) -> StreamingResponse:
                     status_code=502, detail=f"Speed processing failed: {exc}"
                 ) from exc
 
-        paths_to_cleanup = list(created_paths)
+        # Cleanup all tmp files except final_path — FileResponse reads it async.
+        # Final path is unlinked via background task after response completes.
+        from starlette.background import BackgroundTask
 
-        def _iter_and_cleanup() -> Generator[bytes, None, None]:
-            try:
-                with final_path.open("rb") as f:
-                    while chunk := f.read(32 * 1024):
-                        yield chunk
-            finally:
-                for p in paths_to_cleanup:
-                    p.unlink(missing_ok=True)
+        paths_to_cleanup = [p for p in created_paths if p != final_path]
 
-        return StreamingResponse(
-            _iter_and_cleanup(),
+        def _cleanup() -> None:
+            for p in [*paths_to_cleanup, final_path]:
+                p.unlink(missing_ok=True)
+
+        logger.info("stream_file_response", song_id=str(song_id), path=str(final_path))
+        return FileResponse(
+            path=final_path,
             media_type="audio/mpeg",
-            headers={"Content-Disposition": build_content_disposition(filename)},
+            filename=filename,
+            background=BackgroundTask(_cleanup),
         )
 
     except HTTPException:

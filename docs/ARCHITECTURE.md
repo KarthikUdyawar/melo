@@ -8,6 +8,8 @@
 
 | Layer      | Tech                  |
 | ---------- | --------------------- |
+| UI         | Vanilla HTML/JS/CSS   |
+| Serving    | nginx                 |
 | API        | FastAPI + Uvicorn     |
 | Queue      | Celery + Redis        |
 | Download   | yt-dlp                |
@@ -23,9 +25,10 @@
 
 ```mermaid
 graph TD
-    Client["🖥️ Client (curl / browser)"]
+    Browser["🖥️ Browser\nlocalhost:3000"]
 
     subgraph Docker Compose
+        UI["🌐 nginx UI\n:3000\nHTML + JS + CSS"]
         API["⚡ FastAPI\n:8000"]
         Worker["⚙️ Celery Worker"]
         PG[("🐘 PostgreSQL\n:5432")]
@@ -37,7 +40,8 @@ graph TD
 
     YT["▶️ YouTube"]
 
-    Client -->|HTTP REST| API
+    Browser -->|serves static files| UI
+    Browser -->|"/api/* proxied by nginx"| API
     API --> PG
     API --> Redis
     API --> MinIO
@@ -50,11 +54,50 @@ graph TD
 
 ---
 
+## UI Architecture
+
+```mermaid
+graph LR
+    subgraph "ui/ — static files served by nginx"
+        HTML["index.html\napp shell + Google Fonts"]
+        CSS["style.css\nCSS vars + all styles"]
+        API_JS["api.js\napiFetch + endpoint wrappers"]
+        PLAYER["player.js\naudio element + scrubber"]
+        COMP["components.js\nrenderSongCard, renderStatusPill\nrenderModal, renderToast"]
+        APP["app.js\nhash router + page logic\npolling + event delegation"]
+    end
+
+    HTML --> CSS
+    HTML --> APP
+    APP --> API_JS
+    APP --> PLAYER
+    APP --> COMP
+```
+
+**No build step.** nginx serves files directly. Browser loads via `<script type="module">`.
+
+---
+
+## nginx Proxy
+
+```mermaid
+flowchart LR
+    Browser -->|"GET /index.html\nGET /style.css\nGET /app.js ..."| nginx
+    Browser -->|"GET /api/songs\nPOST /api/songs\nGET /api/songs/id/stream"| nginx
+    nginx -->|static files| dist["ui/ files\n/usr/share/nginx/html"]
+    nginx -->|"proxy_pass\nproxy_buffering off"| API["api:8000"]
+```
+
+All `/api/*` requests proxied to `api:8000`. `proxy_buffering off` required for audio stream.
+
+---
+
 ## Request & Async Job Flow
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
+    participant B as Browser
+    participant N as nginx
     participant A as FastAPI
     participant R as Redis
     participant W as Celery Worker
@@ -62,16 +105,18 @@ sequenceDiagram
     participant M as MinIO
     participant DB as PostgreSQL
 
-    Note over C,A: Preview (stateless — no DB write)
-    C->>A: POST /songs/preview {url}
+    Note over B,A: Preview (stateless — no DB write)
+    B->>N: POST /api/songs/preview {url}
+    N->>A: proxy
     A->>YT: yt-dlp probe_metadata (no download)
-    A-->>C: 200 {youtube_id, title, duration, channel, thumbnail_url}
+    A-->>B: 200 {youtube_id, title, duration, channel, thumbnail_url}
 
-    Note over C,DB: Submit Song
-    C->>A: POST /songs {url, start, end, speed}
+    Note over B,DB: Submit Song
+    B->>N: POST /api/songs {url, start, end, speed}
+    N->>A: proxy
     A->>DB: INSERT song (status=pending)
     A->>R: enqueue process_song_task
-    A-->>C: 202 {id, status=pending}
+    A-->>B: 202 {id, status=pending}
 
     Note over R,DB: Async Processing
     R->>W: dequeue task
@@ -80,12 +125,18 @@ sequenceDiagram
     W->>M: upload songs/<id>.mp3
     W->>DB: UPDATE file_url, duration, status=done
 
-    Note over C,A: Streaming
-    C->>A: GET /songs/{id}/stream
+    Note over B,A: Poll until done
+    B->>N: GET /api/songs/{id}
+    N->>A: proxy
+    A-->>B: { status: "done", stream_url: "/api/songs/id/stream" }
+
+    Note over B,A: Streaming
+    B->>N: GET /api/songs/{id}/stream
+    N->>A: proxy (buffering off)
     A->>DB: SELECT song WHERE id=…
     A->>M: get_object(songs/<id>.mp3)
     Note over A: trim + speed applied on-the-fly via FFmpeg
-    A-->>C: StreamingResponse (audio/mpeg)
+    A-->>B: StreamingResponse (audio/mpeg)
 ```
 
 ---
@@ -290,11 +341,18 @@ melo/
 │   └── workers/
 │       ├── celery_app.py   # Celery app + Redis broker config
 │       └── tasks.py        # process_song_task (download → process → upload)
+├── ui/
+│   ├── index.html          # app shell + Google Fonts
+│   ├── style.css           # CSS vars + all styles + animations
+│   ├── api.js              # apiFetch + all endpoint wrappers
+│   ├── player.js           # audio element + player state + scrubber
+│   ├── components.js       # renderSongCard, renderStatusPill, renderModal, renderToast
+│   ├── app.js              # hash router + page renderers + polling
+│   ├── nginx.conf          # SPA fallback + /api/ proxy
+│   └── Dockerfile          # FROM nginx:alpine, COPY, done
 ├── tests/
 │   ├── unit/               # Mocked, SQLite — no Docker needed
 │   └── integration/        # Postgres via pytest-docker
-├── docs/
-│   └── sprints/
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile
@@ -308,6 +366,7 @@ melo/
 
 | Service       | URL                        |
 | ------------- | -------------------------- |
+| UI            | http://localhost:3000      |
 | API           | http://localhost:8000      |
 | API Docs      | http://localhost:8000/docs |
 | MinIO Console | http://localhost:9001      |
@@ -321,6 +380,11 @@ melo/
 
 | Decision                                         | Reason                                                              |
 | ------------------------------------------------ | ------------------------------------------------------------------- |
+| Vanilla HTML/JS/CSS for UI                       | Zero build step; 2s Docker build; no Node/pnpm/WSL memory issues    |
+| nginx serves UI + proxies `/api/*`               | Single entry point; no CORS; `proxy_buffering off` for audio stream |
+| Hash routing (`#/`)                              | No server config needed for SPA; nginx serves index.html for all    |
+| Single `<audio>` element                         | Persistent player across hash navigation; no framework state needed |
+| ES modules (`type="module"`)                     | Clean imports without bundler; native browser support               |
 | UUID v7 for all PKs                              | String-sortable = chronological = natural cursor key for pagination |
 | Cursor pagination on `GET /songs`                | Stable under concurrent inserts; no offset drift                    |
 | Speed applied at stream time                     | Avoid storing per-speed variants in MinIO                           |

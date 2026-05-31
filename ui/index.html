@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Melo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700&family=DM+Mono:wght@400;500&display=swap"
+        rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+    <aside class="sidebar">
+        <div class="sidebar__logo">melo</div>
+        <nav class="sidebar__nav">
+            <a href="#/" class="nav-link" data-route="/">Library</a>
+            <a href="#/favorites" class="nav-link" data-route="/favorites">Favorites</a>
+            <a href="#/playlists" class="nav-link" data-route="/playlists">Playlists</a>
+        </nav>
+        <button class="btn btn--accent sidebar__add" id="btn-add-song" aria-label="Add song">
+            + Add Song
+        </button>
+    </aside>
+
+    <main class="main">
+        <div id="page-content"></div>
+    </main>
+
+    <div class="player-bar player-bar--empty" id="player-bar">
+        <div class="player-bar__info">
+            <img class="player-bar__thumb" id="player-thumb" alt="" width="40" height="40" />
+            <div class="player-bar__meta">
+                <span class="player-bar__title" id="player-title"></span>
+                <span class="player-bar__channel" id="player-channel"></span>
+            </div>
+        </div>
+        <div class="player-bar__controls">
+            <button class="player-btn" id="btn-play-pause" aria-label="Play / Pause">
+                <svg id="icon-play" width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M6 4l10 6-10 6V4z" />
+                </svg>
+                <svg id="icon-pause" width="20" height="20" viewBox="0 0 20 20" fill="currentColor"
+                    style="display:none">
+                    <rect x="4" y="3" width="4" height="14" rx="1" />
+                    <rect x="12" y="3" width="4" height="14" rx="1" />
+                </svg>
+            </button>
+            <input type="range" class="player-scrubber" id="player-scrubber" min="0" max="100" value="0" step="0.1"
+                aria-label="Seek" />
+            <span class="player-time" id="player-time">0:00 / 0:00</span>
+        </div>
+    </div>
+
+    <div id="modal-root"></div>
+    <div id="toast-root"></div>
+
+    <script type="module" src="app.js"></script>
+</body>
+
+</html>
