@@ -3,6 +3,7 @@
 This module defines the request/response models used for YouTube song
 processing, including URL validation, trim/speed settings, and preview responses.
 """
+
 # app/schemas/song.py
 import re
 from typing import Literal
@@ -35,6 +36,7 @@ class SongCreate(BaseModel):
 
     Supports optional start/end trimming and playback speed adjustment.
     """
+
     url: str
     start: float | None = None
     end: float | None = None
@@ -192,8 +194,8 @@ class SongResponse(BaseModel):
     )
     effective_duration: float | None = Field(
         default=None,
-        description="Playback duration after trim (end - start). \
-            Falls back to full duration when trim not set.",
+        description="Playback duration in seconds after trim and speed adjustment. "
+        "= (end - start or duration) / speed.",
     )
 
     model_config = {"from_attributes": True}
@@ -206,9 +208,15 @@ class SongResponse(BaseModel):
 
     @model_validator(mode="after")
     def compute_effective_duration(self) -> "SongResponse":
-        """Set effective_duration = end - start when both trim points are present."""
-        if self.start is not None and self.end is not None:
-            self.effective_duration = self.end - self.start
-        else:
-            self.effective_duration = self.duration
+        """Set effective_duration = playback duration after trim and speed."""
+        raw: float | None = (
+            self.end - self.start
+            if self.start is not None and self.end is not None
+            else self.duration
+        )
+
+        self.effective_duration = (
+            round(raw / self.speed, 2) if raw is not None and self.speed != 1.0 else raw
+        )
+
         return self

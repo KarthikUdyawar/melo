@@ -26,6 +26,8 @@ services:
     volumes:
       - ./app:/app/app
       - melo_logs:/var/log/melo
+    tmpfs:
+      - /tmp/melo:mode=1777
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s

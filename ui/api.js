@@ -5,9 +5,20 @@ async function apiFetch(path, init = {}) {
         headers: { 'Content-Type': 'application/json', ...init.headers },
     });
     if (res.status === 204) return undefined;
-    const envelope = await res.json();
-    if (!res.ok) throw new Error(envelope.message ?? res.statusText);
-    return envelope.body;
+    const isJson = (res.headers.get('content-type') ?? '').includes('application/json');
+    const payload = isJson ? await res.json() : await res.text();
+
+    if (!res.ok) {
+        const error = new Error(
+            typeof payload === 'object' && payload !== null
+                ? (payload.message ?? res.statusText)
+                : (payload || res.statusText)
+        );
+        error.status = res.status;
+        throw error;
+    }
+
+    return typeof payload === 'object' && payload !== null ? payload.body : payload;
 }
 
 // ── Songs ────────────────────────────────────────────────────────────────

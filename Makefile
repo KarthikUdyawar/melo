@@ -321,6 +321,5 @@ act-coverage: ## Run coverage GitHub Action locally
 act-ci: ## Run full GitHub Actions pipeline locally
 	act --reuse --var ACT=true
 
-## Show project tree (respects .gitignore)
-tree:
+tree: ## Show project tree (respects .gitignore)
 	tree --gitignore -I '__pycache__|*.pyc|*.egg-info'

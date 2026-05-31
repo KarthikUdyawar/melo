@@ -1,6 +1,7 @@
 """Song-related API endpoints."""
 
 # app/api/songs.py
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -414,10 +415,10 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
     has_speed = song.speed is not None and song.speed != 1.0
 
     # ── Case 1: no processing — proxy MinIO directly, forwarding Range header ─
-    # Redirect breaks signature (internal vs external host mismatch).
-    # Proxying through FastAPI preserves range support for seeking.
+    # Stream from MinIO instead of buffering the entire object in memory.
     if not has_trim and not has_speed:
         import httpx
+        from fastapi.responses import StreamingResponse
 
         try:
             from datetime import timedelta
@@ -438,23 +439,71 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
         if range_header := request.headers.get("range"):
             headers["Range"] = range_header
 
+        timeout = httpx.Timeout(
+            connect=5.0,
+            read=None,
+            write=30.0,
+            pool=30.0,
+        )
+
+        def stream_minio() -> Iterator[bytes]:
+            with httpx.Client(timeout=timeout) as http_client:  # noqa: SIM117
+                with http_client.stream(
+                    "GET",
+                    presigned,
+                    headers=headers,
+                    follow_redirects=False,
+                ) as upstream:
+                    if upstream.status_code not in (200, 206):
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"Storage service returned HTTP \
+                                {upstream.status_code}",
+                        )
+
+                    yield from upstream.iter_bytes()
+
         try:
-            minio_resp = httpx.get(presigned, headers=headers, follow_redirects=False)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            with httpx.Client(timeout=timeout) as http_client:  # noqa: SIM117
+                with http_client.stream(
+                    "GET",
+                    presigned,
+                    headers=headers,
+                    follow_redirects=False,
+                ) as upstream:
 
-        response_headers = {
-            "Content-Type": "audio/mpeg",
-            "Accept-Ranges": "bytes",
-            "Content-Disposition": build_content_disposition(filename),
-        }
-        for h in ("Content-Length", "Content-Range", "ETag", "Last-Modified"):
-            if h in minio_resp.headers:
-                response_headers[h] = minio_resp.headers[h]
+                    if upstream.status_code not in (200, 206):
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"Storage service returned HTTP \
+                                {upstream.status_code}",
+                        )
 
-        return Response(
-            content=minio_resp.content,
-            status_code=minio_resp.status_code,
+                    response_headers = {
+                        "Content-Type": "audio/mpeg",
+                        "Accept-Ranges": "bytes",
+                        "Content-Disposition": build_content_disposition(filename),
+                    }
+
+                    for h in (
+                        "Content-Length",
+                        "Content-Range",
+                        "ETag",
+                        "Last-Modified",
+                    ):
+                        if h in upstream.headers:
+                            response_headers[h] = upstream.headers[h]
+
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to fetch audio from storage: {exc}",
+            ) from exc
+
+        return StreamingResponse(
+            stream_minio(),
+            status_code=200 if "Content-Range" not in response_headers else 206,
+            media_type="audio/mpeg",
             headers=response_headers,
         )
 

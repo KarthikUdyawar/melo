@@ -18,15 +18,31 @@ const state = {
     pollTimer: null,
     libraryQuery: { sort_by: 'created_at', order: 'desc', limit: '50' },
     bookmark: null,
-    playlists: [],          // cache for overflow menu
+    playlists: [], // cache for overflow menu
+    routeToken: 0,
+    loadedCount: 0, // Number of songs currently rendered in the library view.
 };
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 
-player.bindScrubber();
-bindGlobalEvents();
-checkApiHealth();
-route();
+async function bootstrap() {
+    player.bindScrubber();
+    bindGlobalEvents();
+    checkApiHealth();
+
+    // Preload playlists before first render so song-card menus
+    // have playlist options available immediately.
+    try {
+        const data = await api.listPlaylists();
+        state.playlists = data.records;
+    } catch {
+        // non-fatal
+    }
+
+    route();
+}
+
+bootstrap();
 
 window.addEventListener('hashchange', () => {
     stopPoll();
@@ -59,15 +75,26 @@ function highlightNavLink(hash) {
     });
 }
 
+function nextRouteToken() {
+    state.routeToken += 1;
+    return state.routeToken;
+}
+
 // ── Library Page ──────────────────────────────────────────────────────────
 
 async function renderLibraryPage() {
+    const token = nextRouteToken();
+
     document.title = 'Melo — Library';
     state.bookmark = null;
+    state.loadedCount = 0;
+
     const content = document.getElementById('page-content');
     content.innerHTML = buildLibraryShell();
+
     bindLibraryFilterEvents();
-    await loadLibrarySongs(false);
+
+    await loadLibrarySongs(false, token);
 }
 
 function buildLibraryShell() {
@@ -134,40 +161,64 @@ function updateLibraryQuery(patch) {
     });
 }
 
-async function loadLibrarySongs(append) {
+async function loadLibrarySongs(append, token = state.routeToken) {
     const params = { ...state.libraryQuery };
-    if (state.bookmark) params.after = state.bookmark;
+
+    if (state.bookmark) {
+        params.after = state.bookmark;
+    }
 
     let data;
+
     try {
         data = await api.listSongs(params);
     } catch (err) {
+        if (token !== state.routeToken) return;
         renderToast(err.message, 'error');
         return;
     }
+
+    if (token !== state.routeToken) return;
 
     const list = document.getElementById('song-list');
     if (!list) return;
 
     const currentSongId = player.getCurrentSongId?.() ?? null;
-    const cards = data.records.map(s =>
-        renderSongCard(s, s.id === currentSongId, state.playlists.map(p => p.name))
-    ).join('');
+
+    const cards = data.records
+        .map(song =>
+            renderSongCard(
+                song,
+                song.id === currentSongId,
+                state.playlists.map(p => p.name)
+            )
+        )
+        .join('');
 
     if (append) {
         list.insertAdjacentHTML('beforeend', cards);
+        state.loadedCount += data.records.length;
     } else {
-        list.innerHTML = data.records.length === 0 ? buildEmptyLibrary() : cards;
+        list.innerHTML =
+            data.records.length === 0
+                ? buildEmptyLibrary()
+                : cards;
+
+        state.loadedCount = data.records.length;
     }
 
     // Only show "Load more" if the API returned a full page AND there's a bookmark.
     // A partial page means we've reached the end even if bookmark is non-null.
     const limit = parseInt(state.libraryQuery.limit, 10) || 50;
     const hasMore = !!data.bookmark && data.records.length >= limit;
+
     state.bookmark = hasMore ? data.bookmark : null;
 
     const loadMoreWrap = document.getElementById('load-more-wrap');
-    if (loadMoreWrap) loadMoreWrap.style.display = hasMore ? '' : 'none';
+
+    if (loadMoreWrap) {
+        loadMoreWrap.style.display = hasMore ? '' : 'none';
+    }
 
     maybeStartPoll(data.records);
 }
@@ -189,20 +240,54 @@ function maybeStartPoll(songs) {
 }
 
 async function pollLibrary() {
-    const params = { ...state.libraryQuery, limit: '50' };
+    const params = {
+        ...state.libraryQuery,
+        limit: String(
+            Math.max(
+                state.loadedCount,
+                parseInt(state.libraryQuery.limit, 10) || 50
+            )
+        ),
+    };
+
     let data;
-    try { data = await api.listSongs(params); } catch { return; }
+
+    try {
+        data = await api.listSongs(params);
+    } catch {
+        return;
+    }
 
     const list = document.getElementById('song-list');
-    if (!list) { stopPoll(); return; }
+
+    if (!list) {
+        stopPoll();
+        return;
+    }
 
     const currentSongId = player.getCurrentSongId?.() ?? null;
-    list.innerHTML = data.records.map(s =>
-        renderSongCard(s, s.id === currentSongId, state.playlists.map(p => p.name))
-    ).join('');
 
-    const stillPending = data.records.some(s => s.status === 'pending' || s.status === 'processing');
-    if (!stillPending) stopPoll();
+    list.innerHTML = data.records
+        .map(song =>
+            renderSongCard(
+                song,
+                song.id === currentSongId,
+                state.playlists.map(p => p.name)
+            )
+        )
+        .join('');
+
+    state.loadedCount = data.records.length;
+
+    const stillPending = data.records.some(
+        song =>
+            song.status === 'pending' ||
+            song.status === 'processing'
+    );
+
+    if (!stillPending) {
+        stopPoll();
+    }
 }
 
 function stopPoll() {
@@ -215,42 +300,77 @@ function stopPoll() {
 // ── Favorites Page ────────────────────────────────────────────────────────
 
 async function renderFavoritesPage() {
+    const token = nextRouteToken();
+
     document.title = 'Melo — Favorites';
+
     const content = document.getElementById('page-content');
-    content.innerHTML = `<div class="page-header"><h1 class="page-title">Favorites</h1></div>
-    <div class="song-list" id="song-list" role="list"></div>`;
+
+    content.innerHTML = `
+      <div class="page-header">
+        <h1 class="page-title">Favorites</h1>
+      </div>
+      <div class="song-list" id="song-list" role="list"></div>
+    `;
 
     let data;
-    try { data = await api.listFavorites(); } catch (err) {
-        renderToast(err.message, 'error'); return;
+
+    try {
+        data = await api.listFavorites();
+    } catch (err) {
+        if (token !== state.routeToken) return;
+        renderToast(err.message, 'error');
+        return;
     }
+
+    if (token !== state.routeToken) return;
 
     const list = document.getElementById('song-list');
     if (!list) return;
 
     const currentSongId = player.getCurrentSongId?.() ?? null;
-    list.innerHTML = data.records.length === 0
-        ? `<div class="empty-state"><span class="empty-state__label">No favorites yet.</span></div>`
-        : data.records.map(s =>
-            renderSongCard(s, s.id === currentSongId, state.playlists.map(p => p.name))
-        ).join('');
+
+    list.innerHTML =
+        data.records.length === 0
+            ? `<div class="empty-state">
+                 <span class="empty-state__label">No favorites yet.</span>
+               </div>`
+            : data.records
+                .map(song =>
+                    renderSongCard(
+                        song,
+                        song.id === currentSongId,
+                        state.playlists.map(p => p.name)
+                    )
+                )
+                .join('');
 }
 
 // ── Playlists Page ────────────────────────────────────────────────────────
 
 async function renderPlaylistsPage() {
-    document.title = 'Melo — Playlists';
-    const content = document.getElementById('page-content');
-    content.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">Playlists</h1>
-      <button class="btn btn--ghost" id="btn-new-playlist">+ New Playlist</button>
-    </div>
-    <div id="new-playlist-wrap"></div>
-    <div class="playlist-grid" id="playlist-grid" role="list"></div>`;
+    const token = nextRouteToken();
 
-    document.getElementById('btn-new-playlist')?.addEventListener('click', showNewPlaylistInput);
-    await refreshPlaylistGrid();
+    document.title = 'Melo — Playlists';
+
+    const content = document.getElementById('page-content');
+
+    content.innerHTML = `
+      <div class="page-header">
+        <h1 class="page-title">Playlists</h1>
+        <button class="btn btn--ghost" id="btn-new-playlist">
+          + New Playlist
+        </button>
+      </div>
+      <div id="new-playlist-wrap"></div>
+      <div class="playlist-grid" id="playlist-grid" role="list"></div>
+    `;
+
+    document
+        .getElementById('btn-new-playlist')
+        ?.addEventListener('click', showNewPlaylistInput);
+
+    await refreshPlaylistGrid(token);
 }
 
 function showNewPlaylistInput() {
@@ -291,11 +411,12 @@ async function submitNewPlaylist(name) {
     }
 }
 
-async function refreshPlaylistGrid() {
+async function refreshPlaylistGrid(token = state.routeToken) {
     let data;
     try { data = await api.listPlaylists(); } catch (err) {
         renderToast(err.message, 'error'); return;
     }
+    if (token !== state.routeToken) return;
     state.playlists = data.records;
     const grid = document.getElementById('playlist-grid');
     if (!grid) return;
@@ -307,16 +428,25 @@ async function refreshPlaylistGrid() {
 // ── Playlist Detail Page ──────────────────────────────────────────────────
 
 async function renderPlaylistDetailPage(id) {
-    document.title = 'Melo — Playlist';
-    const content = document.getElementById('page-content');
-    content.innerHTML = `<a class="back-link" href="#/playlists">← Playlists</a>
-    <div id="playlist-detail-root"></div>`;
+    const token = nextRouteToken();
 
-    await refreshPlaylistDetail(id);
+    document.title = 'Melo — Playlist';
+
+    const content = document.getElementById('page-content');
+
+    content.innerHTML = `
+      <a class="back-link" href="#/playlists">
+        ← Playlists
+      </a>
+      <div id="playlist-detail-root"></div>
+    `;
+
+    await refreshPlaylistDetail(id, token);
 }
 
-async function refreshPlaylistDetail(id) {
+async function refreshPlaylistDetail(id, token = state.routeToken) {
     let playlist;
+    if (token !== state.routeToken) return;
     try { playlist = await api.getPlaylist(id); } catch {
         document.getElementById('playlist-detail-root').innerHTML =
             `<div class="empty-state"><span class="empty-state__label">Playlist not found.</span>
@@ -428,18 +558,42 @@ async function fetchPreview(url) {
     // Show spinner while loading
     const root = document.getElementById('modal-root');
     root.innerHTML = buildStep1LoadingHtml(url);
-    document.getElementById('modal-overlay')?.addEventListener('click', e => {
+
+    const overlay = document.getElementById('modal-overlay');
+
+    overlay?.addEventListener('click', e => {
         if (e.target.id === 'modal-overlay') closeModal();
     });
 
     let meta;
+
     try {
         meta = await api.previewSong(url);
     } catch (err) {
+        // Ignore stale responses if the modal was closed/replaced
+        if (!overlay?.isConnected) {
+            return;
+        }
+
         root.innerHTML = buildStep1Html(err.message);
         bindStep1Events();
-        document.getElementById('url-input').value = url;
-        document.getElementById('btn-preview').disabled = false;
+
+        const urlInput = document.getElementById('url-input');
+        const btnPreview = document.getElementById('btn-preview');
+
+        if (urlInput) {
+            urlInput.value = url;
+        }
+
+        if (btnPreview) {
+            btnPreview.disabled = false;
+        }
+
+        return;
+    }
+
+    // Ignore stale responses if the modal was closed/replaced
+    if (!overlay?.isConnected) {
         return;
     }
 
@@ -589,6 +743,7 @@ async function doDeleteSong(songId) {
 
 async function handleRetrySong(songId) {
     let song;
+
     try {
         song = await api.getSong(songId);
     } catch (err) {
@@ -598,14 +753,20 @@ async function handleRetrySong(songId) {
 
     const url = `https://www.youtube.com/watch?v=${song.youtube_id}`;
     const params = { url };
+
     if (song.start != null) params.start = song.start;
     if (song.end != null) params.end = song.end;
     if (song.speed && song.speed !== 1.0) params.speed = song.speed;
 
     try {
-        await api.deleteSong(songId);
+        // Submit replacement first.
         await api.submitSong(params);
+
+        // Only remove the failed entry after a successful submit.
+        await api.deleteSong(songId);
+
         renderToast('Retrying…');
+
         if (window.location.hash === '#/' || window.location.hash === '') {
             stopPoll();
             await loadLibrarySongs(false);
@@ -712,6 +873,11 @@ function handleGlobalClick(e) {
             handleRemoveFromPlaylist(playlistId, songId);
             break;
         }
+        case 'delete-playlist': {
+            const playlistId = el.dataset.playlistId;
+            confirmDeletePlaylist(playlistId);
+            break;
+        }
     }
 }
 
@@ -751,6 +917,35 @@ async function handleRemoveFromPlaylist(playlistId, songId) {
     }
 }
 
+function confirmDeletePlaylist(playlistId) {
+  const root = document.getElementById('modal-root');
+  root.innerHTML = `<div class="modal-overlay" id="modal-overlay">
+    <div class="modal confirm-dialog">
+      <h2 class="modal__title">Delete Playlist</h2>
+      <p class="confirm-dialog__msg">Delete this playlist? This cannot be undone.</p>
+      <div class="modal__footer">
+        <button class="btn btn--ghost" data-action="close-modal">Cancel</button>
+        <button class="btn btn--danger" id="btn-confirm-delete-playlist">Delete</button>
+      </div>
+    </div>
+  </div>`;
+
+  document.getElementById('btn-confirm-delete-playlist')?.addEventListener('click', () =>
+    doDeletePlaylist(playlistId)
+  );
+}
+
+async function doDeletePlaylist(playlistId) {
+  try {
+    await api.deletePlaylist(playlistId);
+    closeModal();
+    renderToast('Playlist deleted');
+    await refreshPlaylistGrid();
+  } catch (err) {
+    renderToast(err.message, 'error');
+  }
+}
+
 async function checkApiHealth() {
     try {
         const health = await api.checkHealth();
@@ -781,11 +976,3 @@ function escHtml(str) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
 }
-
-// Preload playlist cache for overflow menus
-(async () => {
-    try {
-        const data = await api.listPlaylists();
-        state.playlists = data.records;
-    } catch { /* non-fatal */ }
-})();

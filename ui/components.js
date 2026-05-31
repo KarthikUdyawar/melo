@@ -25,10 +25,13 @@ export function renderSongCard(song, isActive, playlistNames = []) {
   const activeClass = isActive ? ' song-card--active' : '';
   const heartClass = song.is_favorite ? ' icon-btn--active' : '';
   const heartLabel = song.is_favorite ? 'Remove from favorites' : 'Add to favorites';
-  const thumb = song.thumbnail_url ?? '';
+
+  // Escape thumbnail URL before interpolating into src=""
+  const thumb = escHtml(song.thumbnail_url ?? '');
+
   const duration = formatDuration(song.effective_duration ?? song.duration);
   const isPlayable = song.status === 'done';
-  const playlistItems = renderPlaylistMenuItems(playlistNames);
+  const playlistItems = renderPlaylistMenuItems(playlistNames, song.id);
 
   return `
   <div class="song-card${activeClass}"
@@ -83,14 +86,17 @@ function renderRetryButton(songId) {
               aria-label="Retry processing">↺ Retry</button>`;
 }
 
-function renderPlaylistMenuItems(names) {
+function renderPlaylistMenuItems(names, songId) {
   const items = names.map(n =>
     `<button class="dropdown__item"
              data-action="add-to-playlist"
-             data-playlist-name="${escHtml(n)}">${escHtml(n)}</button>`
+             data-playlist-name="${escHtml(n)}"
+             data-song-id="${songId}">${escHtml(n)}</button>`
   ).join('');
   return `${items}
-    <button class="dropdown__item" data-action="new-playlist-for-song">+ New playlist</button>`;
+    <button class="dropdown__item"
+            data-action="new-playlist-for-song"
+            data-song-id="${songId}">+ New playlist</button>`;
 }
 
 // ── Playlist Card ─────────────────────────────────────────────────────────
@@ -101,6 +107,10 @@ export function renderPlaylistCard(playlist) {
   <div class="playlist-card" data-playlist-id="${playlist.id}" role="listitem">
     <div class="playlist-card__name">${escHtml(playlist.name)}</div>
     <div class="playlist-card__meta">${playlist.song_count} song${playlist.song_count !== 1 ? 's' : ''}</div>
+    <button class="icon-btn icon-btn--danger"
+            data-action="delete-playlist"
+            data-playlist-id="${playlist.id}"
+            aria-label="Delete playlist">✕</button>
   </div>`;
 }
 

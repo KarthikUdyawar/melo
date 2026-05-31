@@ -358,28 +358,64 @@ class TestStreamSong:
         fake_data = b"\xff\xfb" * 256
 
         mock_minio = MagicMock()
-        mock_minio.presigned_get_object.return_value = (
-            "http://minio:9000/songs/test.mp3"
-        )
+        presigned_url = "http://minio:9000/songs/test.mp3"
+        mock_minio.presigned_get_object.return_value = presigned_url
 
-        mock_httpx_resp = MagicMock()
-        mock_httpx_resp.status_code = 200
-        mock_httpx_resp.content = fake_data
-        mock_httpx_resp.headers = {"Content-Length": str(len(fake_data))}
+        # upstream response returned by httpx.Client.stream()
+        mock_upstream = MagicMock()
+        mock_upstream.status_code = 206
+        mock_upstream.headers = {
+            "Content-Length": str(len(fake_data)),
+            "Content-Range": f"bytes 0-{len(fake_data)-1}/4096",
+        }
+        mock_upstream.iter_bytes.return_value = [fake_data]
+
+        # context manager returned by stream()
+        mock_stream_cm = MagicMock()
+        mock_stream_cm.__enter__.return_value = mock_upstream
+        mock_stream_cm.__exit__.return_value = None
+
+        # httpx.Client() context manager
+        mock_client = MagicMock()
+        mock_client.stream.return_value = mock_stream_cm
+
+        mock_client_cm = MagicMock()
+        mock_client_cm.__enter__.return_value = mock_client
+        mock_client_cm.__exit__.return_value = None
+
+        range_header = "bytes=0-1023"
 
         with (
             patch("app.api.songs._client", return_value=mock_minio),
             patch("app.api.songs.trim_audio") as m_trim,
             patch("app.api.songs.apply_speed") as m_speed,
-            patch("httpx.get", return_value=mock_httpx_resp),
+            patch("httpx.Client", return_value=mock_client_cm),
         ):
-            resp = client.get(f"/songs/{song.id}/stream")
+            resp = client.get(
+                f"/songs/{song.id}/stream",
+                headers={"Range": range_header},
+            )
 
-        assert resp.status_code == 200
-        assert resp.headers["content-type"] == "audio/mpeg"
+        assert resp.status_code == 206
+        assert (
+            resp.headers["content-range"]
+            == f"bytes 0-{len(fake_data)-1}/4096"
+        )
         assert resp.content == fake_data
+
         m_trim.assert_not_called()
         m_speed.assert_not_called()
+
+        assert mock_client.stream.call_count == 2
+
+        expected_headers = {"Range": range_header}
+
+        mock_client.stream.assert_any_call(
+            "GET",
+            presigned_url,
+            headers=expected_headers,
+            follow_redirects=False,
+        )
 
     def test_stream_processing_song_returns_409(
         self, client: TestClient, db_session: Session
