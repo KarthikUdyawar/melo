@@ -446,63 +446,49 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
             pool=30.0,
         )
 
-        def stream_minio() -> Iterator[bytes]:
-            with httpx.Client(timeout=timeout) as http_client:  # noqa: SIM117
-                with http_client.stream(
-                    "GET",
-                    presigned,
-                    headers=headers,
-                    follow_redirects=False,
-                ) as upstream:
-                    if upstream.status_code not in (200, 206):
-                        raise HTTPException(
-                            status_code=502,
-                            detail=f"Storage service returned HTTP \
-                                {upstream.status_code}",
-                        )
-
-                    yield from upstream.iter_bytes()
-
+        http_client = httpx.Client(timeout=timeout)
         try:
-            with httpx.Client(timeout=timeout) as http_client:  # noqa: SIM117
-                with http_client.stream(
-                    "GET",
-                    presigned,
-                    headers=headers,
-                    follow_redirects=False,
-                ) as upstream:
+            upstream = http_client.stream(
+                "GET",
+                presigned,
+                headers=headers,
+                follow_redirects=False,
+            ).__enter__()
 
-                    if upstream.status_code not in (200, 206):
-                        raise HTTPException(
-                            status_code=502,
-                            detail=f"Storage service returned HTTP \
-                                {upstream.status_code}",
-                        )
+            if upstream.status_code not in (200, 206):
+                upstream.close()
+                http_client.close()
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Storage service returned HTTP {upstream.status_code}",
+                )
 
-                    response_headers = {
-                        "Content-Type": "audio/mpeg",
-                        "Accept-Ranges": "bytes",
-                        "Content-Disposition": build_content_disposition(filename),
-                    }
-
-                    for h in (
-                        "Content-Length",
-                        "Content-Range",
-                        "ETag",
-                        "Last-Modified",
-                    ):
-                        if h in upstream.headers:
-                            response_headers[h] = upstream.headers[h]
+            response_headers = {
+                "Content-Type": "audio/mpeg",
+                "Accept-Ranges": "bytes",
+                "Content-Disposition": build_content_disposition(filename),
+            }
+            for h in ("Content-Length", "Content-Range", "ETag", "Last-Modified"):
+                if h in upstream.headers:
+                    response_headers[h] = upstream.headers[h]
 
         except httpx.HTTPError as exc:
+            http_client.close()
             raise HTTPException(
                 status_code=502,
                 detail=f"Failed to fetch audio from storage: {exc}",
             ) from exc
 
+        def stream_and_close() -> Iterator[bytes]:
+            try:
+                yield from upstream.iter_bytes()
+            finally:
+                upstream.close()
+                http_client.close()
+
         return StreamingResponse(
-            stream_minio(),
-            status_code=200 if "Content-Range" not in response_headers else 206,
+            stream_and_close(),
+            status_code=206 if "Content-Range" in response_headers else 200,
             media_type="audio/mpeg",
             headers=response_headers,
         )

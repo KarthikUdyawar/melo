@@ -448,11 +448,14 @@ async function refreshPlaylistDetail(id, token = state.routeToken) {
     let playlist;
     if (token !== state.routeToken) return;
     try { playlist = await api.getPlaylist(id); } catch {
+        if (token !== state.routeToken) return;
         document.getElementById('playlist-detail-root').innerHTML =
             `<div class="empty-state"><span class="empty-state__label">Playlist not found.</span>
        <a class="btn btn--ghost" href="#/playlists">Back</a></div>`;
         return;
     }
+
+    if (token !== state.routeToken) return;
 
     document.title = `Melo — ${playlist.name}`;
     const root = document.getElementById('playlist-detail-root');
@@ -918,8 +921,8 @@ async function handleRemoveFromPlaylist(playlistId, songId) {
 }
 
 function confirmDeletePlaylist(playlistId) {
-  const root = document.getElementById('modal-root');
-  root.innerHTML = `<div class="modal-overlay" id="modal-overlay">
+    const root = document.getElementById('modal-root');
+    root.innerHTML = `<div class="modal-overlay" id="modal-overlay">
     <div class="modal confirm-dialog">
       <h2 class="modal__title">Delete Playlist</h2>
       <p class="confirm-dialog__msg">Delete this playlist? This cannot be undone.</p>
@@ -930,20 +933,24 @@ function confirmDeletePlaylist(playlistId) {
     </div>
   </div>`;
 
-  document.getElementById('btn-confirm-delete-playlist')?.addEventListener('click', () =>
-    doDeletePlaylist(playlistId)
-  );
+    document.getElementById('btn-confirm-delete-playlist')?.addEventListener('click', () =>
+        doDeletePlaylist(playlistId)
+    );
+
+    document.getElementById('modal-overlay')?.addEventListener('click', e => {
+        if (e.target.id === 'modal-overlay') closeModal();
+    });
 }
 
 async function doDeletePlaylist(playlistId) {
-  try {
-    await api.deletePlaylist(playlistId);
-    closeModal();
-    renderToast('Playlist deleted');
-    await refreshPlaylistGrid();
-  } catch (err) {
-    renderToast(err.message, 'error');
-  }
+    try {
+        await api.deletePlaylist(playlistId);
+        closeModal();
+        renderToast('Playlist deleted');
+        await refreshPlaylistGrid();
+    } catch (err) {
+        renderToast(err.message, 'error');
+    }
 }
 
 async function checkApiHealth() {
