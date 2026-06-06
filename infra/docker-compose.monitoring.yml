@@ -1,0 +1,204 @@
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/minio_token:/etc/prometheus/minio_token:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - melo_default
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/loki.yml
+    healthcheck:
+      test: ["CMD", "/bin/sh", "-c", "curl -fsS http://localhost:3100/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - melo_default
+
+  promtail:
+    image: grafana/promtail:latest
+    volumes:
+      - ./promtail/promtail.yml:/etc/promtail/promtail.yml:ro
+      - melo_melo_logs:/var/log/melo:ro
+    command: -config.file=/etc/promtail/promtail.yml
+    depends_on:
+      loki:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - melo_default
+
+  tempo:
+    image: grafana/tempo:latest
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "3200:3200"
+    volumes:
+      - ./tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo_data:/var/tempo
+    command: -config.file=/etc/tempo/tempo.yml
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3200/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - melo_default
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: grafana-pyroscope-app
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - melo_default
+
+  pyroscope:
+    image: grafana/pyroscope:latest
+    user: root
+    ports:
+      - "4040:4040"
+    volumes:
+      - ./pyroscope/pyroscope.yml:/etc/pyroscope/pyroscope.yml:ro
+      - pyroscope_data:/var/lib/pyroscope
+    command: -config.file=/etc/pyroscope/pyroscope.yml
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4040/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - melo_default
+
+  celery-exporter:
+    image: danihodovic/celery-exporter:latest
+    ports:
+      - "9808:9808"
+    environment:
+      CE_BROKER_URL: ${CELERY_BROKER:-redis://redis:6379/0}
+    restart: unless-stopped
+    networks:
+      - melo_default
+
+  flower:
+    image: mher/flower:latest
+    ports:
+      - "5555:5555"
+    environment:
+      CELERY_BROKER_URL: ${CELERY_BROKER:-redis://redis:6379/0}
+      FLOWER_PORT: 5555
+    restart: unless-stopped
+    networks:
+      - melo_default
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    ports:
+      - "8090:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    restart: unless-stopped
+    networks:
+      - melo_default
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - --path.procfs=/host/proc
+      - --path.rootfs=/rootfs
+      - --path.sysfs=/host/sys
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    restart: unless-stopped
+    networks:
+      - melo_default
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-melo}:${POSTGRES_PASSWORD:-melo}@postgres:5432/${POSTGRES_DB:-melo}?sslmode=disable
+    restart: unless-stopped
+    networks:
+      - melo_default
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    ports:
+      - "9121:9121"
+    environment:
+      REDIS_ADDR: ${REDIS_URL:-redis://redis:6379/0}
+    restart: unless-stopped
+    networks:
+      - melo_default
+
+volumes:
+  prometheus_data:
+  loki_data:
+  tempo_data:
+  pyroscope_data:
+  grafana_data:
+  melo_melo_logs:
+    external: true
+
+networks:
+  melo_default:
+    external: true
+    name: ${COMPOSE_PROJECT_NAME:-melo}_default

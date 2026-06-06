@@ -323,3 +323,38 @@ act-ci: ## Run full GitHub Actions pipeline locally
 
 tree: ## Show project tree (respects .gitignore)
 	tree --gitignore -I '__pycache__|*.pyc|*.egg-info'
+
+# ── Monitoring (OBS-0) ────────────────────────────────────────────────────────
+
+monitoring-up: ## Start observability stack (main app must be running)
+	@chmod +x infra/monitoring.sh
+	@./infra/monitoring.sh up
+
+monitoring-up-all: ## Start app + observability stack together
+	@chmod +x infra/monitoring.sh
+	@./infra/monitoring.sh up --with-app
+
+monitoring-down: ## Stop observability stack
+	@./infra/monitoring.sh down
+
+monitoring-restart: ## Restart observability stack
+	@./infra/monitoring.sh restart
+
+monitoring-status: ## Show observability stack container status
+	@./infra/monitoring.sh status
+
+grafana: ## Open Grafana in browser
+	@open http://localhost:3001 2>/dev/null || xdg-open http://localhost:3001
+
+flower: ## Open Flower in browser
+	@open http://localhost:5555 2>/dev/null || xdg-open http://localhost:5555
+
+metrics: ## Curl /metrics endpoint
+	@curl -s http://localhost:8000/metrics | head -60
+
+logs-loki: ## Tail recent logs via Loki HTTP API
+	@curl -sG "http://localhost:3100/loki/api/v1/query_range" \
+		--data-urlencode 'query={job="melo"}' \
+		--data-urlencode 'limit=50' \
+		--data-urlencode "start=$$(date -u -d '5 minutes ago' +%s 2>/dev/null || date -u -v-5M +%s)000000000" \
+		| python3 -c "import sys,json; [print(v[1]) for s in json.load(sys.stdin)['data']['result'] for v in s['values']]"

@@ -1,0 +1,10 @@
+server:
+  http_listen_port: 4040
+
+storage:
+  backend: filesystem
+  filesystem:
+    dir: /var/lib/pyroscope
+
+limits:
+  max_query_lookback: 168h
