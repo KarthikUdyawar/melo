@@ -1,81 +1,66 @@
-# Melo — Handoff Document
+# Melo Sprint 5 — OBS-0 Handoff
 
-**Date:** 2026-05-31
-**Repo:** `KarthikUdyawar/melo`
-**Active branch:** `feature/ui-scaffold` (seeking fix in progress, not yet committed)
-**Active skills:** `/caveman ultra`, `/clean-code`, `/tdd`
+## Skills
+`/caveman ultra` `/clean-code` `/tdd`
 
----
+## Context
+- Repo: `KarthikUdyawar/melo`, branch `feature/observability-stack`
+- Sprint 5 spec: `docs/sprints/Sprint-5.md`, PRD: `docs/PRD.md`
+- OBS-0 only ticket in progress — OBS-1 through OBS-7 not started
 
-## Session Summary
+## What OBS-0 Is
+Docker Compose infra for full obs stack: Prometheus, Loki, Promtail, Tempo, Grafana, Pyroscope, Celery-exporter, Flower, cAdvisor, Node-exporter, Postgres-exporter, Redis-exporter. Separate from main `docker-compose.yml`. Lives in `infra/docker-compose.monitoring.yml`. Started via `make monitoring-up` → `infra/monitoring.sh`.
 
-1. **`make tree`** added to Makefile.
-2. **UI-0 confirmed complete** — `feature/ui-scaffold` → `develop` ready to merge.
-3. **Audio playback bug fixed** — `handleGlobalClick` early `return` blocked card clicks. Fixed by moving card/playlist checks above action guard.
-4. **Audio seeking root cause diagnosed** — stream endpoint returns `200 OK` with no `Accept-Ranges`, browser treats stream as non-seekable.
-5. **`songs.py` rewritten** for range support — see below.
-6. **Seeking still unverified** — session ended before final confirmation.
+## Current Repo State
 
----
-
-## Seeking Fix — Status
-
-Latest `songs.py` at `/mnt/user-data/outputs/songs.py`:
-
-- **No trim/speed:** `httpx.get(internal_presigned_url, headers={"Range": ...})` → proxied `Response` with `Accept-Ranges: bytes`. Uses `minio:9000` (internal) — API container can reach it, signature valid.
-- **Trim/speed:** `FileResponse(final_path, background=BackgroundTask(_cleanup))` — Starlette handles `206` natively.
-- `StreamingResponse` removed from both paths.
-- `stream_song` now takes `request: Request` for Range header forwarding.
-
-Apply:
-```bash
-cp /mnt/user-data/outputs/songs.py app/api/songs.py
-# auto-reloads via uvicorn --reload
+```
+infra/
+  docker-compose.monitoring.yml   ✓
+  monitoring.sh                   ✓
+  setup-infra.sh                  ✓
+  loki/loki.yml                   ✓
+  prometheus/prometheus.yml       ✓
+  prometheus/minio_token          ✓ (ASCII text, token present)
+  promtail/promtail.yml           ✓
+  tempo/tempo.yml                 ✓
+  pyroscope/pyroscope.yml         ✓
+  grafana/provisioning/
+    datasources/all.yml           ✓
+    dashboards/all.yml            ✓
+    alerting/                     ✓ empty dir
 ```
 
-Verify:
-```bash
-curl -H "Range: bytes=0-1023" -I http://localhost:8000/songs/<done-id>/stream
-# Must return: HTTP/1.1 206 Partial Content + Accept-Ranges: bytes
+## Blocker — Prometheus Bind-Mount (WSL2 Docker Desktop Bug)
+
+**Error:**
+```
+error mounting ".../Ubuntu/4029166f..." to "/etc/prometheus/prometheus.yml":
+cannot create subdirectories in overlay2/merged/etc/prometheus/prometheus.yml: not a directory
 ```
 
-If 502: `docker compose logs api --tail=30` for httpx traceback.
+**Cause:** First attempt to mount `prometheus.yml` failed (file didn't exist yet) → Docker created a **directory** at that overlay2 path → stale layer persists in container image across rm/recreate. Hash `4029166f` appears every attempt — same corrupted layer reused.
 
----
+**Tried:** `docker rm -f`, `docker volume rm`, `sudo rm -rf infra/infra/` (Docker had created root-owned nested dirs). All config files confirmed correct on host.
 
-## Sprint 4 Status
+**Not tried yet — likely fix:**
+```bash
+make monitoring-down
+docker system prune -f        # clears dangling layers
+# If still fails, restart Docker Desktop from system tray
+make monitoring-up
+```
 
-| Ticket | Status | Notes |
-|--------|--------|-------|
-| UI-0 — Scaffold | ✅ done | Merge to develop |
-| UI-1 — Library | 🟡 partial | Missing: Retry on failed cards |
-| UI-2 — Add Song Modal | 🟡 partial | Missing: loading spinner |
-| UI-3 — Player Bar | 🟡 partial | Play/pause works. **Seeking broken (P0)** |
-| UI-4 — Favorites | ⬜ todo | |
-| UI-5 — Playlists | ⬜ todo | |
-| UI-6 — Polish | ⬜ todo | |
+Nuclear option: `docker system prune -f --volumes` (loses all unused volumes incl. app data — do `make down` first).
 
----
+## Fixes Applied This Session
+- Loki: `path_prefix: /loki`, volume `loki_data:/loki` (was `/tmp/loki` → permission denied)
+- Tempo: removed invalid `ingester:` / `compactor:` top-level fields (Tempo v2 schema)
+- postgres-exporter image: `prometheuscommunity/postgres-exporter` (prom/ moved)
+- minio_token: generated via `minio/mc` throwaway container, `MC_HOST_local` env var, bash-only YAML parse (no grep/awk — distroless image)
+- `infra/infra/` nested dirs: Docker created root-owned dirs from failed mounts → `sudo rm -rf`
 
-## Files Changed This Session (uncommitted)
+## Orphan Warning
+Both composes share `--project-name melo` → cosmetic orphan warning. Add `--remove-orphans` to `cmd_up` in `monitoring.sh` if annoying.
 
-| File | Where | Notes |
-|------|-------|-------|
-| `app/api/songs.py` | `/mnt/user-data/outputs/songs.py` | Copy + verify seeking |
-| `ui/player.js` | `/mnt/user-data/outputs/player.js` | Improved scrubber — apply after seeking confirmed |
-| `ui/app.js` | In repo | Card click fix applied; debug `console.log` lines present — remove before merge |
-
----
-
-## Known Bugs
-
-- "Load more" shows with 1 song (bookmark null check too late) — UI-6 scope
-- Active card highlight only updates visible cards on play — UI-6 scope
-- `share-modal.js` console error — browser extension, not Melo
-
-## Constraints
-- Caveman ultra active
-- Clean code — SRP, ≤20 line functions
-- No build tooling, no TypeScript, no frontend tests
-- Design tokens only — no raw hex in CSS
-- Python changes hot-reload; UI changes need `docker compose build ui && docker compose up -d ui`
+## After OBS-0 — Next Tickets
+OBS-1 (logging) + OBS-2 (metrics) parallel. OBS-3 needs OBS-1. OBS-4 needs all three. OBS-5+6 after OBS-4.
