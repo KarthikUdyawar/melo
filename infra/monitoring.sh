@@ -108,9 +108,6 @@ cmd_up() {
 
   require_cmd docker
 
-  # Ensure infra config files exist
-  bash "${SCRIPT_DIR}/setup-infra.sh"  # creates missing infra/ files
-
   load_env
 
   if ${with_app}; then

@@ -1,4 +1,20 @@
 services:
+  admin:
+    build:
+      context: ../admin
+      dockerfile: Dockerfile
+    container_name: melo-admin
+    ports:
+      - "8501:8501"
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      GRAFANA_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    networks:
+      - melo_default
+    depends_on:
+      - grafana
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:latest
     ports:

@@ -185,3 +185,4 @@ backups/
 
 # Monitoring secrets (OBS-0)
 infra/prometheus/minio_token
+logs/

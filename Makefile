@@ -13,7 +13,8 @@ SHELL := /bin/bash
 	test test-unit test-integration test-cov \
 	test-up test-down smoke smoke-ui \
 	act-lint act-unit act-integration act-coverage act-ci \
-	tree
+	tree \
+	admin
 
 .DEFAULT_GOAL := help
 
@@ -358,3 +359,6 @@ logs-loki: ## Tail recent logs via Loki HTTP API
 		--data-urlencode 'limit=50' \
 		--data-urlencode "start=$$(date -u -d '5 minutes ago' +%s 2>/dev/null || date -u -v-5M +%s)000000000" \
 		| python3 -c "import sys,json; [print(v[1]) for s in json.load(sys.stdin)['data']['result'] for v in s['values']]"
+
+admin: ## Open Streamlit admin in browser
+	open http://localhost:8501 || xdg-open http://localhost:8501
