@@ -20,9 +20,11 @@ from app.core.exception_handlers import (
     unhandled_exception_handler,
     validation_exception_handler,
 )
-from app.core.logging import get_logger
+from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestLoggingMiddleware
+from app.core.tracing import TraceIdMiddleware
 
+configure_logging("api")
 logger = get_logger(__name__)
 
 _OPENAPI_TAGS = [
@@ -43,11 +45,25 @@ def _app_version() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage application startup and shutdown lifecycle events."""
+    from app.core.log_manager import LogManager
+    from app.core.pollers import start_gauge_poller
+    from app.core.profiling import configure_pyroscope
+    from app.core.tracing import configure_tracing
+
     settings = get_settings()
     init_db()
+
+    configure_tracing("melo.api")
+    configure_pyroscope("melo.api")
+    log_manager = LogManager.from_settings("api")
+    gauge_scheduler = start_gauge_poller()
+
     logger.info("app_startup", env=settings.app_env, log_file=settings.log_file_path)
     yield
     logger.info("app_shutdown")
+
+    gauge_scheduler.shutdown(wait=False)
+    log_manager.shutdown()
 
 
 def create_app() -> FastAPI:
@@ -61,11 +77,11 @@ def create_app() -> FastAPI:
         debug=not settings.is_production,
         lifespan=lifespan,
         openapi_tags=_OPENAPI_TAGS,
-        # Hide interactive docs in production to reduce attack surface
         docs_url=None if settings.is_production else "/docs",
         redoc_url=None if settings.is_production else "/redoc",
     )
 
+    app.add_middleware(TraceIdMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
 
     app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
@@ -76,7 +92,20 @@ def create_app() -> FastAPI:
     app.include_router(favorites_router)
     app.include_router(playlists_router)
 
+    _setup_metrics(app)
+
     return app
+
+
+def _setup_metrics(app: FastAPI) -> None:
+    """Attach prometheus_fastapi_instrumentator and expose /metrics."""
+    from prometheus_fastapi_instrumentator import Instrumentator
+
+    Instrumentator(
+        should_group_status_codes=False,
+        should_ignore_untemplated=True,
+        excluded_handlers=["/metrics", "/health"],
+    ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 app = create_app()

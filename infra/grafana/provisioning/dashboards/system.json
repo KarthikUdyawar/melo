@@ -32,7 +32,7 @@
             "id": 1,
             "targets": [
                 {
-                    "expr": "rate(container_cpu_usage_seconds_total{name=~\"melo.*\"}[2m])",
+                    "expr": "rate(container_cpu_usage_seconds_total{container_label_com_docker_compose_project='melo'}[2m])",
                     "legendFormat": "{{ name }}",
                     "refId": "A",
                     "datasource": {

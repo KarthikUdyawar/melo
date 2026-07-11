@@ -4,6 +4,7 @@ This module defines the centralized settings management using Pydantic Settings.
 It automatically loads environment-specific `.env.{development|staging|production}`
 files and provides type-safe, validated configuration for the entire application.
 """
+
 # app/core/config.py
 import os
 from functools import lru_cache
@@ -18,18 +19,7 @@ APP_ENVS = {"development", "staging", "production", "test"}
 
 
 def _env_file() -> str:
-    """Determine which .env file should be loaded based on APP_ENV.
-
-    Priority:
-        1. `APP_ENV` environment variable (real OS env).
-        2. Falls back to "development".
-
-    Returns:
-        Path to the environment file (e.g. `.env.development`, `.env.staging`).
-
-    Raises:
-        ValueError: If APP_ENV is set to an invalid value.
-    """
+    """Determine which .env file should be loaded based on APP_ENV."""
     app_env = os.environ.get("APP_ENV", "development").lower()
     if app_env not in APP_ENVS:
         raise ValueError(
@@ -39,25 +29,30 @@ def _env_file() -> str:
 
 
 class Settings(BaseSettings):
-    """Main application settings using Pydantic.
+    """Main application settings."""
 
-    Loads configuration from environment variables and `.env.*` files with
-    proper priority and validation. Provides computed environment flags
-    and runtime checks.
-    """
     model_config = SettingsConfigDict(
         env_file=_env_file(),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
         env_ignore_empty=True,
-        env_prefix="",  # optional
+        env_prefix="",
     )
 
     # ── App ───────────────────────────────────────────────────────────────────
     app_env: str = Field(default="development")
     log_level: str = Field(default="info")
     log_file_path: str = Field(default="/var/log/melo/app.log")
+
+    # ── Log rotation / backup (OBS-1) ─────────────────────────────────────────
+    log_max_size_mb: float = Field(default=10.0)
+    log_max_age_hours: float = Field(default=24.0)
+    log_backup_bucket: str = Field(default="melo-log-backups")
+    log_retention_days: int = Field(default=90)
+
+    # ── Observability (OBS-3 / OBS-5) ────────────────────────────────────────
+    pyroscope_server_url: str = Field(default="http://pyroscope:4040")
 
     # ── Database ──────────────────────────────────────────────────────────────
     database_url: str = Field(
@@ -98,10 +93,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_minio_secure_in_prod(self) -> "Settings":
-        """Validate that MinIO is using secure connection in production.
-
-        Warns if `MINIO_SECURE=false` is used in production environment.
-        """
+        """Warn if insecure MinIO settings are used in production."""
         if self.is_production and not self.minio_secure:
             import warnings
 
@@ -114,44 +106,22 @@ class Settings(BaseSettings):
     @model_validator(mode="before")
     @classmethod
     def force_env_file_priority(cls, values: dict[str, Any]) -> dict[str, Any]:
-        """Force values from the selected .env file to have highest priority.
+        """Load values from the selected .env file with priority over the environment.
 
-        This validator runs before normal field validation to ensure that
-        settings from `.env.{env}` override both defaults and any passed values.
-
-        Note:
-            This is a classmethod that receives raw input values.
+        Normalize keys to lowercase so they match the case-insensitive settings
+        configuration before merging them with the provided values.
         """
         env_values = dotenv_values(_env_file())
-
-        # normalize keys to lowercase
         normalized = {k.lower(): v for k, v in env_values.items() if v is not None}
-
-        # merge: env overrides everything
         return {**values, **normalized}
 
 
 @lru_cache
 def get_settings() -> Settings:
-    """Return the cached Settings instance.
-
-    The settings are parsed only once per process thanks to `lru_cache`.
-
-    Returns:
-        Settings: The application settings object.
-    """
+    """Return the cached Settings instance."""
     return Settings()
 
 
 def reset_settings() -> None:
-    """Clear the cached Settings instance.
-
-    Useful in tests when you need to change `APP_ENV` or other environment
-    variables after the settings have already been loaded.
-
-    Example:
-        monkeypatch.setenv("APP_ENV", "production")
-        reset_settings()
-        settings = get_settings()  # will reload with new environment
-    """
+    """Clear the cached Settings instance (useful in tests)."""
     get_settings.cache_clear()

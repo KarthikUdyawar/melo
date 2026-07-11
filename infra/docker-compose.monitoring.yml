@@ -89,12 +89,15 @@ services:
 
   grafana:
     image: grafana/grafana:latest
+    env_file: ../.env.staging
     ports:
       - "3001:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_INSTALL_PLUGINS: grafana-pyroscope-app
+      # GF_ALERTING_CONTACTPOINTS_TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}   # optional
+      # GF_ALERTING_CONTACTPOINTS_TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}       # try this
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana
@@ -156,7 +159,8 @@ services:
       - melo_default
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    privileged: true
     ports:
       - "8090:8080"
     volumes:
@@ -165,6 +169,11 @@ services:
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
     restart: unless-stopped
+    environment:
+    - DOCKER_HOST=unix:///var/run/docker.sock
+    command:
+      - --docker_only=true
+      - --store_container_labels=true
     networks:
       - melo_default
 

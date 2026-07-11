@@ -8,7 +8,24 @@
     "fiscalYearStartMonth": 0,
     "graphTooltip": 1,
     "id": null,
-    "links": [],
+    "links": [
+        {
+            "title": "Celery Pipeline",
+            "type": "link",
+            "url": "/d/melo-celery-pipeline/melo-celery-pipeline",
+            "icon": "dashboard",
+            "tooltip": "View Celery pipeline metrics",
+            "targetBlank": false
+        },
+        {
+            "title": "System",
+            "type": "link",
+            "url": "/d/melo-system/melo-system",
+            "icon": "dashboard",
+            "tooltip": "View system metrics",
+            "targetBlank": false
+        }
+    ],
     "panels": [
         {
             "datasource": {
@@ -85,7 +102,7 @@
                         "type": "prometheus",
                         "uid": "prometheus"
                     },
-                    "expr": "sum(rate(http_requests_total{status=~\"5..\"}[2m])) by (handler) / sum(rate(http_requests_total[2m])) by (handler)",
+                    "expr": "sum(rate(http_requests_total{status=~\"5..\"}[2m])) by (handler) or vector(0)) / sum(rate(http_requests_total[2m])) by (handler)",
                     "legendFormat": "{{ handler }}",
                     "refId": "A"
                 }

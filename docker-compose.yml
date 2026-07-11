@@ -12,6 +12,7 @@ services:
 
   api:
     build: .
+    container_name: melo-api-1
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
@@ -38,6 +39,7 @@ services:
 
   worker:
     build: .
+    container_name: melo-worker-1
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q melo
     env_file: .env.staging
     environment:

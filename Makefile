@@ -362,3 +362,7 @@ logs-loki: ## Tail recent logs via Loki HTTP API
 
 admin: ## Open Streamlit admin in browser
 	open http://localhost:8501 || xdg-open http://localhost:8501
+
+cadvisor-ids:
+	@echo "api:   $$(docker inspect --format='{{.Id}}' melo-api-1)"
+	@echo "worker: $$(docker inspect --format='{{.Id}}' melo-worker-1)"

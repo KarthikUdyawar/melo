@@ -1,21 +1,14 @@
-"""MinIO storage service for file upload and presigned URL generation.
+"""MinIO storage service for file upload and presigned URL generation."""
 
-This module provides a simple interface to interact with MinIO
-(S3-compatible object storage):
-
-- Ensures the configured bucket exists at startup
-- Uploads local files to MinIO
-- Generates presigned URLs for secure, time-limited access
-
-All operations are wrapped with proper error handling and structured logging.
-"""
 # app/services/storage.py
+import time
 from pathlib import Path
 
 from minio import Minio
 from minio.error import S3Error
 
 from app.core.config import get_settings
+from app.core.log_events import LogEvent
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -26,13 +19,7 @@ class StorageError(Exception):
 
 
 def _client() -> Minio:
-    """Return a configured MinIO client instance.
-
-    Uses settings from ``app.core.config.get_settings()``.
-
-    Returns:
-        A fresh ``Minio`` client object.
-    """
+    """Return a configured MinIO client instance."""
     s = get_settings()
     return Minio(
         s.minio_endpoint,
@@ -43,200 +30,151 @@ def _client() -> Minio:
 
 
 def ensure_bucket_exists() -> None:
-    """Create the configured bucket if it does not already exist.
-
-    Called once at worker startup so tasks never have to check themselves.
-
-    Raises:
-        StorageError: If the bucket check or creation fails due to S3 error.
-    """
+    """Create the configured bucket if it does not already exist."""
     s = get_settings()
     client = _client()
 
     logger.info(
-        "ensure_bucket_start",
+        LogEvent.MINIO_UPLOAD_STARTED,
+        phase="ensure_bucket",
         bucket=s.minio_bucket,
         endpoint=s.minio_endpoint,
     )
 
     try:
         exists = client.bucket_exists(s.minio_bucket)
-
-        logger.debug(
-            "bucket_exists_check",
-            bucket=s.minio_bucket,
-            exists=exists,
-        )
-
         if not exists:
             client.make_bucket(s.minio_bucket)
-            logger.info("bucket_created", bucket=s.minio_bucket)
+            logger.info(
+                LogEvent.MINIO_UPLOAD_DONE,
+                phase="bucket_created",
+                bucket=s.minio_bucket,
+            )
         else:
             logger.debug("bucket_exists", bucket=s.minio_bucket)
-
     except S3Error as exc:
         logger.error(
-            "ensure_bucket_failed",
+            LogEvent.MINIO_UPLOAD_FAILED,
+            phase="ensure_bucket",
             bucket=s.minio_bucket,
             error=str(exc),
         )
         raise StorageError(
-            f"Could not ensure bucket {s.minio_bucket!r}: {exc}",
+            f"Could not ensure bucket {s.minio_bucket!r}: {exc}"
         ) from exc
 
 
 def upload_file(local_path: Path, object_key: str) -> str:
-    """Upload a local file to MinIO at the given object key.
+    """Upload a local file to MinIO at the given object key."""
+    from app.core.metrics import minio_upload_duration_seconds
+    from app.core.tracing import get_tracer
 
-    Args:
-        local_path: Absolute path to the file on disk.
-        object_key: Destination key in MinIO (e.g. ``"songs/abc-123.mp3"``).
+    tracer = get_tracer(__name__)
+    with tracer.start_as_current_span("minio.upload"):
+        s = get_settings()
+        client = _client()
 
-    Returns:
-        The object key that was uploaded (callers can use it to build URLs).
+        if not local_path.exists():
+            logger.error(
+                LogEvent.MINIO_UPLOAD_FAILED,
+                path=str(local_path),
+                key=object_key,
+                reason="file_missing",
+            )
+            raise StorageError(f"File does not exist: {local_path}")
 
-    Raises:
-        StorageError: On any S3 or I/O error.
-        FileNotFoundError: Implicitly if the file doesn't exist (via explicit check).
-    """
-    s = get_settings()
-    client = _client()
+        file_size = local_path.stat().st_size
 
-    if not local_path.exists():
-        logger.error(
-            "upload_file_missing",
-            path=str(local_path),
-            key=object_key,
-        )
-        raise StorageError(f"File does not exist: {local_path}")
-
-    file_size = local_path.stat().st_size
-
-    logger.info(
-        "upload_start",
-        path=str(local_path),
-        size=file_size,
-        bucket=s.minio_bucket,
-        key=object_key,
-    )
-
-    try:
-        client.fput_object(
-            bucket_name=s.minio_bucket,
-            object_name=object_key,
-            file_path=str(local_path),
-            content_type="audio/mpeg",
-        )
         logger.info(
-            "upload_complete",
+            LogEvent.MINIO_UPLOAD_STARTED,
             path=str(local_path),
             size=file_size,
             bucket=s.minio_bucket,
             key=object_key,
         )
-    except S3Error as exc:
-        logger.error(
-            "upload_failed_s3",
-            path=str(local_path),
-            bucket=s.minio_bucket,
-            key=object_key,
-            error=str(exc),
-        )
-        raise StorageError(
-            f"Upload failed for {local_path!r} → {object_key!r}: {exc}",
-        ) from exc
 
-    except Exception:
-        logger.exception(
-            "upload_failed_unexpected",
-            path=str(local_path),
-            bucket=s.minio_bucket,
-            key=object_key,
-        )
-        raise
+        t0 = time.monotonic()
+        try:
+            client.fput_object(
+                bucket_name=s.minio_bucket,
+                object_name=object_key,
+                file_path=str(local_path),
+                content_type="audio/mpeg",
+            )
+            minio_upload_duration_seconds.observe(time.monotonic() - t0)
+            logger.info(
+                LogEvent.MINIO_UPLOAD_DONE,
+                path=str(local_path),
+                size=file_size,
+                bucket=s.minio_bucket,
+                key=object_key,
+            )
+        except S3Error as exc:
+            logger.error(
+                LogEvent.MINIO_UPLOAD_FAILED,
+                path=str(local_path),
+                bucket=s.minio_bucket,
+                key=object_key,
+                error=str(exc),
+            )
+            raise StorageError(
+                f"Upload failed for {local_path!r} → {object_key!r}: {exc}"
+            ) from exc
+        except Exception:
+            logger.exception(
+                LogEvent.MINIO_UPLOAD_FAILED,
+                path=str(local_path),
+                bucket=s.minio_bucket,
+                key=object_key,
+            )
+            raise
 
-    return object_key
+        return object_key
 
 
 def get_presigned_url(object_key: str, expires_seconds: int = 3600) -> str:
-    """Generate a presigned GET URL for an object in MinIO.
-
-    Args:
-        object_key: Object key in the bucket (e.g. ``"songs/abc-123.mp3"``).
-        expires_seconds: URL expiration time in seconds (default: 3600 = 1 hour).
-
-    Returns:
-        A presigned URL (HTTP/HTTPS) that can be used to access the object.
-
-    Raises:
-        StorageError: If MinIO rejects the presigned URL request.
-    """
+    """Generate a presigned GET URL for an object in MinIO."""
     from datetime import timedelta
     from urllib.parse import urlparse, urlunparse
 
-    s = get_settings()
-    client = _client()
+    from app.core.tracing import get_tracer
 
-    logger.debug(
-        "presigned_url_start",
-        bucket=s.minio_bucket,
-        key=object_key,
-        expires_seconds=expires_seconds,
-    )
-
-    try:
-        url = client.presigned_get_object(
-            bucket_name=s.minio_bucket,
-            object_name=object_key,
-            expires=timedelta(seconds=expires_seconds),
-        )
+    tracer = get_tracer(__name__)
+    with tracer.start_as_current_span("minio.stream"):
+        s = get_settings()
+        client = _client()
 
         logger.debug(
-            "presigned_url_generated_internal",
-            key=object_key,
-            url_host=urlparse(url).netloc,
-        )
-
-        # Rewrite internal Docker hostname → externally accessible host
-        if s.minio_public_url:
-            parsed = urlparse(url)
-            public = urlparse(s.minio_public_url)
-
-            rewritten_url = urlunparse(
-                parsed._replace(
-                    scheme=public.scheme,
-                    netloc=public.netloc,
-                ),
-            )
-
-            logger.debug(
-                "presigned_url_rewritten",
-                original_host=urlparse(url).netloc,
-                rewritten_host=urlparse(rewritten_url).netloc,
-                public_base=s.minio_public_url,
-            )
-
-            url = rewritten_url
-
-        logger.info(
-            "presigned_url_ready",
+            LogEvent.MINIO_STREAM_STARTED,
             key=object_key,
             expires_seconds=expires_seconds,
         )
-        return str(url)
-    except S3Error as exc:
-        logger.error(
-            "presigned_url_failed",
-            key=object_key,
-            error=str(exc),
-        )
-        raise StorageError(
-            f"Could not generate presigned URL for {object_key!r}: {exc}",
-        ) from exc
 
-    except Exception:
-        logger.exception(
-            "presigned_url_failed_unexpected",
-            key=object_key,
-        )
-        raise
+        try:
+            url = client.presigned_get_object(
+                bucket_name=s.minio_bucket,
+                object_name=object_key,
+                expires=timedelta(seconds=expires_seconds),
+            )
+
+            if s.minio_public_url:
+                parsed = urlparse(url)
+                public = urlparse(s.minio_public_url)
+                url = urlunparse(
+                    parsed._replace(scheme=public.scheme, netloc=public.netloc)
+                )
+
+            logger.info(
+                LogEvent.MINIO_STREAM_STARTED,
+                key=object_key,
+                expires_seconds=expires_seconds,
+            )
+            return str(url)
+        except S3Error as exc:
+            logger.error(LogEvent.MINIO_STREAM_FAILED, key=object_key, error=str(exc))
+            raise StorageError(
+                f"Could not generate presigned URL for {object_key!r}: {exc}"
+            ) from exc
+        except Exception:
+            logger.exception(LogEvent.MINIO_STREAM_FAILED, key=object_key)
+            raise

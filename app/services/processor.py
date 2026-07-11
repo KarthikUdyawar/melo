@@ -1,18 +1,12 @@
-"""Audio processor using FFmpeg for trimming and speed adjustment.
-
-This module provides functions to:
-- Trim audio files to a specific time range [start, end]
-- Change playback speed using FFmpeg's atempo filter
-
-All operations use temporary files in `/tmp/melo`, include retry logic for robustness,
-and raise ``ProcessingError`` on failure with proper cleanup.
-"""
+"""Audio processor using FFmpeg for trimming and speed adjustment."""
 
 # app/services/processor.py
 
 import subprocess  # nosec B404
+import time
 from pathlib import Path
 
+from app.core.log_events import LogEvent
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -30,159 +24,126 @@ def trim_audio(
     start: float | None,
     end: float | None,
 ) -> Path:
-    """Trim audio file to the given time range and save to output_path.
+    """Trim an audio file to the given time range.
 
-    Strategy
-    --------
-    1. First attempt: Stream copy (-c copy) — fast, no re-encoding.
-    2. On failure: Retry with libmp3lame re-encode to handle codec issues.
-
-    Args:
-        input_path: Path to source MP3 file.
-        output_path: Path where trimmed MP3 will be written.
-        start: Start time in seconds (None = from beginning).
-        end: End time in seconds (None = until end of file).
-
-    Returns:
-        The output_path on successful processing.
-
-    Raises:
-        ProcessingError: If both attempts fail or the output file is missing/empty.
+    Attempt a stream copy first, then fall back to re-encoding if the
+    stream-copy operation fails.
     """
-    _TMP_DIR.mkdir(parents=True, exist_ok=True)
+    from app.core.metrics import ffmpeg_duration_seconds
+    from app.core.tracing import get_tracer
 
-    logger.info(
-        "trim_start",
-        input=str(input_path),
-        output=str(output_path),
-        start=start,
-        end=end,
-    )
+    tracer = get_tracer(__name__)
+    with tracer.start_as_current_span("ffmpeg.trim"):
+        _TMP_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Build -ss / -to args (omit if None)
-    seek_args = []
-    if start is not None:
-        seek_args += ["-ss", str(start)]
-    if end is not None:
-        seek_args += ["-to", str(end)]
-
-    # ── Attempt 1: stream copy ───────────────────────────────────────────────
-    cmd_copy = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(input_path),
-        *seek_args,
-        "-c",
-        "copy",
-        str(output_path),
-    ]
-
-    logger.debug("ffmpeg_stream_copy", cmd=" ".join(cmd_copy))
-
-    try:
-        result = subprocess.run(
-            cmd_copy,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )  # nosec B603
-    except subprocess.TimeoutExpired as exc:
-        output_path.unlink(missing_ok=True)
-        raise ProcessingError(f"FFmpeg timed out after {exc.timeout}s") from exc
-
-    if (
-        result.returncode == 0
-        and output_path.exists()
-        and output_path.stat().st_size > 0
-    ):
         logger.info(
-            "trim_complete",
-            method="stream_copy",
+            LogEvent.FFMPEG_TRIM_STARTED,
+            input=str(input_path),
+            output=str(output_path),
+            start=start,
+            end=end,
+        )
+
+        seek_args = []
+        if start is not None:
+            seek_args += ["-ss", str(start)]
+        if end is not None:
+            seek_args += ["-to", str(end)]
+
+        t0 = time.monotonic()
+
+        # ── Attempt 1: stream copy ───────────────────────────────────────────────
+        cmd_copy = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_path),
+            *seek_args,
+            "-c",
+            "copy",
+            str(output_path),
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd_copy, capture_output=True, text=True, timeout=120
+            )  # nosec B603
+        except subprocess.TimeoutExpired as exc:
+            output_path.unlink(missing_ok=True)
+            raise ProcessingError(f"FFmpeg timed out after {exc.timeout}s") from exc
+
+        if (
+            result.returncode == 0
+            and output_path.exists()
+            and output_path.stat().st_size > 0
+        ):
+            ffmpeg_duration_seconds.labels(op="trim").observe(time.monotonic() - t0)
+            logger.info(
+                LogEvent.FFMPEG_TRIM_DONE,
+                method="stream_copy",
+                output=str(output_path),
+                size_bytes=output_path.stat().st_size,
+            )
+            return output_path
+
+        output_path.unlink(missing_ok=True)
+
+        logger.warning(
+            LogEvent.FFMPEG_FAILED,
+            step="stream_copy",
+            returncode=result.returncode,
+            stderr=result.stderr[-300:] if result.stderr else "",
+        )
+
+        # ── Attempt 2: re-encode ─────────────────────────────────────────────────
+        cmd_reencode = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_path),
+            *seek_args,
+            "-c:a",
+            "libmp3lame",
+            "-q:a",
+            "2",
+            str(output_path),
+        ]
+
+        result = subprocess.run(
+            cmd_reencode, capture_output=True, text=True
+        )  # nosec B603
+
+        if result.returncode != 0:
+            output_path.unlink(missing_ok=True)
+            logger.error(
+                LogEvent.FFMPEG_FAILED,
+                step="reencode",
+                returncode=result.returncode,
+                stderr=result.stderr[-500:] if result.stderr else "",
+            )
+            raise ProcessingError(
+                f"FFmpeg re-encode failed (exit {result.returncode}): \
+                {result.stderr[-300:]}"
+            )
+
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            output_path.unlink(missing_ok=True)
+            raise ProcessingError(
+                f"FFmpeg produced empty/missing output: {output_path}"
+            )
+
+        ffmpeg_duration_seconds.labels(op="trim").observe(time.monotonic() - t0)
+        logger.info(
+            LogEvent.FFMPEG_TRIM_DONE,
+            method="reencode",
             output=str(output_path),
             size_bytes=output_path.stat().st_size,
         )
         return output_path
 
-    if result.returncode == 0:
-        logger.warning(
-            "stream_copy_invalid_output",
-            output=str(output_path),
-            reason="empty_or_missing",
-        )
-        output_path.unlink(missing_ok=True)
-        # Fall through to re-encode retry path.
-
-    logger.warning(
-        "stream_copy_failed",
-        returncode=result.returncode,
-        stderr=result.stderr[-300:] if result.stderr else "",
-    )
-
-    # Clean up potentially corrupt partial output before retry
-    output_path.unlink(missing_ok=True)
-
-    # ── Attempt 2: re-encode with libmp3lame ─────────────────────────────────
-    cmd_reencode = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(input_path),
-        *seek_args,
-        "-c:a",
-        "libmp3lame",
-        "-q:a",
-        "2",  # VBR ~190kbps — matches download quality
-        str(output_path),
-    ]
-
-    logger.debug("ffmpeg_reencode", cmd=" ".join(cmd_reencode))
-
-    result = subprocess.run(cmd_reencode, capture_output=True, text=True)  # nosec B603
-
-    if result.returncode != 0:
-        output_path.unlink(missing_ok=True)
-        logger.error(
-            "trim_failed",
-            returncode=result.returncode,
-            stderr=result.stderr[-500:] if result.stderr else "",
-        )
-        raise ProcessingError(
-            f"FFmpeg re-encode failed (exit {result.returncode}): "
-            f"{result.stderr[-300:]}"
-        )
-
-    if not output_path.exists() or output_path.stat().st_size == 0:
-        output_path.unlink(missing_ok=True)
-        raise ProcessingError(f"FFmpeg produced empty/missing output: {output_path}")
-
-    logger.info(
-        "trim_complete",
-        method="reencode",
-        output=str(output_path),
-        size_bytes=output_path.stat().st_size,
-    )
-    return output_path
-
 
 def _build_atempo_filters(speed: float) -> str:
-    """Build FFmpeg atempo filter chain for the desired playback speed.
-
-    FFmpeg's ``atempo`` filter only supports range 0.5–2.0 per instance.
-    This function chains multiple filters to support wider speed ranges.
-
-    Examples:
-        - speed=4.0   → "atempo=2.0,atempo=2.0"
-        - speed=0.25  → "atempo=0.5,atempo=0.5"
-        - speed=1.5   → "atempo=1.5"
-        - speed=1.0   → "" (empty string — no filter needed)
-
-    Args:
-        speed: Target speed multiplier (> 0). 1.0 = normal speed.
-
-    Returns:
-        Comma-separated atempo filter string. Empty string if speed is 1.0.
-    """
+    """Build FFmpeg atempo filter chain for the desired playback speed."""
     if speed <= 0:
         raise ValueError("speed must be > 0")
 
@@ -198,95 +159,77 @@ def _build_atempo_filters(speed: float) -> str:
             filters.append("atempo=0.5")
             speed /= 0.5
         filters.append(f"atempo={speed:.6f}")
-    # speed == 1.0 → empty list, caller skips processing
 
     return ",".join(filters)
 
 
 def apply_speed(input_path: Path, output_path: Path, speed: float) -> Path:
-    """Apply speed adjustment to an audio file using FFmpeg atempo filter.
+    """Apply speed adjustment to an audio file using FFmpeg atempo filter."""
+    from app.core.metrics import ffmpeg_duration_seconds
+    from app.core.tracing import get_tracer
 
-    Note:
-        Callers should avoid calling this with ``speed == 1.0`` as it
-        unnecessarily re-encodes the file.
+    tracer = get_tracer(__name__)
+    with tracer.start_as_current_span("ffmpeg.speed"):
+        if speed == 1.0:
+            import shutil
 
-    Args:
-        input_path: Path to source MP3 file.
-        output_path: Path where speed-adjusted MP3 will be written.
-        speed: Playback speed multiplier (e.g. 2.0 = double speed).
+            shutil.copy2(input_path, output_path)
+            return output_path
 
-    Returns:
-        The output_path on successful processing.
+        _TMP_DIR.mkdir(parents=True, exist_ok=True)
 
-    Raises:
-        ProcessingError: If FFmpeg fails or produces empty/missing output.
-    """
-    # Fast path: no speed change needed
-    if speed == 1.0:
+        filter_str = _build_atempo_filters(speed)
+
         logger.info(
-            "speed_skip",
+            LogEvent.FFMPEG_SPEED_STARTED,
             input=str(input_path),
             output=str(output_path),
-            reason="speed_equals_1.0",
+            speed=speed,
+            filter=filter_str,
         )
-        # Copy the file instead of re-encoding
-        import shutil
 
-        shutil.copy2(input_path, output_path)
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_path),
+            "-filter:a",
+            filter_str,
+            "-vn",
+            str(output_path),
+        ]
+
+        t0 = time.monotonic()
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)  # nosec B603
+        except OSError as exc:
+            output_path.unlink(missing_ok=True)
+            raise ProcessingError(f"FFmpeg launch failed: {exc}") from exc
+
+        if result.returncode != 0:
+            output_path.unlink(missing_ok=True)
+            logger.error(
+                LogEvent.FFMPEG_FAILED,
+                step="atempo",
+                returncode=result.returncode,
+                stderr=result.stderr[-500:] if result.stderr else "",
+            )
+            raise ProcessingError(
+                f"FFmpeg atempo failed (exit {result.returncode}): \
+                    {result.stderr[-300:]}",
+            )
+
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            output_path.unlink(missing_ok=True)
+            raise ProcessingError(
+                f"FFmpeg speed produced empty/missing output: {output_path}"
+            )
+
+        ffmpeg_duration_seconds.labels(op="speed").observe(time.monotonic() - t0)
+        logger.info(
+            LogEvent.FFMPEG_SPEED_DONE,
+            output=str(output_path),
+            size_bytes=output_path.stat().st_size,
+            speed=speed,
+        )
         return output_path
-
-    _TMP_DIR.mkdir(parents=True, exist_ok=True)
-
-    filter_str = _build_atempo_filters(speed)
-
-    logger.info(
-        "speed_start",
-        input=str(input_path),
-        output=str(output_path),
-        speed=speed,
-        filter=filter_str,
-    )
-
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(input_path),
-        "-filter:a",
-        filter_str,
-        "-vn",
-        str(output_path),
-    ]
-
-    logger.debug("ffmpeg_speed", cmd=" ".join(cmd))
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True)  # nosec B603
-    except OSError as exc:
-        output_path.unlink(missing_ok=True)
-        raise ProcessingError(f"FFmpeg launch failed: {exc}") from exc
-
-    if result.returncode != 0:
-        output_path.unlink(missing_ok=True)
-        logger.error(
-            "speed_failed",
-            returncode=result.returncode,
-            stderr=result.stderr[-500:] if result.stderr else "",
-        )
-        raise ProcessingError(
-            f"FFmpeg atempo failed (exit {result.returncode}): {result.stderr[-300:]}",
-        )
-
-    if not output_path.exists() or output_path.stat().st_size == 0:
-        output_path.unlink(missing_ok=True)
-        raise ProcessingError(
-            f"FFmpeg speed produced empty/missing output: {output_path}",
-        )
-
-    logger.info(
-        "speed_complete",
-        output=str(output_path),
-        size_bytes=output_path.stat().st_size,
-        speed=speed,
-    )
-    return output_path

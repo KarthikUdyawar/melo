@@ -17,14 +17,22 @@ groups:
               expr: increase(songs_completed_total{status="failed"}[5m])
               intervalMs: 60000
               maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
           - refId: C
             relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: __expr__
             model:
               type: threshold
+              expression: B
               conditions:
                 - evaluator: { params: [3], type: gt }
-                  query: { params: [A] }
+                  query: { params: [B] }
         annotations:
           summary: "≥3 Celery task failures in the last 5 minutes"
         labels:
@@ -44,14 +52,22 @@ groups:
               expr: songs_by_status_total{status="processing"}
               intervalMs: 60000
               maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
           - refId: C
             relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: __expr__
             model:
               type: threshold
+              expression: B
               conditions:
                 - evaluator: { params: [0], type: gt }
-                  query: { params: [A] }
+                  query: { params: [B] }
         annotations:
           summary: "A song has been in 'processing' status for more than 10 minutes"
         labels:
@@ -74,14 +90,22 @@ groups:
                 )
               intervalMs: 60000
               maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
           - refId: C
             relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: __expr__
             model:
               type: threshold
+              expression: B
               conditions:
                 - evaluator: { params: [2], type: gt }
-                  query: { params: [A] }
+                  query: { params: [B] }
         annotations:
           summary: "API p99 latency exceeded 2s over the last 5 minutes"
         labels:
@@ -101,14 +125,22 @@ groups:
               expr: celery_queue_depth
               intervalMs: 60000
               maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
           - refId: C
             relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: __expr__
             model:
               type: threshold
+              expression: B
               conditions:
                 - evaluator: { params: [50], type: gt }
-                  query: { params: [A] }
+                  query: { params: [B] }
         annotations:
           summary: "Celery queue depth exceeded 50 tasks"
         labels:
@@ -127,7 +159,7 @@ groups:
             model:
               expr: >
                 count(
-                  probe_success{job=~"melo-api"} == 0
+                  up{job="melo_api"} == 0
                   or
                   redis_up == 0
                   or
@@ -135,14 +167,22 @@ groups:
                 )
               intervalMs: 60000
               maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
           - refId: C
             relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: __expr__
             model:
               type: threshold
+              expression: B
               conditions:
                 - evaluator: { params: [0], type: gt }
-                  query: { params: [A] }
+                  query: { params: [B] }
         annotations:
           summary: "One or more Melo infrastructure services are degraded"
         labels:
@@ -162,14 +202,22 @@ groups:
               expr: minio_bucket_size_bytes
               intervalMs: 60000
               maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
           - refId: C
             relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: __expr__
             model:
               type: threshold
+              expression: B
               conditions:
                 - evaluator: { params: [10737418240], type: gt } # 10 GB
-                  query: { params: [A] }
+                  query: { params: [B] }
         annotations:
           summary: "MinIO bucket size exceeded 10 GB"
         labels:
@@ -192,14 +240,22 @@ groups:
                 )
               intervalMs: 60000
               maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 7200, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
           - refId: C
             relativeTimeRange: { from: 7200, to: 0 }
             datasourceUid: __expr__
             model:
               type: threshold
+              expression: B
               conditions:
                 - evaluator: { params: [0], type: lt }
-                  query: { params: [A] }
+                  query: { params: [B] }
         annotations:
           summary: "No log backup uploaded in the last 2 hours"
         labels:
@@ -216,19 +272,27 @@ groups:
             relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: prometheus
             model:
-              expr: up == 0
+              expr: count(up == 0)
               intervalMs: 60000
               maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
           - refId: C
             relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: __expr__
             model:
               type: threshold
+              expression: B
               conditions:
                 - evaluator: { params: [0], type: gt }
-                  query: { params: [A] }
+                  query: { params: [B] }
         annotations:
-          summary: "Scrape target {{ $labels.job }} ({{ $labels.instance }}) is down"
+          summary: "One or more scrape targets are down"
         labels:
           severity: critical
         noDataState: OK

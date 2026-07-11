@@ -112,10 +112,10 @@ class TestCreateSong:
         assert resp.status_code == 422
 
     def test_dispatches_celery_task(self, client: TestClient) -> None:
-        with patch("app.workers.tasks.process_song_task.delay") as mock_delay:
+        with patch("app.workers.tasks.process_song_task.apply_async") as mock_apply:
             resp = client.post("/songs", json={"url": VALID_URL})
         assert resp.status_code == 202
-        mock_delay.assert_called_once()
+        mock_apply.assert_called_once()
 
     def test_with_trim_and_speed(self, client: TestClient) -> None:
         with patch("app.workers.tasks.process_song_task.delay"):
