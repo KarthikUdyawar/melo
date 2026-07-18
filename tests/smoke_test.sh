@@ -539,7 +539,11 @@ pass "GET /songs?search=zzznomatch_xyz → 0 results"
 # =============================================================================
 section "S22. GET /songs — favorite filter"
 
-api_post "/favorites/$SONG_ID" '{}' > /dev/null
+# Favorite the song and verify it took
+FAV_RAW=$(api_post_raw "/favorites/$SONG_ID" '{}')
+FAV_HTTP="${FAV_RAW##*|||}"
+[[ "$FAV_HTTP" == "200" || "$FAV_HTTP" == "201" ]] \
+    || fail "Could not favorite song for filter test: HTTP $FAV_HTTP — body: ${FAV_RAW%|||*}"
 
 FAV_FILTER=$(api_get "/songs?favorite=true") || fail "GET /songs?favorite=true failed"
 FAV_COUNT=$(echo "$FAV_FILTER" | jq -r '.body.count')
@@ -558,7 +562,7 @@ HTTP="${RAW##*|||}"
 [[ "$HTTP" == "422" ]] || fail "Invalid favorite param: expected 422, got $HTTP"
 pass "GET /songs?favorite=maybe → 422"
 
-api_delete_raw "/favorites/$SONG_ID" > /dev/null
+api_delete_raw "/favorites/$SONG_ID" > /dev/null || true
 
 # =============================================================================
 # S23. GET /songs — sort_by + order
@@ -620,8 +624,42 @@ HTTP="${RAW##*|||}"
 pass "GET /songs?offset=-1 → 422"
 
 # =============================================================================
+# S25. GET /metrics — Prometheus endpoint
+# =============================================================================
+section "S25. GET /metrics — Prometheus endpoint"
+
+METRICS_RAW=$(curl -s --max-time 10 -w "|||%{http_code}" "${API}/metrics")
+METRICS_HTTP="${METRICS_RAW##*|||}"
+METRICS_BODY="${METRICS_RAW%|||*}"
+
+[[ "$METRICS_HTTP" == "200" ]] || fail "GET /metrics: expected 200, got $METRICS_HTTP"
+pass "GET /metrics → 200"
+
+echo "$METRICS_BODY" | grep -q "songs_submitted_total" \
+    || fail "GET /metrics: 'songs_submitted_total' not found"
+pass "GET /metrics contains songs_submitted_total"
+
+echo "$METRICS_BODY" | grep -q "songs_completed_total" \
+    || fail "GET /metrics: 'songs_completed_total' not found"
+pass "GET /metrics contains songs_completed_total"
+
+# =============================================================================
+# S26. X-Trace-Id header present on API responses
+# =============================================================================
+section "S26. X-Trace-Id header present on API responses"
+
+for ENDPOINT in "/health" "/songs" "/favorites" "/playlists"; do
+    HEADERS=$(curl -s --max-time 10 -I "${API}${ENDPOINT}" | tr -d '\r')
+    TRACE_ID=$(echo "$HEADERS" | grep -i "^x-trace-id:" | awk '{print $2}')
+    [[ -n "$TRACE_ID" ]] || fail "X-Trace-Id missing on ${ENDPOINT}"
+    echo "$TRACE_ID" | grep -qE '^[0-9a-f]{32}$' \
+        || fail "X-Trace-Id on ${ENDPOINT} not 32-char hex: '$TRACE_ID'"
+    pass "${ENDPOINT} → X-Trace-Id=$TRACE_ID"
+done
+
+# =============================================================================
 # Summary
 # =============================================================================
 echo -e "\n${GREEN}════════════════════════════════════════${NC}"
-echo -e "${GREEN}  ✓ All smoke tests passed! (24 sections)${NC}"
+echo -e "${GREEN}  ✓ All smoke tests passed! (26 sections)${NC}"
 echo -e "${GREEN}════════════════════════════════════════${NC}\n"

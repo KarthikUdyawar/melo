@@ -12,6 +12,7 @@ services:
 
   api:
     build: .
+    container_name: melo-api-1
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
@@ -25,7 +26,7 @@ services:
         condition: service_healthy
     volumes:
       - ./app:/app/app
-      - melo_logs:/var/log/melo
+      - melo_melo_logs:/var/log/melo
     tmpfs:
       - /tmp/melo:mode=1777
     healthcheck:
@@ -38,8 +39,12 @@ services:
 
   worker:
     build: .
+    container_name: melo-worker-1
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q melo
     env_file: .env.staging
+    environment:
+      CELERY_SEND_EVENTS: "true"
+      CELERY_TASK_TRACK_STARTED: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,7 +54,7 @@ services:
         condition: service_healthy
     volumes:
       - ./app:/app/app
-      - melo_logs:/var/log/melo
+      - melo_melo_logs:/var/log/melo
     tmpfs:
       - /tmp/melo:mode=1777
     healthcheck:
@@ -142,4 +147,5 @@ volumes:
   redis_data:
   minio_data:
   worker_tmp:
-  melo_logs:
+  melo_melo_logs:
+    name: melo_melo_logs

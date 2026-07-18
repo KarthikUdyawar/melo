@@ -1,81 +1,118 @@
-# Melo — Handoff Document
+# Melo — Sprint 5 Handoff
 
-**Date:** 2026-05-31
-**Repo:** `KarthikUdyawar/melo`
-**Active branch:** `feature/ui-scaffold` (seeking fix in progress, not yet committed)
-**Active skills:** `/caveman ultra`, `/clean-code`, `/tdd`
-
----
-
-## Session Summary
-
-1. **`make tree`** added to Makefile.
-2. **UI-0 confirmed complete** — `feature/ui-scaffold` → `develop` ready to merge.
-3. **Audio playback bug fixed** — `handleGlobalClick` early `return` blocked card clicks. Fixed by moving card/playlist checks above action guard.
-4. **Audio seeking root cause diagnosed** — stream endpoint returns `200 OK` with no `Accept-Ranges`, browser treats stream as non-seekable.
-5. **`songs.py` rewritten** for range support — see below.
-6. **Seeking still unverified** — session ended before final confirmation.
+**Date:** 2026-06-07  
+**Sprint:** 5 — Observability & Monitoring  
+**Repo:** `KarthikUdyawar/melo`  
+**Branch:** `develop` base → feature branches → PR
 
 ---
 
-## Seeking Fix — Status
+## Sprint 5 Status
 
-Latest `songs.py` at `/mnt/user-data/outputs/songs.py`:
+| Ticket | Title                            | Status                         |
+| ------ | -------------------------------- | ------------------------------ |
+| OBS-0  | Docker Compose Infra             | ✅ Done                         |
+| OBS-1  | Structured Logging               | ✅ Done                         |
+| OBS-2  | Metrics                          | ✅ Done                         |
+| OBS-3  | Distributed Tracing              | ✅ Done                         |
+| OBS-4  | Grafana Dashboards & Alerting    | ✅ Done (rules.yml fix applied) |
+| OBS-5  | Continuous Profiling (Pyroscope) | ✅ Done                         |
+| OBS-6  | Streamlit Admin Dashboard        | ✅ Done                         |
+| OBS-7  | Tests & Smoke                    | ⬜ NOT STARTED — next session   |
 
-- **No trim/speed:** `httpx.get(internal_presigned_url, headers={"Range": ...})` → proxied `Response` with `Accept-Ranges: bytes`. Uses `minio:9000` (internal) — API container can reach it, signature valid.
-- **Trim/speed:** `FileResponse(final_path, background=BackgroundTask(_cleanup))` — Starlette handles `206` natively.
-- `StreamingResponse` removed from both paths.
-- `stream_song` now takes `request: Request` for Range header forwarding.
+---
 
-Apply:
-```bash
-cp /mnt/user-data/outputs/songs.py app/api/songs.py
-# auto-reloads via uvicorn --reload
+## What Was Done This Session
+
+### OBS-4 fix
+`infra/grafana/provisioning/alerting/rules.yml` — all 8 alert rules were missing `relativeTimeRange` on every `data` block. Grafana 13 rejects `{from: 0, to: 0}`. Fixed: add `relativeTimeRange: { from: 600, to: 0 }` (7200 for log-backup-gap) to every query node and expression node.
+
+### OBS-5 — Pyroscope SDK
+- New: `app/core/profiling.py` — `configure_pyroscope(app_name)`, no-ops if `PYROSCOPE_SERVER_URL` unset
+- `app/main.py` — calls `configure_pyroscope("melo.api")` inside lifespan after `configure_tracing`
+- `app/workers/celery_app.py` — calls `configure_pyroscope("melo.worker")` inside `on_worker_init`
+- `pyproject.toml` — add `"pyroscope-io>=0.8.0"` to `[project] dependencies`, then `uv lock && uv sync`
+
+### OBS-6 — Streamlit Admin
+Full `admin/` directory delivered:
+- `auth.py` — `is_authenticated()`, `login_page()` with `ADMIN_PASSWORD` env check
+- `app.py` — login gate, sidebar nav, page dispatch via `exec`, logout button
+- `pages/overview.py` — health badges + 4 Prometheus metric cards
+- `pages/songs.py` — paginated song table, status breakdown, re-queue button for failed
+- `pages/logs.py` — Loki `query_range` tail, service + level filters
+- `pages/metrics.py` — free-form PromQL input + 5 preset buttons
+- `pages/alerts.py` — Grafana Alertmanager firing alerts + all rules table
+- `pages/db_health.py` — postgres-exporter + redis-exporter metrics side by side
+- `Dockerfile` — `FROM python:3.12-slim`, `requirements.txt`, `streamlit run app.py`
+- `requirements.txt` — `streamlit>=1.35.0`, `requests>=2.32.0`
+
+Docker Compose: add `admin` service to `infra/docker-compose.monitoring.yml` (snippet delivered).  
+Makefile: add `make admin` target.
+
+---
+
+## Outstanding Items for Next Session
+
+### OBS-7 — Tests & Smoke (the only remaining ticket)
+
+**Unit tests** (all files already exist in `tests/unit/`, contents unknown — verify before writing):
+- `test_admin_auth.py` — NEW: 3 behaviors
+  - `is_authenticated()` returns `False` when session key absent (mock `st.session_state`)
+  - `login_page()` sets `authenticated=True` on correct password (mock env + session)
+  - `login_page()` leaves session unauthenticated on wrong password
+
+Existing test files to check pass (may already be complete from earlier sessions):
+- `test_log_events.py`, `test_logging.py`, `test_log_manager.py`, `test_tracing.py`, `test_metrics_unit.py`, `test_middleware_health.py`
+- `tests/integration/test_metrics_api.py`, `tests/integration/test_tracing_api.py`
+
+**Smoke test additions** (`tests/smoke_test.sh`):
+- S25: `GET /metrics` returns 200
+- S26: Any API response has `X-Trace-Id` header
+
+**Coverage:** must stay ≥ 80% (was 94.77%). Add `app/core/profiling.py` to coverage source; it will be mostly covered by the no-op branch in unit tests.
+
+**Definition of Done checks** still open:
+- `GET /metrics` 200 + custom metric names present → covered by `test_metrics_api.py`
+- `X-Trace-Id` on every response → covered by `test_tracing_api.py`
+- Smoke S25/S26 pass
+- Coverage ≥ 80%
+- `README.md` update: new ports table, new `make` targets, observability section
+- `CHANGELOG.md` entry for v0.4.0 (Sprint 5)
+- `docs/sprints/Sprint-5.md` — mark OBS-7 done after tests pass
+
+---
+
+## Key Files Changed This Sprint
+
+```
+app/core/profiling.py          NEW
+app/core/log_events.py         NEW
+app/core/log_manager.py        NEW
+app/core/logging.py            REWRITE
+app/core/metrics.py            NEW
+app/core/tracing.py            NEW
+app/main.py                    MODIFIED (tracing + profiling + metrics)
+app/workers/celery_app.py      MODIFIED (tracing + profiling)
+admin/                         NEW (entire directory)
+infra/                         NEW (entire directory)
+infra/grafana/provisioning/alerting/rules.yml  FIXED (relativeTimeRange)
 ```
 
-Verify:
-```bash
-curl -H "Range: bytes=0-1023" -I http://localhost:8000/songs/<done-id>/stream
-# Must return: HTTP/1.1 206 Partial Content + Accept-Ranges: bytes
-```
+---
 
-If 502: `docker compose logs api --tail=30` for httpx traceback.
+## Known Gotchas
+
+- `relativeTimeRange` required on **every** data block in Grafana 13 alert rules — `{from:0, to:0}` crashes provisioning
+- `pyroscope-io` must be in `pyproject.toml` deps and `uv sync` run; otherwise `configure_pyroscope` logs and no-ops
+- Streamlit `admin/app.py` uses `exec()` for page dispatch — ruff `S102` noqa needed
+- Admin container service name in compose must be `admin` (not `streamlit`) to match PRD
+- `CELERY_SEND_EVENTS=True` + `CELERY_TASK_TRACK_STARTED=True` still need to be added to worker env in `docker-compose.yml` (OBS-0 outstanding checkbox)
+- `example.env` additions (`GRAFANA_ADMIN_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ADMIN_PASSWORD`, log rotation vars, `PYROSCOPE_SERVER_URL`) still need to be verified as present
 
 ---
 
-## Sprint 4 Status
+## Skills for Next Session
 
-| Ticket | Status | Notes |
-|--------|--------|-------|
-| UI-0 — Scaffold | ✅ done | Merge to develop |
-| UI-1 — Library | 🟡 partial | Missing: Retry on failed cards |
-| UI-2 — Add Song Modal | 🟡 partial | Missing: loading spinner |
-| UI-3 — Player Bar | 🟡 partial | Play/pause works. **Seeking broken (P0)** |
-| UI-4 — Favorites | ⬜ todo | |
-| UI-5 — Playlists | ⬜ todo | |
-| UI-6 — Polish | ⬜ todo | |
-
----
-
-## Files Changed This Session (uncommitted)
-
-| File | Where | Notes |
-|------|-------|-------|
-| `app/api/songs.py` | `/mnt/user-data/outputs/songs.py` | Copy + verify seeking |
-| `ui/player.js` | `/mnt/user-data/outputs/player.js` | Improved scrubber — apply after seeking confirmed |
-| `ui/app.js` | In repo | Card click fix applied; debug `console.log` lines present — remove before merge |
-
----
-
-## Known Bugs
-
-- "Load more" shows with 1 song (bookmark null check too late) — UI-6 scope
-- Active card highlight only updates visible cards on play — UI-6 scope
-- `share-modal.js` console error — browser extension, not Melo
-
-## Constraints
-- Caveman ultra active
-- Clean code — SRP, ≤20 line functions
-- No build tooling, no TypeScript, no frontend tests
-- Design tokens only — no raw hex in CSS
-- Python changes hot-reload; UI changes need `docker compose build ui && docker compose up -d ui`
+- `/tdd` — OBS-7 test writing
+- `/clean-code` — standard
+- `/caveman ultra` — output style

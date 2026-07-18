@@ -18,6 +18,7 @@ from app.api._song_utils import serialize_song
 from app.api.responses import envelope_response
 from app.core.config import get_settings
 from app.core.deps import DbDep
+from app.core.log_events import LogEvent
 from app.core.logging import get_logger
 from app.models.favorite import Favorite
 from app.models.song import Song, SongStatus
@@ -110,6 +111,26 @@ def _rewrite_minio_url(url: str) -> str:
     return urlunparse(parsed._replace(scheme=public.scheme, netloc=public.netloc))
 
 
+def _inject_trace_context_into_task(
+    task: Any,
+    song_id: str,
+    url: str,
+) -> None:
+    """Enqueue task with OTEL traceparent header injected."""
+    try:
+        from opentelemetry.propagate import inject
+
+        headers: dict[str, str] = {}
+        inject(headers)
+
+        task.apply_async(
+            args=(song_id, url),
+            headers=headers,
+        )
+    except Exception:  # noqa: BLE001
+        task.delay(song_id, url)
+
+
 # ── endpoints ─────────────────────────────────────────────────────────────────
 
 
@@ -125,7 +146,7 @@ def preview_song(payload: PreviewRequest) -> JSONResponse:
     """Fetch YouTube metadata (title, duration, thumbnail) without any DB write."""
     from app.services.downloader import DownloadError, probe_metadata
 
-    logger.info("preview_request", url=payload.url)
+    logger.info(LogEvent.PREVIEW_FETCHED, url=payload.url)
 
     try:
         youtube_id = extract_youtube_id(payload.url)
@@ -135,6 +156,7 @@ def preview_song(payload: PreviewRequest) -> JSONResponse:
     try:
         meta = probe_metadata(payload.url)
     except DownloadError as exc:
+        logger.error(LogEvent.PREVIEW_FAILED, url=payload.url, error=str(exc))
         raise HTTPException(
             status_code=502, detail=f"Failed to fetch metadata: {exc}"
         ) from exc
@@ -160,7 +182,7 @@ def preview_song(payload: PreviewRequest) -> JSONResponse:
 )
 def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
     """Submit a YouTube URL — returns 202 immediately, processing happens async."""
-    logger.info("create_song_request", url=payload.url, speed=payload.speed)
+    from app.core.metrics import songs_submitted_total
 
     try:
         youtube_id = extract_youtube_id(payload.url)
@@ -178,20 +200,32 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
     db.commit()
     db.refresh(song)
 
-    logger.info("song_created", song_id=str(song.id), youtube_id=youtube_id)
+    songs_submitted_total.inc()
+
+    logger.info(
+        LogEvent.SONG_SUBMITTED,
+        song_id=str(song.id),
+        youtube_id=youtube_id,
+        speed=payload.speed,
+    )
 
     from app.workers.tasks import process_song_task
 
     try:
-        process_song_task.delay(str(song.id), payload.url)
+        # Inject OTEL trace context into Celery task headers
+        _inject_trace_context_into_task(process_song_task, str(song.id), payload.url)
     except Exception as exc:
-        logger.error("celery_dispatch_failed", song_id=str(song.id), error=str(exc))
+        logger.error(
+            LogEvent.TASK_FAILED,
+            song_id=str(song.id),
+            error=str(exc),
+        )
         try:
             song.status = SongStatus.failed
             db.commit()
         except Exception as db_exc:
             logger.error(
-                "celery_dispatch_compensation_failed",
+                LogEvent.TASK_FAILED,
                 song_id=str(song.id),
                 error=str(db_exc),
             )
@@ -332,6 +366,7 @@ def get_song(song_id: UUID, db: DbDep) -> JSONResponse:
     """Retrieve a single song by ID."""
     song = db.query(Song).filter(Song.id == song_id, Song.deleted_at.is_(None)).first()
     if not song:
+        logger.warning(LogEvent.SONG_NOT_FOUND, song_id=str(song_id))
         raise HTTPException(status_code=404, detail=f"Song {song_id} not found.")
     return envelope_response(serialize_song(song, db), "Song retrieved.")
 
@@ -346,6 +381,7 @@ def delete_song(song_id: UUID, db: DbDep) -> Response:
     """Soft-delete a song. Sets deleted_at timestamp and removes the MinIO object."""
     song = db.query(Song).filter(Song.id == song_id, Song.deleted_at.is_(None)).first()
     if not song:
+        logger.warning(LogEvent.SONG_NOT_FOUND, song_id=str(song_id))
         raise HTTPException(status_code=404, detail=f"Song {song_id} not found.")
 
     if song.file_url:
@@ -353,17 +389,15 @@ def delete_song(song_id: UUID, db: DbDep) -> Response:
             s = get_settings()
             client = _client()
             client.remove_object(s.minio_bucket, song.file_url)
-            logger.info(
-                "song_file_removed", song_id=str(song_id), file_url=song.file_url
-            )
         except Exception as exc:
-            # Log but don't block the soft delete — object may already be gone
-            logger.warning("minio_remove_failed", song_id=str(song_id), error=str(exc))
+            logger.warning(
+                LogEvent.MINIO_STREAM_FAILED, song_id=str(song_id), error=str(exc)
+            )
 
     song.deleted_at = datetime.now(UTC)
     db.commit()
 
-    logger.info("song_soft_deleted", song_id=str(song_id))
+    logger.info(LogEvent.SONG_DELETED, song_id=str(song_id))
     return Response(status_code=204)
 
 
@@ -393,8 +427,13 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
     - No trim/speed → presigned MinIO redirect (browser gets range support natively).
     - Trim/speed → process to tmp file → FileResponse (Starlette handles ranges).
     """
+    import time
+
+    from app.core.metrics import stream_duration_seconds
+
     song = db.query(Song).filter(Song.id == song_id, Song.deleted_at.is_(None)).first()
     if not song:
+        logger.warning(LogEvent.SONG_NOT_FOUND, song_id=str(song_id))
         raise HTTPException(status_code=404, detail=f"Song {song_id} not found.")
 
     if song.status != SongStatus.done:
@@ -414,6 +453,15 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
     has_trim = song.start is not None or song.end is not None
     has_speed = song.speed is not None and song.speed != 1.0
 
+    logger.info(
+        LogEvent.SONG_STREAM_STARTED,
+        song_id=str(song_id),
+        has_trim=has_trim,
+        has_speed=has_speed,
+    )
+
+    stream_start = time.monotonic()
+
     # ── Case 1: no processing — proxy MinIO directly, forwarding Range header ─
     if not has_trim and not has_speed:
         from datetime import timedelta
@@ -428,18 +476,16 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
                 expires=timedelta(seconds=_PRESIGNED_EXPIRY),
             )
         except Exception as exc:
+            logger.error(
+                LogEvent.SONG_STREAM_FAILED, song_id=str(song_id), error=str(exc)
+            )
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
         headers: dict[str, str] = {}
         if range_header := request.headers.get("range"):
             headers["Range"] = range_header
 
-        timeout = httpx.Timeout(
-            connect=5.0,
-            read=None,
-            write=30.0,
-            pool=30.0,
-        )
+        timeout = httpx.Timeout(connect=5.0, read=None, write=30.0, pool=30.0)
 
         try:
             client_cm = httpx.Client(timeout=timeout)
@@ -457,7 +503,11 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
             if upstream.status_code not in (200, 206):
                 stream_cm.__exit__(None, None, None)
                 client_cm.__exit__(None, None, None)
-
+                logger.error(
+                    LogEvent.SONG_STREAM_FAILED,
+                    song_id=str(song_id),
+                    upstream_status=upstream.status_code,
+                )
                 raise HTTPException(
                     status_code=502,
                     detail=f"Storage service returned HTTP {upstream.status_code}",
@@ -469,16 +519,15 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
                 "Content-Disposition": build_content_disposition(filename),
             }
 
-            for h in (
-                "Content-Length",
-                "Content-Range",
-                "ETag",
-                "Last-Modified",
-            ):
+            for h in ("Content-Length", "Content-Range", "ETag", "Last-Modified"):
                 if h in upstream.headers:
                     response_headers[h] = upstream.headers[h]
 
         except httpx.HTTPError as exc:
+            client_cm.__exit__(None, None, None)
+            logger.error(
+                LogEvent.SONG_STREAM_FAILED, song_id=str(song_id), error=str(exc)
+            )
             raise HTTPException(
                 status_code=502,
                 detail=f"Failed to fetch audio from storage: {exc}",
@@ -490,6 +539,7 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
             finally:
                 stream_cm.__exit__(None, None, None)
                 client_cm.__exit__(None, None, None)
+                stream_duration_seconds.observe(time.monotonic() - stream_start)
 
         return StreamingResponse(
             stream_and_close(),
@@ -499,7 +549,6 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
         )
 
     # ── Case 2: trim/speed — write to tmp file, serve with FileResponse ───────
-    # Starlette's FileResponse handles Accept-Ranges / 206 Partial Content.
     _TMP_DIR.mkdir(parents=True, exist_ok=True)
 
     original_path = _TMP_DIR / f"{song_id}_original.mp3"
@@ -508,7 +557,6 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
     created_paths: list[Path] = []
 
     try:
-        # Download from MinIO
         try:
             minio_response = client.get_object(s.minio_bucket, song.file_url)
             created_paths.append(original_path)
@@ -520,9 +568,11 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
                 minio_response.close()
                 minio_response.release_conn()
         except Exception as exc:
+            logger.error(
+                LogEvent.MINIO_STREAM_FAILED, song_id=str(song_id), error=str(exc)
+            )
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        # Trim
         post_trim_path = original_path
         if has_trim:
             try:
@@ -535,11 +585,13 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
                 )
                 post_trim_path = trimmed_path
             except (ProcessingError, Exception) as exc:
+                logger.error(
+                    LogEvent.SONG_STREAM_FAILED, song_id=str(song_id), error=str(exc)
+                )
                 raise HTTPException(
                     status_code=502, detail=f"Trim failed: {exc}"
                 ) from exc
 
-        # Speed
         final_path = post_trim_path
         if has_speed:
             try:
@@ -551,12 +603,13 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
                 )
                 final_path = speed_path
             except (ProcessingError, Exception) as exc:
+                logger.error(
+                    LogEvent.SONG_STREAM_FAILED, song_id=str(song_id), error=str(exc)
+                )
                 raise HTTPException(
                     status_code=502, detail=f"Speed processing failed: {exc}"
                 ) from exc
 
-        # Cleanup all tmp files except final_path — FileResponse reads it async.
-        # Final path is unlinked via background task after response completes.
         from starlette.background import BackgroundTask
 
         paths_to_cleanup = [p for p in created_paths if p != final_path]
@@ -564,8 +617,8 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
         def _cleanup() -> None:
             for p in [*paths_to_cleanup, final_path]:
                 p.unlink(missing_ok=True)
+            stream_duration_seconds.observe(time.monotonic() - stream_start)
 
-        logger.info("stream_file_response", song_id=str(song_id), path=str(final_path))
         return FileResponse(
             path=final_path,
             media_type="audio/mpeg",
