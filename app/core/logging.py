@@ -125,7 +125,7 @@ def _reset_logging_state() -> None:
     _FILE_HANDLER_PATH = None
     _FILE_HANDLER_SHARED = None
 
-def reopen_file_handler() -> None:
+def reopen_file_handler() -> bool:
     """Close the current file handler and open a fresh one at the same path.
 
     Must be called immediately after log rotation renames/moves the active
@@ -134,12 +134,18 @@ def reopen_file_handler() -> None:
     touched active file never receives new log lines — they silently keep
     flowing into the rotated file instead.
 
-    Safe no-op if no file handler was configured.
+    Returns:
+        ``True`` if no file handler was configured (nothing to reopen, not
+        a failure) or if the swap succeeded. ``False`` if a file handler
+        *was* configured but the fresh one could not be opened — callers
+        must treat this as fatal to whatever rotation triggered the call,
+        since the old handler is still writing into a file about to be
+        archived/deleted.
     """
     global _FILE_HANDLER
 
     if _FILE_HANDLER is None or _FILE_HANDLER_PATH is None:
-        return
+        return True
 
     root = logging.getLogger()
     old_handler = _FILE_HANDLER
@@ -150,8 +156,9 @@ def reopen_file_handler() -> None:
     )
     if new_handler is None:
         # Couldn't open the fresh file (e.g. permissions) — keep the old
-        # handler attached rather than losing file logging entirely.
-        return
+        # handler attached rather than losing file logging entirely, and
+        # tell the caller so it can abort whatever depends on the swap.
+        return False
 
     root.removeHandler(old_handler)
     with contextlib.suppress(Exception):
@@ -159,7 +166,7 @@ def reopen_file_handler() -> None:
 
     root.addHandler(new_handler)
     _FILE_HANDLER = new_handler
-
+    return True
 
 # ── Processors ────────────────────────────────────────────────────────────────
 

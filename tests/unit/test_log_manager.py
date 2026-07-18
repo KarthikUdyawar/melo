@@ -187,6 +187,7 @@ def test_roll_reopens_handler_before_gzip_runs(manager, log_file):
 
     def fake_reopen():
         call_order.append("reopen_file_handler")
+        return True  # must signal success or roll() aborts before gzip
 
     def fake_gzip(source, dest):
         call_order.append("_gzip_file")
@@ -223,3 +224,24 @@ def test_roll_active_file_writable_during_gzip(manager, log_file, tmp_path):
         manager.roll()
 
     assert log_file.read_text() == '{"event":"during_roll"}\n'
+
+def test_roll_aborts_and_restores_when_handler_reopen_fails(manager, log_file):
+    """If reopen_file_handler() fails, rotation must restore the renamed
+    file as active and skip gzip/upload — never delete a file the old
+    handler is still writing into."""
+    from app.core import log_manager as log_manager_mod
+
+    original_content = '{"event":"important"}\n'
+    log_file.write_text(original_content)
+
+    with (
+        patch("app.core.logging.reopen_file_handler", return_value=False),
+        patch.object(log_manager_mod, "_gzip_file") as mock_gzip,
+        patch.object(manager, "_upload_to_minio") as mock_upload,
+    ):
+        manager.roll()
+
+    mock_gzip.assert_not_called()
+    mock_upload.assert_not_called()
+    assert log_file.exists()
+    assert log_file.read_text() == original_content

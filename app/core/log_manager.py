@@ -67,7 +67,7 @@ class LogManager:
         try:
             self._log_file.parent.mkdir(parents=True, exist_ok=True)
             self._log_file.touch(exist_ok=True)
-        except PermissionError:
+        except OSError:
             # Logging subsystem already falls back to stdout.
             pass
 
@@ -162,7 +162,18 @@ class LogManager:
         # lines land in rolled_path while it's being compressed/uploaded and
         # then get lost when rolled_path/gz_path are deleted below.
         self._log_file.touch()
-        reopen_file_handler()
+        if not reopen_file_handler():
+            # Handler swap failed — the old handler is still writing into
+            # rolled_path's inode. Abort before gzip/upload/delete touch it:
+            # restore rolled_path as the active log file so nothing is lost,
+            # and skip the rest of rotation entirely.
+            self._log_file.unlink(missing_ok=True)
+            rolled_path.rename(self._log_file)
+            logger.error(
+                "log_roll_aborted_handler_reopen_failed",
+                service=self._service,
+            )
+            return
 
         object_name: str | None = None
 
