@@ -176,3 +176,50 @@ def test_cleanup_preserves_objects_within_retention(manager):
 
     mock_client.remove_object.assert_not_called()
     assert deleted == 0
+
+def test_roll_reopens_handler_before_gzip_runs(manager, log_file):
+    """Handler swap must happen before gzip touches the renamed file —
+    proves the fix for the data-loss window CodeRabbit flagged."""
+    from app.core import log_manager as log_manager_mod
+
+    log_file.write_text('{"event":"test"}\n')
+    call_order: list[str] = []
+
+    def fake_reopen():
+        call_order.append("reopen_file_handler")
+
+    def fake_gzip(source, dest):
+        call_order.append("_gzip_file")
+        dest.write_bytes(b"")  # roll() still needs a dest file to unlink
+
+    with (
+        patch("app.core.logging.reopen_file_handler", side_effect=fake_reopen),
+        patch.object(log_manager_mod, "_gzip_file", side_effect=fake_gzip),
+        patch.object(manager, "_upload_to_minio"),
+    ):
+        manager.roll()
+
+    assert call_order == ["reopen_file_handler", "_gzip_file"]
+
+
+def test_roll_active_file_writable_during_gzip(manager, log_file, tmp_path):
+    """A write to the active log file mid-gzip must land in the fresh file,
+    not the one being archived and then deleted."""
+    from app.core import log_manager as log_manager_mod
+
+    log_file.write_text('{"event":"old"}\n')
+
+    def fake_gzip(source, dest):
+        # Simulate a log line arriving while gzip/upload is in flight —
+        # by this point roll() must have already reopened the handler
+        # onto the fresh log_file.
+        log_file.write_text('{"event":"during_roll"}\n')
+        dest.write_bytes(b"")
+
+    with (
+        patch.object(log_manager_mod, "_gzip_file", side_effect=fake_gzip),
+        patch.object(manager, "_upload_to_minio"),
+    ):
+        manager.roll()
+
+    assert log_file.read_text() == '{"event":"during_roll"}\n'

@@ -2,7 +2,7 @@
 
 Responsibilities (single class, one per service):
   - Check size and age thresholds every 60 s (background thread via APScheduler)
-  - On roll: close → rename → gzip → upload MinIO → delete local → open fresh
+  - On roll: close → rename → open fresh → gzip → upload MinIO → delete local
   - Daily cleanup: delete MinIO backup objects older than retention_days
 
 Usage::
@@ -123,16 +123,19 @@ class LogManager:
 
         Sequence:
           1. Rename active file → timestamped name
-          2. Gzip the renamed file in-process
-          3. Upload .gz to MinIO
-          4. Delete local .gz
-          5. Open fresh active file (touch) + reopen the live file handler
+          2. Open fresh active file + reopen the live file handler onto it
+             (must happen *before* gzip/upload — otherwise any log line
+             written during compression/upload lands in the file being
+             archived, and is lost once that file is gzipped and deleted)
+          3. Gzip the renamed file in-process
+          4. Upload .gz to MinIO
+          5. Delete local .gz
           6. Emit log events
 
-        Steps 2–4 run in a ``try`` block; step 5 runs in ``finally`` so the
-        active file and logging handler are always restored, even if
-        compression or upload fails — a failed upload must never leave the
-        service unable to write new logs.
+        Steps 3–5 run in a ``try`` block. The fresh file + handler are
+        already live by the time this block runs, so a failed compression
+        or upload never leaves the service unable to write new logs —
+        it only means that roll's backup didn't make it to MinIO.
         """
         from app.core.log_events import LogEvent
         from app.core.logging import get_logger, reopen_file_handler
@@ -151,17 +154,24 @@ class LogManager:
         rolled_path = self._log_file.parent / rolled_name
         gz_path = rolled_path.with_suffix(".jsonl.gz")
 
-        object_name: str | None = None
-
         # 1. Rename
         self._log_file.rename(rolled_path)
 
+        # 2. Open fresh file + reopen the logging file handler — now, before
+        # gzip touches rolled_path. Closes the window where in-flight log
+        # lines land in rolled_path while it's being compressed/uploaded and
+        # then get lost when rolled_path/gz_path are deleted below.
+        self._log_file.touch()
+        reopen_file_handler()
+
+        object_name: str | None = None
+
         try:
-            # 2. Gzip in-process
+            # 3. Gzip in-process
             _gzip_file(rolled_path, gz_path)
             rolled_path.unlink(missing_ok=True)
 
-            # 3. Upload to MinIO
+            # 4. Upload to MinIO
             dt = datetime.now(UTC)
             object_name = (
                 f"{self._service}/{dt.strftime('%Y')}/"
@@ -169,14 +179,12 @@ class LogManager:
             )
             self._upload_to_minio(gz_path, object_name)
 
-            # 4. Delete local .gz
+            # 5. Delete local .gz
             gz_path.unlink(missing_ok=True)
-        finally:
-            # 5. Open fresh file + reopen the logging file handler.
-            # Must happen even if gzip/upload above raised — otherwise the
-            # service silently stops persisting logs to disk.
-            self._log_file.touch()
-            reopen_file_handler()
+        except Exception:
+            # Active file + handler are already restored above — a failed
+            # gzip/upload never leaves the service unable to log.
+            raise
 
         # 6. Log events
         logger.info(LogEvent.LOG_ROTATED, rolled=rolled_name, service=self._service)

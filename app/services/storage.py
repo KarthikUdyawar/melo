@@ -51,7 +51,11 @@ def ensure_bucket_exists() -> None:
                 bucket=s.minio_bucket,
             )
         else:
-            logger.debug("bucket_exists", bucket=s.minio_bucket)
+            logger.info(
+                LogEvent.MINIO_BUCKET_DONE,
+                phase="bucket_exists",
+                bucket=s.minio_bucket,
+            )
     except S3Error as exc:
         logger.error(
             LogEvent.MINIO_BUCKET_FAILED,

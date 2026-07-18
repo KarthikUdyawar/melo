@@ -393,7 +393,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(http_request_size_bytes_sum[5m])",
+          "expr": "sum(rate(http_request_size_bytes_sum[5m]))",
           "legendFormat": "req"
         }
       ],
@@ -425,7 +425,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(http_response_size_bytes_sum[5m])",
+          "expr": "sum(rate(http_response_size_bytes_sum[5m]))",
           "legendFormat": "resp"
         }
       ],
