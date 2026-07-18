@@ -59,7 +59,7 @@ for col, (label, expr) in zip(
 
 query = st.text_input(
     "PromQL expression",
-    value=st.session_state.get("metrics_query", ""),
+    key="metrics_query",
     placeholder="e.g. celery_queue_depth",
 )
 

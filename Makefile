@@ -14,7 +14,8 @@ SHELL := /bin/bash
 	test-up test-down smoke smoke-ui \
 	act-lint act-unit act-integration act-coverage act-ci \
 	tree \
-	admin
+	admin \
+	cadvisor-ids
 
 .DEFAULT_GOAL := help
 
@@ -361,8 +362,8 @@ logs-loki: ## Tail recent logs via Loki HTTP API
 		| python3 -c "import sys,json; [print(v[1]) for s in json.load(sys.stdin)['data']['result'] for v in s['values']]"
 
 admin: ## Open Streamlit admin in browser
-	open http://localhost:8501 || xdg-open http://localhost:8501
+	`@open` http://localhost:8501 2>/dev/null || xdg-open http://localhost:8501
 
-cadvisor-ids:
+cadvisor-ids: ## Print cAdvisor container IDs for api and worker
 	@echo "api:   $$(docker inspect --format='{{.Id}}' melo-api-1)"
 	@echo "worker: $$(docker inspect --format='{{.Id}}' melo-worker-1)"

@@ -160,10 +160,7 @@ class TestPollSongStatusGauge:
         ):
             _poll_song_status_gauge()
 
-        calls = {
-            c.kwargs["status"]: c
-            for c in mock_gauge.labels.call_args_list
-        }
+        calls = {c.kwargs["status"]: c for c in mock_gauge.labels.call_args_list}
         assert "done" in calls
         assert "pending" in calls
         assert "processing" in calls
@@ -203,11 +200,20 @@ class TestPollSongStatusGauge:
             ),
             patch("app.core.metrics.songs_by_status_total") as mock_gauge,
         ):
+            label_mocks: dict[str, MagicMock] = {}
+
+            def _labels_side_effect(**kwargs):
+                status = kwargs["status"]
+                if status not in label_mocks:
+                    label_mocks[status] = MagicMock()
+                return label_mocks[status]
+
+            mock_gauge.labels.side_effect = _labels_side_effect
+
             _poll_song_status_gauge()
 
-        # every status set — including done — must reflect 0 since the only
-        # done song is soft-deleted
-        assert mock_gauge.labels.return_value.set.call_count >= 1
+        # The only done song is soft-deleted, so done count must be 0
+        assert label_mocks["done"].set.call_args == ((0,),)
 
     def test_swallows_exception_and_logs(self):
         with (

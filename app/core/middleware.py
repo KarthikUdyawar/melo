@@ -42,7 +42,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         monitoring noise, while failed health checks are always logged.
         """
         path = request.url.path
-        is_health = path == _HEALTH_PATH
+        is_health = request.method == "GET" and path == _HEALTH_PATH
 
         logger.info(
             LogEvent.REQUEST_STARTED,

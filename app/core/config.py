@@ -53,6 +53,7 @@ class Settings(BaseSettings):
 
     # ── Observability (OBS-3 / OBS-5) ────────────────────────────────────────
     pyroscope_server_url: str = Field(default="http://pyroscope:4040")
+    otlp_endpoint: str | None = Field(default=None)
 
     # ── Database ──────────────────────────────────────────────────────────────
     database_url: str = Field(

@@ -12,19 +12,40 @@ from app.core.log_events import LogEvent
 
 
 @pytest.fixture(autouse=True)
-def reset_logging_config():
-    """Ensure _CONFIGURED=False before each test so configure_logging runs fresh."""
+def reset_logging_config(monkeypatch):
+    """Ensure _CONFIGURED=False and log level=DEBUG before each test.
+
+    Two things leak across the process without this:
+      1. structlog/_CONFIGURED + stdlib handlers from earlier tests.
+      2. LOG_LEVEL resolved from the active .env.test profile — if that
+         profile sets WARNING or higher, configure_logging() sets the root
+         logger to that level and every logger.info() call here is silently
+         dropped before reaching any handler, producing an empty log file.
+
+    Rather than trust the env/dotenv resolution chain to land on DEBUG,
+    stub _log_level() directly — this test file is about the logging
+    pipeline, not about Settings precedence.
+    """
     import app.core.logging as log_mod
+    from app.core.config import reset_settings
 
-    log_mod._CONFIGURED = False
-    structlog.reset_defaults()
-    logging.getLogger().handlers = []
+    def _reset() -> None:
+        log_mod._CONFIGURED = False
+        structlog.reset_defaults()
+        logging.disable(logging.NOTSET)
+        root = logging.getLogger()
+        for h in root.handlers[:]:
+            root.removeHandler(h)
+            h.close()
+        root.setLevel(logging.NOTSET)
 
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+    monkeypatch.setattr(log_mod, "_log_level", lambda: logging.DEBUG)
+    reset_settings()
+    _reset()
     yield
-
-    log_mod._CONFIGURED = False
-    structlog.reset_defaults()
-    logging.getLogger().handlers = []
+    _reset()
+    reset_settings()
 
 
 def _flush() -> None:

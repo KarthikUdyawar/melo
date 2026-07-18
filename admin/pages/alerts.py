@@ -15,7 +15,7 @@ GRAFANA_URL = "http://grafana:3000"
 
 def _fetch_alerts() -> list[dict[str, Any]]:
     """Return active alert instances from the Grafana Alerting API."""
-    password = os.environ.get("GRAFANA_ADMIN_PASSWORD", "admin")
+    password = os.environ.get("GRAFANA_ADMIN_PASSWORD", "")
 
     try:
         response = requests.get(
@@ -37,7 +37,7 @@ def _fetch_alerts() -> list[dict[str, Any]]:
 
 def _fetch_firing() -> list[dict[str, Any]]:
     """Return currently firing alert instances."""
-    password = os.environ.get("GRAFANA_ADMIN_PASSWORD", "admin")
+    password = os.environ.get("GRAFANA_ADMIN_PASSWORD", "")
 
     try:
         response = requests.get(

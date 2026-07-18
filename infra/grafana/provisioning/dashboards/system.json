@@ -216,7 +216,7 @@
             "id": 6,
             "targets": [
                 {
-                    "expr": "redis_keyspace_hits_total / (redis_keyspace_hits_total + redis_keyspace_misses_total)",
+                    "expr": "redis_keyspace_hits_total / clamp_min(redis_keyspace_hits_total + redis_keyspace_misses_total, 1)",
                     "legendFormat": "Hit Ratio",
                     "refId": "A",
                     "datasource": {

@@ -15,8 +15,6 @@ RUN groupadd --system app && \
 RUN mkdir -p /var/log/melo && \
     chown -R app:app /var/log/melo
 
-RUN chown -R app:app /app
-
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_COMPILE_BYTECODE=1 \
@@ -26,6 +24,8 @@ ENV PYTHONUNBUFFERED=1 \
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-COPY app/ ./app/
+COPY --chown=app:app app/ ./app/
+
+RUN chown -R app:app /app
 
 USER app

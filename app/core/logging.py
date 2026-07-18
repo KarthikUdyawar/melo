@@ -13,16 +13,23 @@ Required fields on every line: timestamp, level, event, service, trace_id.
 """
 
 # app/core/logging.py
+import contextlib
 import logging
 import sys
-from collections.abc import Callable
+import typing
 from pathlib import Path
-from typing import Any
 
 import structlog
+from structlog.types import EventDict, Processor, WrappedLogger
 
 _CONFIGURED = False
 _SERVICE_NAME = "api"
+
+# Tracks the live file handler so log rotation can safely reopen it
+# after the underlying file is renamed out from under it.
+_FILE_HANDLER: logging.FileHandler | None = None
+_FILE_HANDLER_PATH: str | None = None
+_FILE_HANDLER_SHARED: list[Processor] | None = None
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -50,7 +57,7 @@ def configure_logging(
 
     resolved_file = log_file or _default_log_file(service)
 
-    shared: list[structlog.types.Processor] = [
+    shared: list[Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
@@ -76,10 +83,14 @@ def configure_logging(
     file_handler = _try_build_file_handler(resolved_file, shared)
     if file_handler is not None:
         handlers.append(file_handler)
+        global _FILE_HANDLER, _FILE_HANDLER_PATH, _FILE_HANDLER_SHARED
+        _FILE_HANDLER = file_handler
+        _FILE_HANDLER_PATH = resolved_file
+        _FILE_HANDLER_SHARED = shared
 
     root = logging.getLogger()
     root.handlers = handlers
-    root.setLevel(logging.DEBUG)
+    root.setLevel(_log_level())
 
     _silence_noisy_loggers()
 
@@ -100,29 +111,77 @@ def setup_logging() -> None:
     """Compatibility shim — delegates to ``configure_logging("api")``."""
     configure_logging("api")
 
+def _reset_logging_state() -> None:
+    """Test-only: clear configuration state so configure_logging() can re-run.
+
+    Not part of the public API. ``_CONFIGURED`` is process-global by design
+    (one real configure at app/worker startup), which means it also survives
+    across pytest test cases in the same process — call this from an autouse
+    fixture to restore a clean slate before each test.
+    """
+    global _CONFIGURED, _FILE_HANDLER, _FILE_HANDLER_PATH, _FILE_HANDLER_SHARED
+    _CONFIGURED = False
+    _FILE_HANDLER = None
+    _FILE_HANDLER_PATH = None
+    _FILE_HANDLER_SHARED = None
+
+def reopen_file_handler() -> None:
+    """Close the current file handler and open a fresh one at the same path.
+
+    Must be called immediately after log rotation renames/moves the active
+    log file. The existing ``FileHandler`` keeps its file descriptor open
+    against the renamed (now-backup) inode, so without this the freshly
+    touched active file never receives new log lines — they silently keep
+    flowing into the rotated file instead.
+
+    Safe no-op if no file handler was configured.
+    """
+    global _FILE_HANDLER
+
+    if _FILE_HANDLER is None or _FILE_HANDLER_PATH is None:
+        return
+
+    root = logging.getLogger()
+    old_handler = _FILE_HANDLER
+
+    new_handler = _try_build_file_handler(
+        _FILE_HANDLER_PATH,
+        _FILE_HANDLER_SHARED or [],
+    )
+    if new_handler is None:
+        # Couldn't open the fresh file (e.g. permissions) — keep the old
+        # handler attached rather than losing file logging entirely.
+        return
+
+    root.removeHandler(old_handler)
+    with contextlib.suppress(Exception):
+        old_handler.close()
+
+    root.addHandler(new_handler)
+    _FILE_HANDLER = new_handler
+
 
 # ── Processors ────────────────────────────────────────────────────────────────
 
 
-def _inject_service(service: str) -> Callable[..., Any]:
+def _inject_service(service: str) -> Processor:
     """Return processor that stamps every record with *service*."""
 
     def _processor(
-        logger: Any,
+        logger: WrappedLogger,
         method: str,
-        event_dict: dict[str, Any],
-    ) -> dict[str, Any]:
+        event_dict: EventDict,
+    ) -> EventDict:
         event_dict["service"] = service
         return event_dict
 
     return _processor
 
-
 def _inject_trace_id(
-    logger: Any,
+    logger: WrappedLogger,
     method: str,
-    event_dict: dict[str, Any],
-) -> dict[str, Any]:
+    event_dict: EventDict,
+) -> EventDict:
     """Inject active OTEL trace_id, or ``"unknown"`` when no span is active."""
     try:
         from opentelemetry import trace as otel_trace
@@ -143,8 +202,8 @@ def _inject_trace_id(
 
 
 def _build_console_handler(
-    shared: list[structlog.types.Processor],
-) -> logging.StreamHandler:  # type: ignore[type-arg]
+    shared: list[Processor],
+) -> logging.StreamHandler[typing.TextIO]:
     try:
         from app.core.config import get_settings
 
@@ -152,7 +211,7 @@ def _build_console_handler(
     except Exception:  # noqa: BLE001
         is_dev = True
 
-    renderer: structlog.types.Processor = (
+    renderer: Processor = (
         structlog.dev.ConsoleRenderer(colors=True)
         if is_dev
         else structlog.processors.JSONRenderer()
@@ -172,7 +231,7 @@ def _build_console_handler(
 
 def _try_build_file_handler(
     log_file: str,
-    shared: list[structlog.types.Processor],
+    shared: list[Processor],
 ) -> logging.FileHandler | None:
     path = Path(log_file)
     try:

@@ -35,7 +35,7 @@ def ensure_bucket_exists() -> None:
     client = _client()
 
     logger.info(
-        LogEvent.MINIO_UPLOAD_STARTED,
+        LogEvent.MINIO_BUCKET_STARTED,
         phase="ensure_bucket",
         bucket=s.minio_bucket,
         endpoint=s.minio_endpoint,
@@ -46,7 +46,7 @@ def ensure_bucket_exists() -> None:
         if not exists:
             client.make_bucket(s.minio_bucket)
             logger.info(
-                LogEvent.MINIO_UPLOAD_DONE,
+                LogEvent.MINIO_BUCKET_DONE,
                 phase="bucket_created",
                 bucket=s.minio_bucket,
             )
@@ -54,7 +54,7 @@ def ensure_bucket_exists() -> None:
             logger.debug("bucket_exists", bucket=s.minio_bucket)
     except S3Error as exc:
         logger.error(
-            LogEvent.MINIO_UPLOAD_FAILED,
+            LogEvent.MINIO_BUCKET_FAILED,
             phase="ensure_bucket",
             bucket=s.minio_bucket,
             error=str(exc),
@@ -165,7 +165,7 @@ def get_presigned_url(object_key: str, expires_seconds: int = 3600) -> str:
                 )
 
             logger.info(
-                LogEvent.MINIO_STREAM_STARTED,
+                LogEvent.MINIO_STREAM_DONE,
                 key=object_key,
                 expires_seconds=expires_seconds,
             )

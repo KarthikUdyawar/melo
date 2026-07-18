@@ -216,7 +216,7 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
         _inject_trace_context_into_task(process_song_task, str(song.id), payload.url)
     except Exception as exc:
         logger.error(
-            LogEvent.SONG_STREAM_FAILED,
+            LogEvent.TASK_FAILED,
             song_id=str(song.id),
             error=str(exc),
         )
@@ -225,7 +225,7 @@ def create_song(payload: SongCreate, db: DbDep) -> JSONResponse:
             db.commit()
         except Exception as db_exc:
             logger.error(
-                LogEvent.SONG_STREAM_FAILED,
+                LogEvent.TASK_FAILED,
                 song_id=str(song.id),
                 error=str(db_exc),
             )
@@ -524,6 +524,7 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
                     response_headers[h] = upstream.headers[h]
 
         except httpx.HTTPError as exc:
+            client_cm.__exit__(None, None, None)
             logger.error(
                 LogEvent.SONG_STREAM_FAILED, song_id=str(song_id), error=str(exc)
             )

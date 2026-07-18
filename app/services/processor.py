@@ -109,9 +109,13 @@ def trim_audio(
             str(output_path),
         ]
 
-        result = subprocess.run(
-            cmd_reencode, capture_output=True, text=True
-        )  # nosec B603
+        try:
+            result = subprocess.run(
+                cmd_reencode, capture_output=True, text=True, timeout=120
+            )  # nosec B603
+        except subprocess.TimeoutExpired as exc:
+            output_path.unlink(missing_ok=True)
+            raise ProcessingError(f"FFmpeg timed out after {exc.timeout}s") from exc
 
         if result.returncode != 0:
             output_path.unlink(missing_ok=True)
@@ -122,8 +126,8 @@ def trim_audio(
                 stderr=result.stderr[-500:] if result.stderr else "",
             )
             raise ProcessingError(
-                f"FFmpeg re-encode failed (exit {result.returncode}): \
-                {result.stderr[-300:]}"
+                f"FFmpeg re-encode failed (exit {result.returncode}): "
+                f"{result.stderr[-300:]}"
             )
 
         if not output_path.exists() or output_path.stat().st_size == 0:
@@ -201,7 +205,12 @@ def apply_speed(input_path: Path, output_path: Path, speed: float) -> Path:
 
         t0 = time.monotonic()
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)  # nosec B603
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120
+            )  # nosec B603
+        except subprocess.TimeoutExpired as exc:
+            output_path.unlink(missing_ok=True)
+            raise ProcessingError(f"FFmpeg timed out after {exc.timeout}s") from exc
         except OSError as exc:
             output_path.unlink(missing_ok=True)
             raise ProcessingError(f"FFmpeg launch failed: {exc}") from exc
@@ -215,8 +224,8 @@ def apply_speed(input_path: Path, output_path: Path, speed: float) -> Path:
                 stderr=result.stderr[-500:] if result.stderr else "",
             )
             raise ProcessingError(
-                f"FFmpeg atempo failed (exit {result.returncode}): \
-                    {result.stderr[-300:]}",
+                f"FFmpeg atempo failed (exit {result.returncode}): "
+                f"{result.stderr[-300:]}"
             )
 
         if not output_path.exists() or output_path.stat().st_size == 0:

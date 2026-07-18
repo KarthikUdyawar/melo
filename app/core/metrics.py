@@ -49,7 +49,7 @@ minio_bucket_size_bytes = Gauge(
 )
 
 songs_by_status_total = Gauge(
-    "songs_by_status_total",
+    "songs_by_status",
     "Song count broken down by processing status",
     labelnames=["status"],  # pending | processing | done | failed
 )

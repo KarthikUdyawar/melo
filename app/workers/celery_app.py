@@ -35,17 +35,20 @@ celery_app.conf.update(
 def on_worker_init(**kwargs: object) -> None:
     """Re-run logging and profiling setup after worker process fork.
 
-    Resets the ``_CONFIGURED`` guard so the child process re-opens file
-    handlers in its own fd space, then starts Pyroscope profiling.
+    Resets the ``_CONFIGURED`` guards so the child process re-opens file
+    handlers in its own fd space and reinitializes tracing with the worker
+    service name, then starts Pyroscope profiling.
 
     Args:
         **kwargs: Celery signal arguments (unused).
     """
     import app.core.logging as log_mod
+    import app.core.tracing as tracing_mod
     from app.core.profiling import configure_pyroscope
     from app.core.tracing import configure_tracing
 
     log_mod._CONFIGURED = False
+    tracing_mod._CONFIGURED = False
     configure_tracing("melo.worker")
     configure_logging("worker")
     configure_pyroscope("melo.worker")

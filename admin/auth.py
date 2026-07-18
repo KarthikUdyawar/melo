@@ -1,6 +1,7 @@
 """Session-based password authentication for the Streamlit admin dashboard."""
 
 # admin/auth.py
+import hmac
 import os
 
 import streamlit as st
@@ -20,7 +21,7 @@ def login_page() -> None:
 
     if st.button("Login", use_container_width=True):
         expected = os.environ.get("ADMIN_PASSWORD")
-        if expected and password == expected:
+        if expected and hmac.compare_digest(password, expected):
             st.session_state["authenticated"] = True
             st.rerun()
         else:

@@ -29,4 +29,3 @@ scrape_configs:
           level:
           service:
           event:
-          trace_id:

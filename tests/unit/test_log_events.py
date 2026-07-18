@@ -71,7 +71,13 @@ def test_log_event_values_are_strings() -> None:
 
 
 def test_log_event_value_is_lowercase_snake() -> None:
+    import re
+
+    pattern = re.compile(r"^[a-z][a-z0-9_]*$")
     for member in LogEvent:
         assert (
             member.value == member.value.lower()
         ), f"{member.name} value must be lowercase: {member.value!r}"
+        assert pattern.match(
+            member.value
+        ), f"{member.name} value must be lowercase snake_case: {member.value!r}"

@@ -1,6 +1,6 @@
 {
-  "title": "Melo System Observability",
-  "uid": "melo-system-observability",
+  "title": "Melo Celery Worker",
+  "uid": "melo-celery-worker",
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
@@ -15,16 +15,15 @@
     "list": []
   },
   "tags": [
-    "system",
-    "node-exporter",
-    "cadvisor",
+    "worker",
+    "celery",
     "melo"
   ],
   "panels": [
     {
       "id": 1,
       "type": "stat",
-      "title": "CPU Usage %",
+      "title": "Active Tasks",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -38,8 +37,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
-          "legendFormat": "CPU"
+          "expr": "celery_active_tasks",
+          "legendFormat": "active"
         }
       ],
       "fieldConfig": {
@@ -56,7 +55,7 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Memory Usage %",
+      "title": "Queue Depth",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -70,8 +69,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100*(1-(node_memory_MemAvailable_bytes/node_memory_MemTotal_bytes))",
-          "legendFormat": "RAM"
+          "expr": "celery_queue_depth",
+          "legendFormat": "queued"
         }
       ],
       "fieldConfig": {
@@ -88,7 +87,7 @@
     {
       "id": 3,
       "type": "stat",
-      "title": "Disk Usage %",
+      "title": "Tasks Succeeded (5m rate)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -102,8 +101,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100*(1-(node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay\"}/node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\"}))",
-          "legendFormat": "Disk"
+          "expr": "sum(rate(celery_task_succeeded_total[5m]))",
+          "legendFormat": "succeeded"
         }
       ],
       "fieldConfig": {
@@ -120,7 +119,7 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Containers Running",
+      "title": "Tasks Failed (5m rate)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -134,8 +133,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "count(container_last_seen)",
-          "legendFormat": "Containers"
+          "expr": "sum(rate(celery_task_failed_total[5m]))",
+          "legendFormat": "failed"
         }
       ],
       "fieldConfig": {
@@ -152,7 +151,7 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "CPU Usage by Core",
+      "title": "Task Throughput by Name",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -166,8 +165,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 - (avg by(cpu)(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
-          "legendFormat": "CPU {{cpu}}"
+          "expr": "sum by(name)(rate(celery_task_succeeded_total[5m]))",
+          "legendFormat": "{{name}}"
         }
       ],
       "fieldConfig": {
@@ -184,7 +183,7 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Memory Usage",
+      "title": "Task Duration P95 by Name",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -198,8 +197,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(node_memory_MemTotal_bytes-node_memory_MemAvailable_bytes)/1024/1024/1024",
-          "legendFormat": "GB"
+          "expr": "histogram_quantile(0.95, sum by(le,name)(rate(celery_task_runtime_bucket[5m])))",
+          "legendFormat": "{{name}}"
         }
       ],
       "fieldConfig": {
@@ -216,7 +215,7 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Disk Read Throughput",
+      "title": "Download Duration (Melo)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -230,8 +229,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(node_disk_read_bytes_total[5m])/1024/1024",
-          "legendFormat": "{{device}}"
+          "expr": "histogram_quantile(0.95, sum by(le)(rate(download_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 download"
         }
       ],
       "fieldConfig": {
@@ -248,7 +247,7 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "Disk Write Throughput",
+      "title": "FFmpeg Duration by Op",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -262,8 +261,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(node_disk_written_bytes_total[5m])/1024/1024",
-          "legendFormat": "{{device}}"
+          "expr": "histogram_quantile(0.95, sum by(le,op)(rate(ffmpeg_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{op}}"
         }
       ],
       "fieldConfig": {
@@ -280,7 +279,7 @@
     {
       "id": 9,
       "type": "timeseries",
-      "title": "Network Receive MB/s",
+      "title": "MinIO Upload Duration",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -294,8 +293,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(node_network_receive_bytes_total[5m])/1024/1024",
-          "legendFormat": "{{device}}"
+          "expr": "histogram_quantile(0.95, sum by(le)(rate(minio_upload_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 upload"
         }
       ],
       "fieldConfig": {
@@ -312,7 +311,7 @@
     {
       "id": 10,
       "type": "timeseries",
-      "title": "Network Transmit MB/s",
+      "title": "Songs by Status",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -326,8 +325,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(node_network_transmit_bytes_total[5m])/1024/1024",
-          "legendFormat": "{{device}}"
+          "expr": "songs_by_status_total",
+          "legendFormat": "{{status}}"
         }
       ],
       "fieldConfig": {
@@ -344,7 +343,7 @@
     {
       "id": 11,
       "type": "timeseries",
-      "title": "Container CPU Usage",
+      "title": "Songs Completed (done vs failed)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -358,8 +357,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(name)(rate(container_cpu_usage_seconds_total{name!=\"\"}[5m]))",
-          "legendFormat": "{{name}}"
+          "expr": "sum by(status)(rate(songs_completed_total[5m]))",
+          "legendFormat": "{{status}}"
         }
       ],
       "fieldConfig": {
@@ -375,8 +374,8 @@
     },
     {
       "id": 12,
-      "type": "timeseries",
-      "title": "Container Memory Usage MB",
+      "type": "stat",
+      "title": "Stuck Tasks (processing > 10m)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -390,72 +389,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(name)(container_memory_usage_bytes{name!=\"\"})/1024/1024",
-          "legendFormat": "{{name}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      }
-    },
-    {
-      "id": 13,
-      "type": "timeseries",
-      "title": "Top Containers CPU",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 36,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "topk(10,sum by(name)(rate(container_cpu_usage_seconds_total{name!=\"\"}[5m])))",
-          "legendFormat": "{{name}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      }
-    },
-    {
-      "id": 14,
-      "type": "timeseries",
-      "title": "Top Containers Memory",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 36,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "topk(10,sum by(name)(container_memory_usage_bytes{name!=\"\"}))/1024/1024",
-          "legendFormat": "{{name}}"
+          "expr": "songs_by_status_total{status=\"processing\"}",
+          "legendFormat": "processing"
         }
       ],
       "fieldConfig": {

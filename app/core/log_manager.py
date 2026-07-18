@@ -126,11 +126,16 @@ class LogManager:
           2. Gzip the renamed file in-process
           3. Upload .gz to MinIO
           4. Delete local .gz
-          5. Open fresh active file (touch)
+          5. Open fresh active file (touch) + reopen the live file handler
           6. Emit log events
+
+        Steps 2–4 run in a ``try`` block; step 5 runs in ``finally`` so the
+        active file and logging handler are always restored, even if
+        compression or upload fails — a failed upload must never leave the
+        service unable to write new logs.
         """
         from app.core.log_events import LogEvent
-        from app.core.logging import get_logger
+        from app.core.logging import get_logger, reopen_file_handler
 
         logger = get_logger(__name__)
 
@@ -146,33 +151,41 @@ class LogManager:
         rolled_path = self._log_file.parent / rolled_name
         gz_path = rolled_path.with_suffix(".jsonl.gz")
 
+        object_name: str | None = None
+
         # 1. Rename
         self._log_file.rename(rolled_path)
 
-        # 2. Gzip in-process
-        _gzip_file(rolled_path, gz_path)
-        rolled_path.unlink(missing_ok=True)
+        try:
+            # 2. Gzip in-process
+            _gzip_file(rolled_path, gz_path)
+            rolled_path.unlink(missing_ok=True)
 
-        # 3. Upload to MinIO
-        dt = datetime.now(UTC)
-        object_name = (
-            f"{self._service}/{dt.strftime('%Y')}/{dt.strftime('%m')}/{gz_path.name}"
-        )
-        self._upload_to_minio(gz_path, object_name)
+            # 3. Upload to MinIO
+            dt = datetime.now(UTC)
+            object_name = (
+                f"{self._service}/{dt.strftime('%Y')}/"
+                f"{dt.strftime('%m')}/{gz_path.name}"
+            )
+            self._upload_to_minio(gz_path, object_name)
 
-        # 4. Delete local .gz
-        gz_path.unlink(missing_ok=True)
-
-        # 5. Open fresh file
-        self._log_file.touch()
+            # 4. Delete local .gz
+            gz_path.unlink(missing_ok=True)
+        finally:
+            # 5. Open fresh file + reopen the logging file handler.
+            # Must happen even if gzip/upload above raised — otherwise the
+            # service silently stops persisting logs to disk.
+            self._log_file.touch()
+            reopen_file_handler()
 
         # 6. Log events
         logger.info(LogEvent.LOG_ROTATED, rolled=rolled_name, service=self._service)
-        logger.info(
-            LogEvent.LOG_BACKUP_UPLOADED,
-            bucket=self._backup_bucket,
-            object=object_name,
-        )
+        if object_name is not None:
+            logger.info(
+                LogEvent.LOG_BACKUP_UPLOADED,
+                bucket=self._backup_bucket,
+                object=object_name,
+            )
 
     def shutdown(self) -> None:
         """Stop the background scheduler, if running.
@@ -198,12 +211,21 @@ class LogManager:
 
         objects = list(client.list_objects(self._backup_bucket, recursive=True))
         deleted = 0
+
         for obj in objects:
             last_modified = obj.last_modified
+            object_name = obj.object_name
+
+            # The MinIO type stubs mark these fields as optional.
+            # Skip any object with incomplete metadata.
+            if last_modified is None or object_name is None:
+                continue
+
             if last_modified.tzinfo is None:
                 last_modified = last_modified.replace(tzinfo=UTC)
+
             if last_modified < cutoff:
-                client.remove_object(self._backup_bucket, obj.object_name)
+                client.remove_object(self._backup_bucket, object_name)
                 deleted += 1
 
         logger.info(

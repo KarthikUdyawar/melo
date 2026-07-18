@@ -25,10 +25,13 @@ if not is_authenticated():
 
 def _has_critical_alert() -> bool:
     """Return True if any alert with severity=critical is currently firing."""
+    grafana_password = os.environ.get("GRAFANA_ADMIN_PASSWORD")
+    if not grafana_password:
+        return False
     try:
         response = requests.get(
             "http://grafana:3000/api/alertmanager/grafana/api/v2/alerts",
-            auth=("admin", os.environ.get("GRAFANA_ADMIN_PASSWORD", "admin")),
+            auth=("admin", grafana_password),
             timeout=3,
         )
         response.raise_for_status()
@@ -86,7 +89,7 @@ with st.sidebar:
     st.caption("External Tools")
 
     for name, url in EXTERNAL_LINKS.items():
-        st.markdown(f"[{name}]({url})", unsafe_allow_html=True)
+        st.markdown(f"[{name}]({url})")
 
     st.divider()
 

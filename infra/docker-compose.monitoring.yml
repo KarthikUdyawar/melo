@@ -7,8 +7,8 @@ services:
     ports:
       - "8501:8501"
     environment:
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
-      GRAFANA_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}
+      GRAFANA_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
     networks:
       - melo_default
     depends_on:
@@ -89,15 +89,14 @@ services:
 
   grafana:
     image: grafana/grafana:latest
-    env_file: ../.env.staging
     ports:
       - "3001:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_INSTALL_PLUGINS: grafana-pyroscope-app
-      # GF_ALERTING_CONTACTPOINTS_TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}   # optional
-      # GF_ALERTING_CONTACTPOINTS_TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}       # try this
+      GF_ALERTING_CONTACTPOINTS_TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      GF_ALERTING_CONTACTPOINTS_TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana
@@ -222,6 +221,7 @@ volumes:
   grafana_data:
   melo_melo_logs:
     external: true
+    name: ${COMPOSE_PROJECT_NAME:-melo}_melo_logs
 
 networks:
   melo_default:

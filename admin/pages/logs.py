@@ -63,9 +63,12 @@ def _fetch_logs(service: str, level: str, limit: int) -> list[dict[str, str]]:
         rows.sort(key=lambda row: row["timestamp"], reverse=True)
         return rows
 
-    except Exception:  # noqa: BLE001
+    except requests.RequestException:
+        st.warning("Could not reach Loki. Is it running?")
         return []
-
+    except Exception:  # noqa: BLE001
+        st.warning("Failed to parse log response from Loki.")
+        return []
 
 st.header("Logs")
 

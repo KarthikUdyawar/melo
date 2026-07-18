@@ -3,6 +3,8 @@
 # app/workers/tasks.py
 
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, cast
 from uuid import UUID
 
@@ -106,15 +108,16 @@ def process_song_task(
 
     logger.info(LogEvent.TASK_PROCESSING, song_id=song_id)
     # Reconstruct OTEL context from task headers (propagated at enqueue)
-    _restore_trace_context(cast(dict[str, Any], self.request.headers))
-
     from app.core.tracing import get_tracer
 
     tracer = get_tracer(__name__)
 
     local_path: Path | None = None
 
-    with tracer.start_as_current_span("celery.process_song") as span:
+    with (
+        _trace_context(cast(dict[str, Any], self.request.headers)),
+        tracer.start_as_current_span("celery.process_song") as span,
+    ):
         span.set_attribute("song.id", song_id)
         try:
             # ── 2. Probe metadata ────────────────────────────────────────────────
@@ -208,9 +211,12 @@ def process_song_task(
                 raise self.retry(exc=exc)
             except self.MaxRetriesExceededError:
                 logger.error(
-                    LogEvent.TASK_FAILED, song_id=song_id, reason="max_retries_exceeded"
+                    LogEvent.TASK_FAILED,
+                    song_id=song_id,
+                    reason="max_retries_exceeded",
                 )
                 _mark_failed(self.db, song)
+                songs_completed_total.labels(status="failed").inc()
                 raise
 
         finally:
@@ -240,15 +246,20 @@ def _mark_failed(db: Session, song: Song) -> None:
         db.rollback()
 
 
-def _restore_trace_context(headers: dict[str, Any] | None) -> None:
-    """Reconstruct OTEL trace context from Celery task headers."""
+@contextmanager
+def _trace_context(headers: dict[str, Any] | None) -> Iterator[None]:
+    """Attach OTEL context from headers, detach on exit."""
     try:
         from opentelemetry import context
         from opentelemetry.propagate import extract
 
-        carrier: dict[str, Any] = dict(headers) if headers is not None else {}
+        carrier = dict(headers) if headers is not None else {}
         ctx = extract(carrier)
-        context.attach(ctx)
+        token = context.attach(ctx)
+        try:
+            yield
+        finally:
+            context.detach(token)
     except Exception:
         logger.debug(
             "Failed to restore OpenTelemetry trace context",

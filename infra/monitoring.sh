@@ -98,6 +98,7 @@ ensure_minio_token() {
 
   mkdir -p "$(dirname "${MINIO_TOKEN_FILE}")"
   echo "${token}" > "${MINIO_TOKEN_FILE}"
+  chmod 600 "${MINIO_TOKEN_FILE}"
   log "MinIO token written to ${MINIO_TOKEN_FILE}"
 }
 

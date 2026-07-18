@@ -56,14 +56,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_tracing("melo.api")
     configure_pyroscope("melo.api")
     log_manager = LogManager.from_settings("api")
-    gauge_scheduler = start_gauge_poller()
+    gauge_scheduler = None
+    try:
+        gauge_scheduler = start_gauge_poller()
 
-    logger.info("app_startup", env=settings.app_env, log_file=settings.log_file_path)
-    yield
-    logger.info("app_shutdown")
+        logger.info(
+            "app_startup", env=settings.app_env, log_file=settings.log_file_path
+        )
+        yield
+        logger.info("app_shutdown")
 
-    gauge_scheduler.shutdown(wait=False)
-    log_manager.shutdown()
+    finally:
+        if gauge_scheduler is not None:
+            gauge_scheduler.shutdown(wait=False)
+        log_manager.shutdown()
 
 
 def create_app() -> FastAPI:

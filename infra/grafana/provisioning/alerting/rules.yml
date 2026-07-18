@@ -254,7 +254,7 @@ groups:
               type: threshold
               expression: B
               conditions:
-                - evaluator: { params: [0], type: lt }
+                - evaluator: { params: [1], type: lt }
                   query: { params: [B] }
         annotations:
           summary: "No log backup uploaded in the last 2 hours"

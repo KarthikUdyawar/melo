@@ -1,6 +1,8 @@
 """DB Health page — PostgreSQL and Redis metrics from exporters."""
 
 # admin/pages/db_health.py
+from concurrent.futures import ThreadPoolExecutor
+
 import requests
 import streamlit as st
 
@@ -32,6 +34,16 @@ def _query(expr: str) -> str:
         return "—"
 
 
+def _query_all(metrics: dict[str, str]) -> list[dict[str, str]]:
+    """Run all metric queries concurrently; page wait bounded by slowest query."""
+    with ThreadPoolExecutor(max_workers=len(metrics)) as pool:
+        values = list(pool.map(_query, metrics.values()))
+    return [
+        {"metric": label, "value": value}
+        for label, value in zip(metrics.keys(), values, strict=True)
+    ]
+
+
 st.header("DB Health")
 
 pg_col, redis_col = st.columns(2)
@@ -45,12 +57,12 @@ with pg_col:
         "Dead tuples (all tables)": "sum(pg_stat_user_tables_n_dead_tup)",
         "Cache hit ratio": (
             "sum(pg_stat_database_blks_hit) / "
-            "(sum(pg_stat_database_blks_hit) + sum(pg_stat_database_blks_read) + 1)"
+            "(sum(pg_stat_database_blks_hit) + sum(pg_stat_database_blks_read)) "
+            "or vector(1)"
         ),
         "Transactions/s (5m)": "rate(pg_stat_database_xact_commit[5m])",
     }
-    rows = [{"metric": k, "value": _query(v)} for k, v in pg_metrics.items()]
-    st.dataframe(rows, use_container_width=True)
+    st.dataframe(_query_all(pg_metrics), use_container_width=True)
 
 # ── Redis ─────────────────────────────────────────────────────────────────────
 with redis_col:
@@ -63,8 +75,8 @@ with redis_col:
         "Evicted keys": "redis_evicted_keys_total",
         "Hit ratio": (
             "redis_keyspace_hits_total / "
-            "(redis_keyspace_hits_total + redis_keyspace_misses_total + 1)"
+            "(redis_keyspace_hits_total + redis_keyspace_misses_total) "
+            "or vector(1)"
         ),
     }
-    rows = [{"metric": k, "value": _query(v)} for k, v in redis_metrics.items()]
-    st.dataframe(rows, use_container_width=True)
+    st.dataframe(_query_all(redis_metrics), use_container_width=True)

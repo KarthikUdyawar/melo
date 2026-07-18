@@ -17,9 +17,12 @@ Usage::
 """
 
 # app/core/tracing.py
+from __future__ import annotations
+
 import importlib
 import logging
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
@@ -29,6 +32,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
 logger = logging.getLogger(__name__)
 
 _CONFIGURED = False
@@ -37,7 +43,7 @@ _CONFIGURED = False
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
-def configure_tracing(service_name: str) -> None:
+def configure_tracing(service_name: str, app: FastAPI | None = None) -> None:
     """Initialise OTEL SDK with OTLP gRPC exporter and auto-instrumentation.
 
     Idempotent — subsequent calls within the same process are no-ops.
@@ -45,6 +51,9 @@ def configure_tracing(service_name: str) -> None:
     Args:
         service_name: Value for the ``service.name`` resource attribute
             (e.g. ``"melo.api"`` or ``"melo.worker"``).
+        app: FastAPI instance to instrument directly via
+            ``FastAPIInstrumentor.instrument_app``. Pass when available
+            (API service); omit for Celery worker.
     """
     global _CONFIGURED
     if _CONFIGURED:
@@ -59,7 +68,7 @@ def configure_tracing(service_name: str) -> None:
         provider.add_span_processor(BatchSpanProcessor(exporter))
 
     trace.set_tracer_provider(provider)
-    _apply_auto_instrumentation()
+    _apply_auto_instrumentation(app)
 
 
 def get_tracer(name: str) -> trace.Tracer:
@@ -141,17 +150,33 @@ def _build_otlp_exporter() -> SpanExporter | None:
         )
 
     except Exception:  # noqa: BLE001
+        logger.warning("otlp_exporter_unavailable", exc_info=True)
         return None
 
 
-def _apply_auto_instrumentation() -> None:
+def _apply_auto_instrumentation(app: FastAPI | None = None) -> None:
     """Apply all available OTEL auto-instrumentors. Failures are non-fatal."""
-    _try_instrument("opentelemetry.instrumentation.fastapi", "FastAPIInstrumentor")
+    _try_instrument_fastapi(app)
     _try_instrument(
         "opentelemetry.instrumentation.sqlalchemy", "SQLAlchemyInstrumentor"
     )
     _try_instrument("opentelemetry.instrumentation.httpx", "HTTPXClientInstrumentor")
     _try_instrument("opentelemetry.instrumentation.redis", "RedisInstrumentor")
+
+
+def _try_instrument_fastapi(app: FastAPI | None) -> None:
+    """Instrument the FastAPI app instance directly, if provided."""
+    try:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+        if app is not None:
+            FastAPIInstrumentor.instrument_app(app)
+        else:
+            FastAPIInstrumentor().instrument()
+    except (ImportError, AttributeError) as exc:
+        logger.debug("Skipping FastAPI instrumentor: %s", exc)
+    except Exception:
+        logger.exception("Failed to initialize FastAPI instrumentor")
 
 
 def _try_instrument(module: str, cls: str) -> None:

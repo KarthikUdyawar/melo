@@ -7,7 +7,7 @@ contactPoints:
         type: telegram
         settings:
           bottoken: "${TELEGRAM_BOT_TOKEN}"
-          chatid: "7856707665"
+          chatid: "${TELEGRAM_CHAT_ID}"
 
 policies:
   - orgId: 1

@@ -102,8 +102,20 @@ class LogEvent(StrEnum):
     MINIO_STREAM_STARTED = "minio_stream_started"
     """Object retrieval from MinIO for streaming started."""
 
+    MINIO_STREAM_DONE = "minio_stream_done"
+    """Presigned URL for streaming generated successfully."""
+
     MINIO_STREAM_FAILED = "minio_stream_failed"
     """Object retrieval from MinIO for streaming failed."""
+
+    MINIO_BUCKET_STARTED = "minio_bucket_started"
+    """Bucket existence check initiated."""
+
+    MINIO_BUCKET_DONE = "minio_bucket_done"
+    """Bucket created (or confirmed to already exist)."""
+
+    MINIO_BUCKET_FAILED = "minio_bucket_failed"
+    """Bucket existence check or creation failed."""
 
     # ── Log rotation ──────────────────────────────────────────────────────────
     LOG_ROTATED = "log_rotated"

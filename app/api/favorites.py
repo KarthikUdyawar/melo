@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 
 from app.api._song_utils import serialize_song
 from app.api.responses import envelope_response
@@ -69,9 +70,16 @@ def add_favorite(song_id: UUID, db: DbDep) -> JSONResponse:
         )
 
     fav = Favorite(song_id=song_id)
-    db.add(fav)
-    db.commit()
-    db.refresh(fav)
+    try:
+        db.add(fav)
+        db.commit()
+        db.refresh(fav)
+    except IntegrityError:
+        db.rollback()
+        logger.info(LogEvent.FAVORITE_ADDED, song_id=str(song_id), already=True)
+        return envelope_response(
+            {"song_id": str(song_id)}, "Already favorited.", status_code=200
+        )
 
     favorites_toggled_total.labels(action="add").inc()
     logger.info(LogEvent.FAVORITE_ADDED, song_id=str(song_id))
