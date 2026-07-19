@@ -6,7 +6,67 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased] — Sprint 3
+## [Unreleased]
+
+Nothing yet.
+
+---
+
+## [0.5.0] — Sprint 5 — Observability & Monitoring
+
+### Added
+- Full observability stack via `infra/docker-compose.monitoring.yml`: Prometheus, Loki, Promtail, Tempo, Grafana, Pyroscope, celery-exporter, Flower, cAdvisor, Node Exporter, Postgres Exporter, Redis Exporter
+- Structured logging: structlog dual renderer (stdout `ConsoleRenderer` + file `JSONRenderer`/JSONL), `LogEvent` enum as sole source of event names
+- Log rotation on size (10MB) or age (24h), gzip + upload to MinIO `melo-log-backups/`, APScheduler daily cleanup (90-day retention)
+- Prometheus metrics: `GET /metrics`, HTTP auto-instrumentation + custom counters/gauges/histograms (`songs_submitted_total`, `songs_completed_total`, `favorites_toggled_total`, `playlist_ops_total`, `download_duration_seconds`, `ffmpeg_duration_seconds`, `minio_upload_duration_seconds`, `stream_duration_seconds`)
+- Distributed tracing: OpenTelemetry auto + manual spans → Tempo; `X-Trace-Id` header on every API response; `trace_id` in every log line; Celery task context propagation via `apply_async()` headers
+- Continuous profiling via Pyroscope SDK in FastAPI and Celery worker (`configure_pyroscope()`, no-ops if URL unset)
+- 3 Grafana dashboards (API, Pipeline, System) + 8 alert rules, all provisioned as YAML/JSON — zero manual setup after `docker compose up`
+- Grafana Alertmanager → Telegram contact point (commented-out stub until real bot credentials are supplied — Grafana 13 validates credentials at boot)
+- Streamlit admin dashboard (`admin/`) at `:8501` — Overview, Songs, Logs, Metrics, Alerts, DB Health pages; single `ADMIN_PASSWORD` env-gated login (`hmac.compare_digest`)
+- `CELERY_SEND_EVENTS` / `CELERY_TASK_TRACK_STARTED` on the worker service, required for `celery-exporter`
+- Gauge poller (`app/core/pollers.py`) — `celery_queue_depth`, `celery_active_tasks`, `minio_bucket_size_bytes`, `songs_by_status_total`, polled every 30s
+- New Makefile targets: `monitoring-up`, `monitoring-up-all`, `monitoring-down`, `monitoring-restart`, `monitoring-status`, `grafana`, `flower`, `admin`, `metrics`, `logs-loki`, `cadvisor-ids`
+- New tests: `test_log_events.py`, `test_logging.py`, `test_log_manager.py`, `test_tracing.py`, `test_metrics_unit.py`, `test_middleware_health.py`, `test_pollers.py`, `test_admin_auth.py`, `test_metrics_api.py`, `test_tracing_api.py`
+- Smoke test sections S25 (`GET /metrics` returns 200) and S26 (`X-Trace-Id` header present on every response)
+
+### Fixed
+- `relativeTimeRange` made explicit on every Grafana alert rule data node — Grafana 13 rejects `{from: 0, to: 0}`
+
+### Changed
+- `loki`/`tempo`/`pyroscope` use `service_started` rather than `service_healthy` as their Compose dependency condition — `/ready` endpoints are slow to report on WSL2 Docker Desktop even when functionally ready
+- Coverage target maintained at ≥80%; currently 91% across 425 tests (was 94.77% pre-Sprint-5; new surface area — logging/tracing/metrics/pollers — brought the percentage down while adding meaningful coverage)
+
+### Known limitations
+- Telegram alerting requires manual Grafana UI setup once real `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` are available — the provisioned contact point ships as a stub
+
+---
+
+## [0.4.0] — Sprint 4 — Vanilla JS UI
+
+### Added
+- Full single-page browser UI (`ui/`) served by nginx at `http://localhost:3000` — vanilla HTML/JS/CSS, ES modules, zero build step
+- Hash router: `#/` (Library), `#/favorites`, `#/playlists`, `#/playlists/:id`
+- Library page: filter (status), search (300ms debounce), sort, cursor-paginated "Load more", 2s auto-poll while any song is `pending`/`processing`
+- Add Song modal: two-step flow (URL → preview → trim/speed params), inline error handling, loading spinner during metadata fetch
+- Persistent player bar: single module-scoped `<audio>` element, survives hash navigation, scrubber sync, Range-header seeking (`206` support)
+- Favorites: optimistic heart-icon toggle with revert on error
+- Playlists: grid view, create via inline input, detail view with ordered song list and remove-song action, "add to playlist" via song-card overflow menu (`window.prompt()` for new playlist name)
+- Retry button on failed songs — deletes the old record and resubmits the same URL/trim/speed as a new song, only after the resubmit succeeds
+- Toast notifications (success/error variants, 3s auto-dismiss), health banner on unreachable API, keyboard shortcuts (`Space` play/pause, `Esc` close modal)
+- `ui/Dockerfile` — `FROM nginx:alpine`, ~2s build; `ui/nginx.conf` — SPA fallback + `/api/*` proxy with `proxy_buffering off`
+
+### Fixed
+- `GET /songs/{id}/stream` seeking: no-trim/no-speed path now proxies via `httpx` and forwards the browser's `Range` header, returning `206 Partial Content`
+- Event delegation bug where an early `return` in the global click handler blocked song-card clicks
+- `worker`/`api` `/tmp/melo` permission errors — switched to `tmpfs` mount
+
+### Changed
+- React/Vite frontend attempt scrapped mid-sprint — WSL2 Docker Desktop memory pressure during builds made it impractical; vanilla JS adopted instead
+
+---
+
+## [0.3.0] — Sprint 3 — Speed Processing, Library Features & Metadata UX
 
 ### Added
 - `POST /songs/preview` — stateless YouTube metadata fetch (no DB write)
@@ -17,7 +77,7 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - `POST /playlists/{id}/songs/{song_id}`, `DELETE /playlists/{id}/songs/{song_id}`
 - `DELETE /songs/{id}` — soft delete + MinIO object removal
 - Speed processing via FFmpeg `atempo` filter (chained for values outside `[0.5, 2.0]`)
-- `effective_duration` computed field on `SongResponse` (reflects trim)
+- `effective_duration` computed field on `SongResponse` (reflects trim and speed)
 - `stream_url` field on `SongResponse` — status-driven, never null
 - `upload_date` normalised from yt-dlp `"YYYYMMDD"` → ISO `"YYYY-MM-DD"`
 - `is_favorite` field on all song responses
@@ -27,7 +87,7 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - Health check now probes Redis + MinIO alongside PostgreSQL
 - Swagger/OpenAPI: `summary`, `responses`, `Field(description=...)` on all routes
 - `docs_url=None` / `redoc_url=None` in production
-- Pre-commit hook suite: ruff, black, mypy --strict, bandit, gitleaks
+- Pre-commit hook suite: ruff, bandit, gitleaks, mypy --strict, pydocstyle
 - pytest suite: 200+ tests, 94.77% coverage (unit + integration)
 - Smoke test: 24-section end-to-end bash script
 - `.github/`: CI workflow, issue templates, PR template
@@ -38,12 +98,12 @@ Versioning: [Semantic Versioning](https://semver.org/).
 ### Fixed
 - Route ordering bug: `/songs/preview` must precede `/{song_id}`
 - `_is_favorited` now filters `Favorite.deleted_at.is_(None)` — soft-deleted favorites no longer show as active
-- Dockerfile: removed Node.js (unused — format selector is plain HTTPS); added `uv.lock --frozen` for reproducible builds
+- Dockerfile: removed Node.js (unused — format selector is plain HTTPS); added `uv sync --frozen --no-install-project` for reproducible builds
 - `clean-tmp` Makefile target: exec inside worker container (volume is not on host)
 
 ### Changed
 - All model PKs migrated to UUID v7
-- `paginated_response` gains `bookmark` field
+- `paginated_response` gains a `bookmark` field
 - Unit test isolation switched from savepoint rollback to `_truncate_all()` (savepoint unreliable when endpoints call `db.commit()`)
 
 ---
@@ -79,7 +139,9 @@ Versioning: [Semantic Versioning](https://semver.org/).
 - structlog structured logging + request middleware
 - Makefile with core targets
 
-[Unreleased]: https://github.com/KarthikUdyawar/melo/compare/0.3.0...HEAD
+[Unreleased]: https://github.com/KarthikUdyawar/melo/compare/0.5.0...HEAD
+[0.5.0]: https://github.com/KarthikUdyawar/melo/compare/0.4.0...0.5.0
+[0.4.0]: https://github.com/KarthikUdyawar/melo/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/KarthikUdyawar/melo/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/KarthikUdyawar/melo/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/KarthikUdyawar/melo/releases/tag/0.1.0

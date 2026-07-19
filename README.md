@@ -1,6 +1,6 @@
 # 🎵 Melo
 
-> Personal self-hosted audio library. Paste a YouTube URL → trimmed, speed-adjusted, playable mp3 stored in MinIO.
+> Personal self-hosted audio library. Paste a YouTube URL → trimmed, speed-adjusted, playable mp3 stored in MinIO. Full observability stack included.
 
 [![CI](https://github.com/KarthikUdyawar/melo/actions/workflows/ci.yml/badge.svg)](https://github.com/KarthikUdyawar/melo/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/KarthikUdyawar/melo/branch/master/graph/badge.svg)](https://codecov.io/gh/KarthikUdyawar/melo)
@@ -13,18 +13,20 @@
 
 ## Stack
 
-| Layer      | Tech                  |
-| ---------- | --------------------- |
-| UI         | Vanilla HTML/JS/CSS   |
-| Serving    | nginx                 |
-| API        | FastAPI + Uvicorn     |
-| Queue      | Celery + Redis        |
-| Download   | yt-dlp                |
-| Processing | FFmpeg                |
-| Storage    | MinIO (S3-compatible) |
-| Database   | PostgreSQL 16         |
-| Packaging  | uv                    |
-| Runtime    | Docker Compose        |
+| Layer         | Tech                                                    |
+| ------------- | ------------------------------------------------------- |
+| UI            | Vanilla HTML/JS/CSS                                     |
+| Serving       | nginx                                                   |
+| API           | FastAPI + Uvicorn                                       |
+| Queue         | Celery + Redis                                          |
+| Download      | yt-dlp                                                  |
+| Processing    | FFmpeg                                                  |
+| Storage       | MinIO (S3-compatible)                                   |
+| Database      | PostgreSQL 16                                           |
+| Packaging     | uv                                                      |
+| Runtime       | Docker Compose                                          |
+| Observability | Prometheus, Loki, Tempo, Grafana, Pyroscope (see below) |
+| Admin         | Streamlit dashboard (`admin/`)                          |
 
 ---
 
@@ -52,6 +54,8 @@ graph TD
     Worker -->|yt-dlp download| YT[YouTube]
     Worker --> MinIO
 ```
+
+> The observability stack (Prometheus/Loki/Tempo/Grafana/Pyroscope/exporters/admin) runs as a **separate** Compose file (`infra/docker-compose.monitoring.yml`) layered on top of this one — see [Observability](#observability) below.
 
 ---
 
@@ -167,6 +171,10 @@ make up
 # 4. Open the browser UI
 open http://localhost:3000
 # Paste a YouTube URL → Preview → Add to Melo → watch it process → play
+
+# 5. (optional) Start the observability stack
+make monitoring-up-all
+# → Grafana:  http://localhost:3001
 ```
 
 ### API-only usage
@@ -225,10 +233,10 @@ Hash routing → #/ · #/favorites · #/playlists · #/playlists/:id
 
 **Keyboard shortcuts:**
 
-| Key     | Action       |
-| ------- | ------------ |
-| `Space` | Play / pause |
-| `Esc`   | Close modal  |
+| Key     | Action                                            |
+| ------- | ------------------------------------------------- |
+| `Space` | Play / pause (ignored while focus is in an input) |
+| `Esc`   | Close modal                                       |
 
 **UI file layout:**
 
@@ -244,7 +252,70 @@ ui/
   Dockerfile     # FROM nginx:alpine, COPY, done (~2s build)
 ```
 
-No build step. No Node. No package manager. nginx serves files directly.
+No build step. No Node. No package manager. nginx serves files directly. (React/Vite was tried first and scrapped — WSL2 Docker Desktop memory pressure during builds.)
+
+---
+
+## Observability
+
+Full three-pillar observability stack (logs, metrics, traces) plus continuous profiling, alerting, and a Streamlit admin dashboard — all provisioned as code, all starting with a single command. Runs as a separate Compose file layered on the main stack.
+
+```bash
+make monitoring-up       # app must already be running
+make monitoring-up-all   # start app + observability together
+```
+
+**What's included:**
+
+| Pillar / Tool   | Detail                                                                                                                                             |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Logs            | structlog dual renderer (stdout human-readable + JSONL file), rotation (size/age), gzip + MinIO backup, 90-day retention cleanup via APScheduler   |
+| Metrics         | Prometheus — HTTP auto-instrumentation + custom counters/gauges/histograms at `GET /metrics`; Postgres/Redis/MinIO/Celery/container/host exporters |
+| Traces          | OpenTelemetry auto + manual spans → Tempo; `X-Trace-Id` on every API response; `trace_id` in every log line; Celery task context propagation       |
+| Profiling       | Pyroscope continuous profiling (FastAPI + Celery worker), no sampling                                                                              |
+| Dashboards      | 3 Grafana dashboards (API, Pipeline, System), provisioned as JSON — no manual import                                                               |
+| Alerting        | Grafana's built-in Alertmanager → Telegram, 8 provisioned alert rules                                                                              |
+| Admin dashboard | Streamlit at `:8501` — overview, songs, logs, metrics, alerts, DB health, single `ADMIN_PASSWORD` gate                                             |
+
+**New ports:**
+
+| Service           | URL                             |
+| ----------------- | ------------------------------- |
+| Grafana           | http://localhost:3001           |
+| Prometheus        | http://localhost:9090           |
+| Loki              | http://localhost:3100           |
+| Tempo (OTLP gRPC) | http://localhost:4317           |
+| Tempo (HTTP)      | http://localhost:4318           |
+| Tempo (UI/API)    | http://localhost:3200           |
+| Pyroscope         | http://localhost:4040           |
+| Flower            | http://localhost:5555 (no auth) |
+| cAdvisor          | http://localhost:8090           |
+| Node Exporter     | http://localhost:9100           |
+| Postgres Exporter | http://localhost:9187           |
+| Redis Exporter    | http://localhost:9121           |
+| Streamlit admin   | http://localhost:8501           |
+
+**New Makefile targets:**
+
+| Target                    | Description                                          |
+| ------------------------- | ---------------------------------------------------- |
+| `make monitoring-up`      | Start observability stack (main app must be running) |
+| `make monitoring-up-all`  | Start app + observability stack together             |
+| `make monitoring-down`    | Stop observability stack                             |
+| `make monitoring-restart` | Restart observability stack                          |
+| `make monitoring-status`  | Show observability stack container status            |
+| `make grafana`            | Open Grafana in browser                              |
+| `make flower`             | Open Flower in browser                               |
+| `make admin`              | Open Streamlit admin in browser                      |
+| `make metrics`            | Curl `/metrics` endpoint                             |
+| `make logs-loki`          | Tail recent logs via Loki HTTP API                   |
+| `make cadvisor-ids`       | Print cAdvisor container IDs (see note below)        |
+
+New env vars (all in `example.env`): `GRAFANA_ADMIN_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ADMIN_PASSWORD`, `LOG_MAX_SIZE_MB`, `LOG_MAX_AGE_HOURS`, `LOG_BACKUP_BUCKET`, `LOG_RETENTION_DAYS`, `PYROSCOPE_SERVER_URL`. Worker also runs with `CELERY_SEND_EVENTS=True` / `CELERY_TASK_TRACK_STARTED=True` for `celery-exporter`.
+
+> **WSL2 Docker Desktop note:** `cAdvisor` can't resolve container names/labels on WSL2 (daemon storage lives in Docker Desktop's internal VM). The system dashboard matches by cgroup ID instead — re-run `make cadvisor-ids` after recreating containers. See `docs/DECISIONS.md` for this and other WSL2-specific workarounds.
+
+Full breakdown: `docs/PRD.md` and `docs/sprints/Sprint-5.md`.
 
 ---
 
@@ -257,6 +328,8 @@ Run `make` or `make help` to see all targets with descriptions.
 | `make up`                 | Build + start all services detached           |
 | `make down`               | Stop all services                             |
 | `make down-v`             | Stop + delete all volumes                     |
+| `make restart`            | Restart the stack                             |
+| `make rebuild`            | Rebuild all Docker images without cache       |
 | `make logs`               | Tail all logs                                 |
 | `make logs-api`           | Tail API logs only                            |
 | `make logs-worker`        | Tail worker logs only                         |
@@ -264,6 +337,7 @@ Run `make` or `make help` to see all targets with descriptions.
 | `make ps`                 | Show service status                           |
 | `make shell-api`          | Bash into api container                       |
 | `make shell-worker`       | Bash into worker container                    |
+| `make shell-postgres`     | Open psql shell                               |
 | `make health`             | Hit /health endpoint                          |
 | `make songs`              | List all songs                                |
 | `make reset-db`           | Wipe all volumes and restart stack            |
@@ -278,12 +352,15 @@ Run `make` or `make help` to see all targets with descriptions.
 | `make fmt`                | Auto-format with ruff                         |
 | `make smoke`              | End-to-end smoke test (curl + jq)             |
 | `make smoke-ui`           | UI smoke test against running stack           |
-| `make test`               | Run full test suite + coverage report         |
+| `make test`               | Run full test suite                           |
 | `make test-unit`          | Unit tests only (no Docker needed)            |
 | `make test-integration`   | Integration tests (requires Docker)           |
 | `make test-cov`           | Tests + HTML coverage report                  |
 | `make pre-commit`         | Run all pre-commit hooks on all files         |
 | `make pre-commit-install` | Install pre-commit hooks (run once)           |
+| `make tree`               | Regenerate `docs/PROJECT.tree`                |
+
+Observability targets are listed separately in [Observability](#observability) above.
 
 ---
 
@@ -307,8 +384,11 @@ Run `make` or `make help` to see all targets with descriptions.
 | `POST`   | `/playlists/{id}/songs/{song_id}` | ✅      | Add song to playlist (ordered)             |
 | `DELETE` | `/playlists/{id}/songs/{song_id}` | ✅      | Remove song from playlist                  |
 | `GET`    | `/health`                         | ✅      | Health check (DB + Redis + MinIO)          |
+| `GET`    | `/metrics`                        | ✅      | Prometheus scrape endpoint                 |
 
 Interactive docs: **http://localhost:8000/docs**
+
+Every response carries an `X-Trace-Id` header (see [Observability](#observability)) for correlating with logs and Grafana Tempo traces.
 
 ### Filtering, Sorting & Pagination
 
@@ -364,36 +444,51 @@ curl "http://localhost:8000/songs?favorite=true"
 | PostgreSQL    | localhost:5432             |
 | Redis         | localhost:6379             |
 
+Observability stack ports (Grafana, Prometheus, Loki, Tempo, Pyroscope, Flower, exporters, Streamlit admin) are listed in [Observability](#observability) above.
+
 ---
 
 ## Folder Structure
 
 ```text
 melo/
+├── admin/                   # Streamlit admin dashboard (separate app)
+│   ├── app.py               # entry + login gate + sidebar
+│   ├── auth.py               # session password check
+│   ├── pages/                # overview, songs, logs, metrics, alerts, db_health
+│   ├── Dockerfile
+│   └── requirements.txt
 ├── app/
 │   ├── api/
-│   │   ├── favorites.py    # POST/DELETE/GET /favorites
-│   │   ├── playlists.py    # POST/DELETE/GET /playlists
-│   │   ├── songs.py        # songs router incl. /preview + /stream
-│   │   ├── _song_utils.py  # shared serialize_song + _is_favorited
-│   │   └── responses.py    # envelope_response, paginated_response
-│   ├── core/               # config, db, deps, logging, middleware
+│   │   ├── favorites.py     # POST/DELETE/GET /favorites
+│   │   ├── playlists.py     # POST/DELETE/GET /playlists
+│   │   ├── songs.py         # songs router incl. /preview + /stream
+│   │   ├── _song_utils.py   # shared serialize_song + _is_favorited
+│   │   └── responses.py     # envelope_response, paginated_response
+│   ├── core/                 # config, db, deps, logging, log_manager, log_events,
+│   │                         #   metrics, tracing, profiling, pollers, middleware,
+│   │                         #   exception_handlers
 │   ├── models/
 │   │   ├── song.py
 │   │   ├── favorite.py
 │   │   └── playlist.py
-│   ├── schemas/            # Pydantic schemas
-│   ├── services/           # downloader, processor, storage
-│   └── workers/            # Celery app + tasks
+│   ├── schemas/               # Pydantic schemas
+│   ├── services/               # downloader, processor, storage
+│   └── workers/                 # Celery app + tasks
 ├── ui/
-│   ├── index.html          # app shell + Google Fonts
-│   ├── style.css           # design tokens (CSS vars) + all styles
-│   ├── api.js              # fetch wrappers (envelope unwrap)
-│   ├── player.js           # <audio> element + player state
-│   ├── components.js       # renderSongCard, renderStatusPill, renderToast, …
-│   ├── app.js              # hash router + page logic + event delegation
-│   ├── nginx.conf          # SPA fallback + /api/ proxy
-│   └── Dockerfile          # FROM nginx:alpine, COPY, done
+│   ├── index.html              # app shell + Google Fonts
+│   ├── style.css                # design tokens (CSS vars) + all styles
+│   ├── api.js                    # fetch wrappers (envelope unwrap)
+│   ├── player.js                  # <audio> element + player state
+│   ├── components.js               # renderSongCard, renderStatusPill, renderToast, …
+│   ├── app.js                       # hash router + page logic + event delegation
+│   ├── nginx.conf                    # SPA fallback + /api/ proxy
+│   └── Dockerfile                     # FROM nginx:alpine, COPY, done
+├── infra/                              # monitoring compose + all provisioning config
+│   ├── docker-compose.monitoring.yml
+│   ├── monitoring.sh
+│   ├── prometheus/ · loki/ · promtail/ · tempo/ · pyroscope/
+│   └── grafana/provisioning/         # datasources, dashboards, alerting
 ├── tests/
 │   ├── conftest.py
 │   ├── docker-compose.test.yml
@@ -402,10 +497,9 @@ melo/
 │   ├── unit/
 │   └── integration/
 ├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── DESIGN.md
-│   ├── PRD.md
-│   ├── USER-FLOW.md
+│   ├── ARCHITECTURE.md · SERVICES.md · PIPELINE.md · MODELS.md · STORAGE.md
+│   ├── INFRA.md · DESIGN.md · USER-FLOW.md · API_DOC.md · PRD.md
+│   ├── DECISIONS.md · ROADMAP.md · TODO.md
 │   └── sprints/
 ├── .github/
 │   ├── workflows/ci.yml
@@ -432,16 +526,16 @@ melo/
 # Unit tests only — no Docker needed, fast
 make test-unit
 
-# Full suite — spins up Postgres via pytest-docker
+# Full suite — spins up Postgres/Redis/MinIO via pytest-docker
 make test
 
 # HTML coverage report → htmlcov/index.html
 make test-cov
 ```
 
-Coverage target: **80%** (currently **94.77%**).
+Coverage target: **80%** (currently **91%**, 425 tests).
 
-Test layout:
+Test layout (selected):
 
 | Module                                          | Type        |
 | ----------------------------------------------- | ----------- |
@@ -452,12 +546,24 @@ Test layout:
 | `tests/unit/test_preview.py`                    | Unit        |
 | `tests/unit/test_favorites.py`                  | Unit        |
 | `tests/unit/test_playlist_schemas.py`           | Unit        |
+| `tests/unit/test_log_events.py`                 | Unit        |
+| `tests/unit/test_logging.py`                    | Unit        |
+| `tests/unit/test_log_manager.py`                | Unit        |
+| `tests/unit/test_tracing.py`                    | Unit        |
+| `tests/unit/test_metrics_unit.py`               | Unit        |
+| `tests/unit/test_middleware_health.py`          | Unit        |
+| `tests/unit/test_pollers.py`                    | Unit        |
+| `tests/unit/test_admin_auth.py`                 | Unit        |
 | `tests/integration/test_db.py`                  | Integration |
 | `tests/integration/test_songs_api.py`           | Integration |
 | `tests/integration/test_songs_api_filtering.py` | Integration |
 | `tests/integration/test_preview_api.py`         | Integration |
 | `tests/integration/test_favorites_api.py`       | Integration |
 | `tests/integration/test_playlists_api.py`       | Integration |
+| `tests/integration/test_metrics_api.py`         | Integration |
+| `tests/integration/test_tracing_api.py`         | Integration |
+
+`tasks.py` and `celery_app.py` are excluded from coverage (Celery internals need a live worker; covered by `make smoke` instead).
 
 ---
 
@@ -467,42 +573,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, branch naming, commit conventi
 
 ---
 
-## Decision Log
-
-| Decision                                 | Reason                                                                                       |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Vanilla HTML/JS/CSS for UI               | Zero build step; 2s Docker build; no Node/pnpm/WSL memory issues                             |
-| nginx serves UI + proxies `/api/*`       | Single entry point; no CORS; `proxy_buffering off` for audio stream                          |
-| Hash routing (`#/`)                      | No server config needed for SPA; nginx serves index.html for all paths                       |
-| Single `<audio>` element                 | Persistent player across hash navigation; no framework state needed                          |
-| ES modules (`type="module"`)             | Clean imports without bundler; native browser support                                        |
-| No Alembic                               | Solo project; `create_all()` on startup sufficient                                           |
-| `APP_ENV`-driven env files               | Clean separation: dev (localhost) / staging (Docker) / prod                                  |
-| Pinned yt-dlp format selector            | `bestaudio` needs JS runtime; explicit IDs (`140/251/…`) use plain HTTPS                     |
-| `worker_ready` signal for MinIO bucket   | Create once per process, not per task                                                        |
-| Proxy stream via FastAPI                 | Presigned URLs signed to internal hostname break on host rewrite; API proxies bytes directly |
-| `httpx` proxy for no-trim/speed stream   | Forwards browser `Range` header server-side → browser gets `206` → seeking works             |
-| `FileResponse` for processed audio       | Starlette native range support; `BackgroundTask` handles tmp cleanup post-response           |
-| `expire_on_commit=False`                 | Avoids lazy-load errors post-commit in Celery context                                        |
-| Speed applied at stream time             | Avoid storing per-speed variants in MinIO                                                    |
-| Chain `atempo` filters                   | FFmpeg atempo limited to 0.5–2.0 per stage                                                   |
-| Trim before speed                        | Correct processing order — trim reduces data before re-encoding                              |
-| Preview endpoint is stateless            | No DB writes; simpler system; worker re-probes as source of truth                            |
-| Favorites idempotent (check-then-insert) | Solo user; race condition acceptable; avoids upsert complexity                               |
-| Playlist ordering via `position`         | Predictable playback; auto-increments on add                                                 |
-| UUID v7 for all PKs (`uuid6` package)    | String-sortable = chronological = natural cursor key for pagination                          |
-| Cursor pagination (`after=<uuid>`)       | Stable under concurrent inserts; no offset drift                                             |
-| DB-level filtering on `GET /songs`       | Scalability; avoids fetching and filtering in Python                                         |
-| Soft delete on Song, Favorite, Playlist  | Safer than hard delete; preserves audit trail; `deleted_at` column; no Alembic needed        |
-| `_song_utils.py` shared serializer       | Eliminates three copies of `_serialize_song`; avoids circular import                         |
-| `tasks.py` excluded from coverage        | Celery internals require live worker; covered by `make smoke` instead                        |
-| `make help` as default target            | 20+ targets — discoverability without reading Makefile                                       |
-| Backup targets in Makefile               | `pg_dump` + MinIO `tar` via `docker compose exec`; timestamped to `./backups/`               |
-
----
-
 ## Out of Scope (v1)
 
 - Multi-user auth, lyrics, waveforms → never (personal tool)
 - Mobile layout → desktop-first, minimum 1280px
 - Drag-to-reorder playlists, waveform display → post-v1
+- SLO/error-budget tracking, external SaaS log shipping → not planned
+
+Full roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md). Open items: [`docs/TODO.md`](docs/TODO.md).

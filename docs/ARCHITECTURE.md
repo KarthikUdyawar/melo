@@ -2,22 +2,39 @@
 
 > Personal self-hosted audio library. Paste a YouTube URL → trimmed, speed-adjusted, playable mp3 stored in MinIO.
 
+This document is the index. Detail lives in the linked files — each is scoped to one concern so it can be updated independently of the others.
+
+| Doc                              | Covers                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------- |
+| [`SERVICES.md`](./SERVICES.md)   | What each service/module is responsible for — API, worker, UI, downloader/processor/storage |
+| [`PIPELINE.md`](./PIPELINE.md)   | Request & async job flow, task state machine, dedup logic, stream pipeline case matrix      |
+| [`MODELS.md`](./MODELS.md)       | Data model (ERD), field-level notes, indexes, soft-delete/UUID v7 conventions               |
+| [`STORAGE.md`](./STORAGE.md)     | MinIO bucket layout, presigned-URL proxy pattern, log backup storage                        |
+| [`INFRA.md`](./INFRA.md)         | Docker Compose services, ports, health checks, Makefile targets, monitoring stack           |
+| [`DECISIONS.md`](./DECISIONS.md) | Consolidated decision log across all sprints                                                |
+| `API_DOC.md`                     | Endpoint reference                                                                          |
+| `DESIGN.md`                      | Frontend design spec                                                                        |
+| `USER-FLOW.md`                   | UI user flows                                                                               |
+| `PROJECT.tree`                   | Current repo tree (`make tree`)                                                             |
+
 ---
 
 ## Stack
 
-| Layer      | Tech                  |
-| ---------- | --------------------- |
-| UI         | Vanilla HTML/JS/CSS   |
-| Serving    | nginx                 |
-| API        | FastAPI + Uvicorn     |
-| Queue      | Celery + Redis        |
-| Download   | yt-dlp                |
-| Processing | FFmpeg                |
-| Storage    | MinIO (S3-compatible) |
-| Database   | PostgreSQL 16         |
-| Packaging  | uv                    |
-| Runtime    | Docker Compose        |
+| Layer         | Tech                                                                         |
+| ------------- | ---------------------------------------------------------------------------- |
+| UI            | Vanilla HTML/JS/CSS                                                          |
+| Serving       | nginx                                                                        |
+| API           | FastAPI + Uvicorn                                                            |
+| Queue         | Celery + Redis                                                               |
+| Download      | yt-dlp                                                                       |
+| Processing    | FFmpeg                                                                       |
+| Storage       | MinIO (S3-compatible)                                                        |
+| Database      | PostgreSQL 16                                                                |
+| Packaging     | uv                                                                           |
+| Runtime       | Docker Compose                                                               |
+| Observability | Prometheus, Loki, Tempo, Grafana, Pyroscope (see `INFRA.md`)                 |
+| Admin         | Streamlit (`admin/`) — separate app, own theming, see `PRD.md`/`Sprint-5.md` |
 
 ---
 
@@ -52,29 +69,7 @@ graph TD
     Adminer --> PG
 ```
 
----
-
-## UI Architecture
-
-```mermaid
-graph LR
-    subgraph "ui/ — static files served by nginx"
-        HTML["index.html\napp shell + Google Fonts"]
-        CSS["style.css\nCSS vars + all styles"]
-        API_JS["api.js\napiFetch + endpoint wrappers"]
-        PLAYER["player.js\naudio element + scrubber"]
-        COMP["components.js\nrenderSongCard, renderStatusPill\nrenderModal, renderToast"]
-        APP["app.js\nhash router + page logic\npolling + event delegation"]
-    end
-
-    HTML --> CSS
-    HTML --> APP
-    APP --> API_JS
-    APP --> PLAYER
-    APP --> COMP
-```
-
-**No build step.** nginx serves files directly. Browser loads via `<script type="module">`.
+> Note: the monitoring stack (Prometheus/Loki/Tempo/Grafana/Pyroscope/exporters/admin) runs as a **separate** Compose file (`infra/docker-compose.monitoring.yml`) layered on top of this one — not shown here. See `INFRA.md`.
 
 ---
 
@@ -92,166 +87,35 @@ All `/api/*` requests proxied to `api:8000`. `proxy_buffering off` required for 
 
 ---
 
-## Request & Async Job Flow
-
-```mermaid
-sequenceDiagram
-    participant B as Browser
-    participant N as nginx
-    participant A as FastAPI
-    participant R as Redis
-    participant W as Celery Worker
-    participant YT as YouTube
-    participant M as MinIO
-    participant DB as PostgreSQL
-
-    Note over B,A: Preview (stateless — no DB write)
-    B->>N: POST /api/songs/preview {url}
-    N->>A: proxy
-    A->>YT: yt-dlp probe_metadata (no download)
-    A-->>B: 200 {youtube_id, title, duration, channel, thumbnail_url}
-
-    Note over B,DB: Submit Song
-    B->>N: POST /api/songs {url, start, end, speed}
-    N->>A: proxy
-    A->>DB: INSERT song (status=pending)
-    A->>R: enqueue process_song_task
-    A-->>B: 202 {id, status=pending}
-
-    Note over R,DB: Async Processing
-    R->>W: dequeue task
-    W->>DB: UPDATE status=processing
-    W->>YT: yt-dlp download → /tmp/melo/<id>.mp3
-    W->>M: upload songs/<id>.mp3
-    W->>DB: UPDATE file_url, duration, status=done
-
-    Note over B,A: Poll until done
-    B->>N: GET /api/songs/{id}
-    N->>A: proxy
-    A-->>B: { status: "done", stream_url: "/api/songs/id/stream" }
-
-    Note over B,A: Streaming
-    B->>N: GET /api/songs/{id}/stream
-    N->>A: proxy (buffering off)
-    A->>DB: SELECT song WHERE id=…
-    A->>M: get_object(songs/<id>.mp3)
-    Note over A: trim + speed applied on-the-fly via FFmpeg
-    A-->>B: StreamingResponse (audio/mpeg)
-```
-
----
-
-## Task State Machine
-
-```mermaid
-stateDiagram-v2
-    [*] --> pending : POST /songs
-
-    pending --> processing : worker picks up task
-
-    processing --> done : download + upload success
-    processing --> failed : DownloadError / StorageError
-    processing --> processing : retry (max 3×, unknown errors only)
-    processing --> failed : MaxRetriesExceeded
-
-    done --> [*]
-    failed --> [*]
-```
-
----
-
-## Stream Pipeline (Case Matrix)
-
-Trim and speed are applied on-the-fly at stream time — no variants stored in MinIO.
-
-```mermaid
-flowchart TD
-    Start([GET /songs/id/stream]) --> FetchObj[Fetch object from MinIO]
-    FetchObj --> HasTrim{has_trim?}
-    HasTrim -- No --> HasSpeed1{has_speed?}
-    HasTrim -- Yes --> TrimStep[FFmpeg: trim via stream-copy]
-    TrimStep --> HasSpeed2{has_speed?}
-    HasSpeed1 -- No --> DirectProxy[Direct MinIO proxy\nfastest path]
-    HasSpeed1 -- Yes --> SpeedStep1[FFmpeg: atempo filter]
-    HasSpeed2 -- No --> Stream1[StreamingResponse]
-    HasSpeed2 -- Yes --> SpeedStep2[FFmpeg: atempo filter]
-    SpeedStep1 --> Stream2[StreamingResponse]
-    SpeedStep2 --> Stream3[StreamingResponse]
-    DirectProxy --> Stream4[StreamingResponse]
-```
-
-| has_trim | has_speed | Behaviour                     |
-| -------- | --------- | ----------------------------- |
-| ❌        | ❌         | Direct MinIO proxy (fastest)  |
-| ✅        | ❌         | Fetch → trim → stream         |
-| ❌        | ✅         | Fetch → speed → stream        |
-| ✅        | ✅         | Fetch → trim → speed → stream |
-
-**`atempo` chaining** — FFmpeg caps a single `atempo` stage at `[0.5, 2.0]`:
+## Folder Structure
 
 ```text
-speed=4.0  → atempo=2.0,atempo=2.0
-speed=0.25 → atempo=0.5,atempo=0.5
+melo/
+├── admin/                   # Streamlit admin dashboard (separate app)
+├── app/
+│   ├── api/                 # songs.py, favorites.py, playlists.py, _song_utils.py, responses.py
+│   ├── core/                 # config, db, deps, logging, log_manager, metrics, tracing,
+│   │                         #   profiling, pollers, middleware, exception_handlers
+│   ├── models/               # song.py, favorite.py, playlist.py
+│   ├── schemas/              # song.py, playlist.py, envelope.py
+│   ├── services/             # downloader.py, processor.py, storage.py
+│   └── workers/              # celery_app.py, tasks.py
+├── ui/                       # vanilla JS frontend (see DESIGN.md / USER-FLOW.md)
+├── infra/                    # monitoring compose + all provisioning config (see INFRA.md)
+├── tests/                    # unit/ + integration/ + smoke scripts
+├── docs/                     # this file and its siblings, plus sprint history
+├── docker-compose.yml
+├── Makefile
+└── pyproject.toml
 ```
 
----
-
-## Data Model
-
-```mermaid
-erDiagram
-    songs {
-        uuid     id           PK
-        string   title
-        string   youtube_id   UK
-        string   file_url
-        float    duration
-        float    speed
-        string   status
-        int      start
-        int      end
-        string   thumbnail_url
-        string   channel
-        string   upload_date
-        datetime created_at
-        datetime deleted_at
-    }
-
-    favorites {
-        uuid     id           PK
-        uuid     song_id      FK
-        datetime created_at
-        datetime deleted_at
-    }
-
-    playlists {
-        uuid     id           PK
-        string   name
-        datetime created_at
-        datetime deleted_at
-    }
-
-    playlist_songs {
-        uuid     playlist_id  FK
-        uuid     song_id      FK
-        int      position
-    }
-
-    songs ||--o{ favorites       : "favorited via"
-    songs ||--o{ playlist_songs  : "appears in"
-    playlists ||--o{ playlist_songs : "contains"
-```
-
-Notes:
-- All PKs are **UUID v7** (via `uuid6` package) — string-sortable = chronological = natural cursor key.
-- `favorites.song_id` has a `unique=True` constraint (one row per song).
-- `playlist_songs.position` auto-increments on add; same song can appear in multiple playlists.
-- `deleted_at` on `songs`, `favorites`, `playlists` — soft delete. `playlist_songs` is hard-deleted (join table, no audit need).
-- Indexes on `songs.youtube_id`, `songs.status`, `songs.created_at`, `songs.title` (btree) for dedup and filtering.
+See `PROJECT.tree` for the full, current listing.
 
 ---
 
 ## API Surface
+
+See `API_DOC.md` for the full reference. Summary:
 
 ```mermaid
 graph LR
@@ -281,128 +145,8 @@ graph LR
 
     subgraph System
         H["GET /health"]
+        M["GET /metrics"]
     end
 ```
 
-All responses follow the **envelope format**:
-
-```json
-{
-  "status_code": 200,
-  "message": "…",
-  "body": { … }
-}
-```
-
-Paginated list responses include:
-
-```json
-{
-  "records": [ … ],
-  "count": 42,
-  "bookmark": "<last-uuid>"
-}
-```
-
-`bookmark` enables **cursor-based pagination** via `?after=<uuid>` on `GET /songs`.
-
----
-
-## Folder Structure
-
-```text
-melo/
-├── app/
-│   ├── api/
-│   │   ├── songs.py        # /songs + /songs/preview + /songs/{id}/stream
-│   │   ├── favorites.py    # /favorites
-│   │   ├── playlists.py    # /playlists
-│   │   ├── _song_utils.py  # shared serialize_song + _is_favorited
-│   │   └── responses.py    # envelope_response, paginated_response
-│   ├── core/
-│   │   ├── config.py       # APP_ENV-driven settings
-│   │   ├── db.py           # SQLAlchemy engine + session
-│   │   ├── deps.py         # FastAPI dependency injection
-│   │   ├── logging.py      # structlog setup
-│   │   ├── middleware.py   # request logging
-│   │   └── exception_handlers.py
-│   ├── models/
-│   │   ├── song.py         # Song SQLAlchemy model
-│   │   ├── favorite.py     # Favorite model
-│   │   └── playlist.py     # Playlist + PlaylistSong models
-│   ├── schemas/
-│   │   ├── song.py         # SongCreate, SongResponse, SongPreviewResponse, …
-│   │   ├── playlist.py     # PlaylistCreate, PlaylistResponse, …
-│   │   └── envelope.py     # Envelope[T], PaginatedResponse[T]
-│   ├── services/
-│   │   ├── downloader.py   # yt-dlp: probe_metadata, download_audio
-│   │   ├── processor.py    # FFmpeg: trim_audio, apply_speed
-│   │   └── storage.py      # MinIO: upload_file, get_presigned_url
-│   └── workers/
-│       ├── celery_app.py   # Celery app + Redis broker config
-│       └── tasks.py        # process_song_task (download → process → upload)
-├── ui/
-│   ├── index.html          # app shell + Google Fonts
-│   ├── style.css           # CSS vars + all styles + animations
-│   ├── api.js              # apiFetch + all endpoint wrappers
-│   ├── player.js           # audio element + player state + scrubber
-│   ├── components.js       # renderSongCard, renderStatusPill, renderModal, renderToast
-│   ├── app.js              # hash router + page renderers + polling
-│   ├── nginx.conf          # SPA fallback + /api/ proxy
-│   └── Dockerfile          # FROM nginx:alpine, COPY, done
-├── tests/
-│   ├── unit/               # Mocked, SQLite — no Docker needed
-│   └── integration/        # Postgres via pytest-docker
-├── docker-compose.yml
-├── Dockerfile
-├── Makefile
-├── pyproject.toml
-└── example.env
-```
-
----
-
-## Service Ports
-
-| Service       | URL                        |
-| ------------- | -------------------------- |
-| UI            | http://localhost:3000      |
-| API           | http://localhost:8000      |
-| API Docs      | http://localhost:8000/docs |
-| MinIO Console | http://localhost:9001      |
-| Adminer (DB)  | http://localhost:8080      |
-| PostgreSQL    | localhost:5432             |
-| Redis         | localhost:6379             |
-
----
-
-## Key Design Decisions
-
-| Decision                                         | Reason                                                              |
-| ------------------------------------------------ | ------------------------------------------------------------------- |
-| Vanilla HTML/JS/CSS for UI                       | Zero build step; 2s Docker build; no Node/pnpm/WSL memory issues    |
-| nginx serves UI + proxies `/api/*`               | Single entry point; no CORS; `proxy_buffering off` for audio stream |
-| Hash routing (`#/`)                              | No server config needed for SPA; nginx serves index.html for all    |
-| Single `<audio>` element                         | Persistent player across hash navigation; no framework state needed |
-| ES modules (`type="module"`)                     | Clean imports without bundler; native browser support               |
-| UUID v7 for all PKs                              | String-sortable = chronological = natural cursor key for pagination |
-| Cursor pagination on `GET /songs`                | Stable under concurrent inserts; no offset drift                    |
-| Speed applied at stream time                     | Avoid storing per-speed variants in MinIO                           |
-| Chain `atempo` filters                           | FFmpeg `atempo` capped at `[0.5, 2.0]` per stage                    |
-| Trim before speed                                | Correct order — reduces data before re-encoding                     |
-| Preview endpoint is stateless                    | No DB writes; simpler system; worker re-probes as source of truth   |
-| API proxies MinIO stream                         | Presigned URLs signed to internal hostname break on host rewrite    |
-| Favorites idempotent (check-then-insert)         | Solo user; clean UX; avoids upsert complexity                       |
-| `is_favorite` queried per song                   | N+1 acceptable at MVP scale                                         |
-| Playlist ordering via `position`                 | Predictable playback; auto-increments on add                        |
-| `db.expire_all()` after playlist mutations       | Clears stale SQLAlchemy identity map state post-commit              |
-| Soft delete on `songs`, `favorites`, `playlists` | Safer than hard delete; preserves audit trail; `deleted_at` column  |
-| `playlist_songs` hard delete                     | Join table — no user-facing audit need; position logic unaffected   |
-| `_song_utils.py` shared serializer               | Eliminates duplicate `_serialize_song`; avoids circular import      |
-| `stream_url` status-driven, never null           | Client polls `GET /songs/{id}` until done, then hits stream         |
-| Health check probes Redis + MinIO                | Silent infra failure previously undetectable via `/health`          |
-| `docs_url=None` in production                    | Swagger not needed in prod; reduces attack surface                  |
-| No Alembic                                       | Solo project; `create_all()` on startup is sufficient               |
-| `APP_ENV`-driven env files                       | Clean separation: dev (localhost) / staging (Docker) / prod         |
-| `tasks.py` excluded from coverage                | Celery internals require live worker; covered by `make smoke`       |
-| Unit test isolation via `_truncate_all()`        | Savepoint rollback unreliable when endpoints call `db.commit()`     |
+All responses follow the envelope format except `/songs/{id}/stream`, `/metrics`, `/health` is enveloped (see `API_DOC.md`).

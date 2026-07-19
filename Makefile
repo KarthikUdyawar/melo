@@ -324,7 +324,7 @@ act-ci: ## Run full GitHub Actions pipeline locally
 	act --reuse --var ACT=true
 
 tree: ## Show project tree (respects .gitignore)
-	tree --gitignore -I '__pycache__|*.pyc|*.egg-info'
+	tree --gitignore -I '__pycache__|*.pyc|*.egg-info' > docs/PRROJECT.tree && echo 'Done'
 
 # ── Monitoring (OBS-0) ────────────────────────────────────────────────────────
 
@@ -362,7 +362,7 @@ logs-loki: ## Tail recent logs via Loki HTTP API
 		| python3 -c "import sys,json; [print(v[1]) for s in json.load(sys.stdin)['data']['result'] for v in s['values']]"
 
 admin: ## Open Streamlit admin in browser
-	`@open` http://localhost:8501 2>/dev/null || xdg-open http://localhost:8501
+	@open http://localhost:8501 2>/dev/null || xdg-open http://localhost:8501
 
 cadvisor-ids: ## Print cAdvisor container IDs for api and worker
 	@echo "api:   $$(docker inspect --format='{{.Id}}' melo-api-1)"

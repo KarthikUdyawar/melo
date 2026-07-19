@@ -427,9 +427,7 @@ CELERY_TASK_TRACK_STARTED=True
 | `make flower`     | Open Flower in browser                            |
 | `make admin`      | Open Streamlit admin in browser                   |
 | `make metrics`    | Curl `/metrics` endpoint                          |
-| `make alerts`     | List active Grafana alerts via API                |
 | `make logs-loki`  | Tail recent logs via Loki HTTP API                |
-| `make log-rotate` | Manually trigger log rotation in worker container |
 
 ---
 

@@ -6,17 +6,21 @@
 
 ## App Entry
 
+Health check and hash routing run **concurrently**, not sequentially — `checkApiHealth()` is fired without `await` in `bootstrap()`, so the app renders the current route immediately rather than waiting on `/health` first.
+
 ```mermaid
 flowchart TD
     A([Open localhost:3000]) --> B[Load index.html]
-    B --> C{GET /health}
-    C --unreachable--> D[Show API unavailable banner]
-    C --ok--> E{Read window.location.hash}
-    E --> F["#/ → Library"]
-    E --> G["#/favorites → Favorites"]
-    E --> H["#/playlists → Playlists"]
-    E --> I["#/playlists/:id → Playlist Detail"]
-    E --> J["(default) → Library"]
+    B --> C[bootstrap: bind player + global events]
+    C --> D["checkApiHealth() — fire and forget"]
+    C --> E{Read window.location.hash}
+    D --unreachable--> F[Show API unavailable banner\n— appears whenever it resolves]
+    D --ok/degraded--> G[No banner, or degraded-services banner]
+    E --> H["#/ → Library"]
+    E --> I["#/favorites → Favorites"]
+    E --> J["#/playlists → Playlists"]
+    E --> K["#/playlists/:id → Playlist Detail"]
+    E --> L["(default) → Library"]
 ```
 
 ---
@@ -25,7 +29,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A([Library page loads]) --> B["GET /songs\nsort=created_at desc, limit=50"]
+    A([Library page loads]) --> B["GET /songs\nsort_by=created_at, order=desc, limit=50"]
     B --> C{Songs exist?}
     C --no--> D["Empty state\n'No songs yet.' + Add Song button"]
     C --yes--> E[Render song list]
@@ -58,11 +62,13 @@ flowchart LR
 ```mermaid
 flowchart TD
     A([User clicks Load more]) --> B["GET /songs?after=bookmark"]
-    B --> C{bookmark returned?}
-    C --null--> D[Hide Load more button]
-    C --has value--> E[Append songs to list]
+    B --> C{"bookmark present AND\nfull page returned\n(records.length >= limit)?"}
+    C --no--> D[Hide Load more button\n— treated as end of results]
+    C --yes--> E[Append songs to list]
     E --> F[Update stored bookmark]
 ```
+
+> A non-null `bookmark` alone isn't enough to keep paging — a short page (fewer records than `limit`) is also treated as the end, even if the API returned a bookmark.
 
 ---
 
@@ -74,20 +80,21 @@ flowchart TD
     B --> C[User pastes YouTube URL]
     C --> D{Input empty?}
     D --yes--> E[Preview button disabled]
-    D --no--> F([User clicks Preview])
-    F --> G["POST /songs/preview"]
-    G --> H{Result}
-    H --422/502--> I[Show inline error]
-    I --> C
-    H --200--> J[Step 2: show thumbnail\ntitle · channel · duration]
-    J --> K[User adjusts start / end / speed]
-    K --> L{Action}
-    L --Cancel--> M[Close modal]
-    L --Add to Melo--> N["POST /songs\n{ url, start?, end?, speed? }"]
-    N --> O[Modal closes]
-    O --> P[Song in library — status: pending]
-    P --> Q[Poll: pending → processing → done]
-    Q --> R[Song card becomes playable]
+    D --no--> F([User clicks Preview or presses Enter])
+    F --> G[Step 1 shows spinner: field disabled, 'Fetching…']
+    G --> H["POST /songs/preview"]
+    H --> I{Result}
+    I --422/502--> J[Re-show Step 1 with inline error\n+ URL preserved, field re-enabled]
+    J --> C
+    I --200--> K[Step 2: show thumbnail\ntitle · channel · duration]
+    K --> L[User adjusts start / end / speed]
+    L --> M{Action}
+    M --Cancel--> N[Close modal]
+    M --Add to Melo--> O["POST /songs\n{ url, start?, end?, speed? }"]
+    O --> P[Modal closes]
+    P --> Q[Song in library — status: pending]
+    Q --> R[Poll: pending → processing → done]
+    R --> S[Song card becomes playable]
 ```
 
 ---
@@ -97,14 +104,15 @@ flowchart TD
 ```mermaid
 flowchart TD
     A([User clicks song card]) --> B{Song status}
-    B --pending/processing--> C[No action — card not interactive]
-    B --failed--> D[Show Retry button]
-    B --done--> E["player.loadSong(song)"]
-    E --> F["audio.src = /api/songs/id/stream\naudio.play()"]
-    F --> G[Player bar: thumbnail + title + channel]
-    G --> H[Scrubber starts moving]
-    H --> I[Active card: accent border + accent title]
+    B --pending/processing/failed--> C[No action — card not interactive\ndata-playable=false]
+    B --done--> D["player.loadSong(song)"]
+    D --> E["audio.src = /api/songs/id/stream\naudio.play()"]
+    E --> F[Player bar: thumbnail + title + channel]
+    F --> G[Scrubber starts moving]
+    G --> H[Active card: accent border + accent title]
 ```
+
+> The **Retry** button on failed songs is a separate always-visible control next to the status pill, not something surfaced by clicking the card.
 
 ### 3a. Player Controls
 
@@ -114,11 +122,13 @@ flowchart LR
     B --yes--> C[audio.play]
     B --no--> D[audio.pause]
 
-    E([Scrubber dragged]) --> F[audio.currentTime = scrubber.value]
+    E([Scrubber dragged]) --> F[audio.currentTime = scrubber.value on release]
     G([audio.ontimeupdate]) --> H[scrubber.value = audio.currentTime]
 
-    I([Song ends]) --> J[Reset play button]
+    I([Song ends]) --> J[Reset play icon + scrubber to 0]
 ```
+
+> Space only toggles play/pause when focus isn't on an `<input>` or `<select>`.
 
 ---
 
@@ -168,7 +178,7 @@ flowchart TD
     F --clicks + New Playlist--> H[Inline name input appears]
     H --> I[User types name + Enter]
     I --> J["POST /playlists { name }"]
-    J --> K[New card added to grid]
+    J --> K[Re-fetch full playlist grid\n— not just an append]
 ```
 
 ---
@@ -184,7 +194,7 @@ flowchart TD
     E --> F{User action}
     F --clicks song--> G[Play song]
     F --clicks remove--> H["DELETE /playlists/:id/songs/:song_id"]
-    H --> I[Re-render playlist]
+    H --> I[Re-fetch and re-render playlist detail]
 ```
 
 ---
@@ -195,14 +205,18 @@ flowchart TD
 flowchart TD
     A([User clicks ⋮ on song card]) --> B[Dropdown opens]
     B --> C{User picks}
-    C --existing playlist--> D["POST /playlists/:id/songs/:song_id"]
-    D --> E["Toast: 'Added to playlist name'"]
-    C --+ New playlist--> F[Inline name input in dropdown]
-    F --> G[User types name + Enter]
-    G --> H["POST /playlists { name }"]
+
+    C -- Existing playlist --> D["POST /playlists/:id/songs/:song_id"]
+    D --> E["Toast: Added to playlist 'My Playlist'"]
+
+    C -- New playlist --> F["window.prompt() for playlist name"]
+    F -- Cancel --> G[No action]
+    F -- Name entered --> H["POST /playlists { name }"]
     H --> I["POST /playlists/:new_id/songs/:song_id"]
-    I --> J["Toast: 'Added to new playlist name'"]
+    I --> J["Toast: Added to playlist 'Road Trip'"]
 ```
+
+> "+ New playlist" does **not** open an inline text field inside the dropdown — it triggers a native `window.prompt()` dialog.
 
 ---
 
@@ -214,11 +228,14 @@ flowchart TD
     B --> C{User choice}
     C --Cancel--> D[Close dialog]
     C --Delete--> E["DELETE /songs/:id"]
-    E --> F[Song removed from list]
-    F --> G{Was playing?}
-    G --yes--> H[Player bar clears]
-    G --no--> I[Done]
+    E --> F[Modal closes, toast shown]
+    F --> G{Was this song loaded\nin the player?}
+    G --yes--> H["Player bar visually hidden\n(.player-bar--empty added)"]
+    G --no--> I[Re-render current page via router]
+    H --> I
 ```
+
+> Deleting the currently-loaded song hides the player bar with CSS but does **not** stop playback or clear the `<audio>` element's source — if it was already playing, audio can keep playing in the background with the bar hidden.
 
 ---
 
@@ -229,13 +246,18 @@ flowchart TD
     A([Any API action fails]) --> B["Toast: error message\n(red, 3s auto-dismiss)"]
 
     C([Song status = failed]) --> D["Card: red 'failed' pill + Retry button"]
-    D --> E([User clicks Retry])
-    E --> F["POST /songs same url+params"]
-    F --> G[Restart add song flow]
+    D --> E([User clicks Retry — no modal shown])
+    E --> F["GET /songs/:id → rebuild youtube.com URL\nfrom stored youtube_id + start/end/speed"]
+    F --> G["POST /songs with same params\n(quiet resubmit, new song id)"]
+    G --> H{Submit succeeded?}
+    H --yes--> I["DELETE /songs/:id\n(old failed record removed)"]
+    H --no--> J[Toast: error — old failed record kept]
 
-    H([API unreachable on load]) --> I["Red banner:\n'Cannot reach API. Is the server running?'"]
-    I --> J[Banner persists until page refresh]
+    K([API unreachable on load]) --> L["Red banner:\n'Cannot reach API. Is the server running?'"]
+    L --> M[Banner persists until page refresh]
 ```
+
+> Retry never reopens the Add Song modal. It silently re-submits the same URL/trim/speed as a brand-new song (new ID) and only deletes the old failed record **after** the resubmit succeeds, so a failed retry never loses the original record.
 
 ---
 
@@ -274,8 +296,8 @@ flowchart LR
 
 ## Keyboard Shortcuts
 
-| Key     | Action                                   |
-| ------- | ---------------------------------------- |
-| `Space` | Play / pause current song                |
-| `Esc`   | Close modal or dropdown                  |
-| `Enter` | Submit inline input (playlist name, URL) |
+| Key     | Action                                                                                              |
+| ------- | --------------------------------------------------------------------------------------------------- |
+| `Space` | Play / pause current song (ignored while focus is in an `<input>`/`<select>`)                       |
+| `Esc`   | Close modal. **Does not** close the song-card dropdown menu — that only closes on an outside click. |
+| `Enter` | Submit inline input (playlist name field, Add Song URL step)                                        |

@@ -1,118 +1,40 @@
-# Melo — Sprint 5 Handoff
+# Handoff — Melo docs cleanup (ROADMAP/TODO/DECISIONS/README/CHANGELOG)
 
-**Date:** 2026-06-07  
-**Sprint:** 5 — Observability & Monitoring  
-**Repo:** `KarthikUdyawar/melo`  
-**Branch:** `develop` base → feature branches → PR
+## Context
 
----
+Repo: `KarthikUdyawar/melo`, branch `feature/observability-stack`. Solo project, self-hosted YouTube→mp3 library (FastAPI/Celery/Postgres/Redis/MinIO, vanilla JS UI, full observability stack). Sprint 5 (Observability) is **done and verified** — 425 tests passing, 91% coverage, all manual runtime checks confirmed by Karthik (Grafana dashboards, Tempo traces, Pyroscope flame graph, log rotation → MinIO, Telegram alert firing).
 
-## Sprint 5 Status
+Conventions in effect: **caveman ultra**, **clean-code**, **TDD**. Terse responses, minimal-diff fixes, complete copy-ready files on request.
 
-| Ticket | Title                            | Status                         |
-| ------ | -------------------------------- | ------------------------------ |
-| OBS-0  | Docker Compose Infra             | ✅ Done                         |
-| OBS-1  | Structured Logging               | ✅ Done                         |
-| OBS-2  | Metrics                          | ✅ Done                         |
-| OBS-3  | Distributed Tracing              | ✅ Done                         |
-| OBS-4  | Grafana Dashboards & Alerting    | ✅ Done (rules.yml fix applied) |
-| OBS-5  | Continuous Profiling (Pyroscope) | ✅ Done                         |
-| OBS-6  | Streamlit Admin Dashboard        | ✅ Done                         |
-| OBS-7  | Tests & Smoke                    | ⬜ NOT STARTED — next session   |
+## What this session did
 
----
+Created/updated 5 docs, all currently in `/mnt/user-data/outputs/` (not yet placed in the actual repo by Karthik):
 
-## What Was Done This Session
+1. **`docs/ROADMAP.md`** (new) — sprint-by-sprint history built from `docs/sprints/Sprint-1.md`…`Sprint-5.md`. Sprint 5 marked done. Sprint 6+ explicitly unscoped.
+2. **`docs/TODO.md`** (new) — replaces scattered per-sprint checkboxes. Down to near-empty after this session.
+3. **`docs/DECISIONS.md`** (rewrite) — regrouped the existing category-based decision log into sprint-based sections (Sprint 1–5), using each sprint doc's own decision log as ground truth.
+4. **`README.md`** (rewrite) — added Observability section, new ports table, new Makefile targets, updated folder structure (`admin/`, `infra/`), updated test counts (425 tests, 91% coverage), links out to `docs/DECISIONS.md`/`ROADMAP.md`/`TODO.md`.
+5. **`CHANGELOG.md`** (rewrite) — backfilled `0.3.0` (Sprint 3, finalized from "Unreleased"), `0.4.0` (Sprint 4 UI — previously had zero changelog entry), `0.5.0` (Sprint 5 Observability).
 
-### OBS-4 fix
-`infra/grafana/provisioning/alerting/rules.yml` — all 8 alert rules were missing `relativeTimeRange` on every `data` block. Grafana 13 rejects `{from: 0, to: 0}`. Fixed: add `relativeTimeRange: { from: 600, to: 0 }` (7200 for log-backup-gap) to every query node and expression node.
+## Decisions made (don't re-litigate these)
 
-### OBS-5 — Pyroscope SDK
-- New: `app/core/profiling.py` — `configure_pyroscope(app_name)`, no-ops if `PYROSCOPE_SERVER_URL` unset
-- `app/main.py` — calls `configure_pyroscope("melo.api")` inside lifespan after `configure_tracing`
-- `app/workers/celery_app.py` — calls `configure_pyroscope("melo.worker")` inside `on_worker_init`
-- `pyproject.toml` — add `"pyroscope-io>=0.8.0"` to `[project] dependencies`, then `uv lock && uv sync`
+- **Versioning resolved**: `pyproject.toml` bumped to `0.5.0` by Karthik to match CHANGELOG's `0.3.0 -> 0.4.0 -> 0.5.0` progression. Settled — CHANGELOG's version-mismatch note has been removed.
+- **`make alerts` / `make log-rotate`**: promised in the original PRD/Sprint-5 doc but never implemented in the actual Makefile. Decision: dropped from docs entirely rather than implemented (removed from CHANGELOG's "Known limitations" section). If Karthik later adds these targets for real, docs will need the entries added back.
+- **`make admin` Makefile bug**: backticks around `@open` in the `admin:` target (`` `@open` http://localhost:8501 ``) — broken vs. the working `grafana`/`flower` pattern. Fix given to Karthik:
+  ```makefile
+  admin: ## Open Streamlit admin in browser
+  	@open http://localhost:8501 2>/dev/null || xdg-open http://localhost:8501
+  ```
+  Karthik said "done" — presumably applied. Not verified with code in this session, only confirmed verbally.
 
-### OBS-6 — Streamlit Admin
-Full `admin/` directory delivered:
-- `auth.py` — `is_authenticated()`, `login_page()` with `ADMIN_PASSWORD` env check
-- `app.py` — login gate, sidebar nav, page dispatch via `exec`, logout button
-- `pages/overview.py` — health badges + 4 Prometheus metric cards
-- `pages/songs.py` — paginated song table, status breakdown, re-queue button for failed
-- `pages/logs.py` — Loki `query_range` tail, service + level filters
-- `pages/metrics.py` — free-form PromQL input + 5 preset buttons
-- `pages/alerts.py` — Grafana Alertmanager firing alerts + all rules table
-- `pages/db_health.py` — postgres-exporter + redis-exporter metrics side by side
-- `Dockerfile` — `FROM python:3.12-slim`, `requirements.txt`, `streamlit run app.py`
-- `requirements.txt` — `streamlit>=1.35.0`, `requests>=2.32.0`
+## Open items
 
-Docker Compose: add `admin` service to `infra/docker-compose.monitoring.yml` (snippet delivered).  
-Makefile: add `make admin` target.
+- `docs/TODO.md` is now essentially empty (just a Sprint 6+ placeholder). Nothing blocking.
+- Nothing else outstanding from this thread.
 
----
+## For the next session
 
-## Outstanding Items for Next Session
-
-### OBS-7 — Tests & Smoke (the only remaining ticket)
-
-**Unit tests** (all files already exist in `tests/unit/`, contents unknown — verify before writing):
-- `test_admin_auth.py` — NEW: 3 behaviors
-  - `is_authenticated()` returns `False` when session key absent (mock `st.session_state`)
-  - `login_page()` sets `authenticated=True` on correct password (mock env + session)
-  - `login_page()` leaves session unauthenticated on wrong password
-
-Existing test files to check pass (may already be complete from earlier sessions):
-- `test_log_events.py`, `test_logging.py`, `test_log_manager.py`, `test_tracing.py`, `test_metrics_unit.py`, `test_middleware_health.py`
-- `tests/integration/test_metrics_api.py`, `tests/integration/test_tracing_api.py`
-
-**Smoke test additions** (`tests/smoke_test.sh`):
-- S25: `GET /metrics` returns 200
-- S26: Any API response has `X-Trace-Id` header
-
-**Coverage:** must stay ≥ 80% (was 94.77%). Add `app/core/profiling.py` to coverage source; it will be mostly covered by the no-op branch in unit tests.
-
-**Definition of Done checks** still open:
-- `GET /metrics` 200 + custom metric names present → covered by `test_metrics_api.py`
-- `X-Trace-Id` on every response → covered by `test_tracing_api.py`
-- Smoke S25/S26 pass
-- Coverage ≥ 80%
-- `README.md` update: new ports table, new `make` targets, observability section
-- `CHANGELOG.md` entry for v0.4.0 (Sprint 5)
-- `docs/sprints/Sprint-5.md` — mark OBS-7 done after tests pass
-
----
-
-## Key Files Changed This Sprint
-
-```
-app/core/profiling.py          NEW
-app/core/log_events.py         NEW
-app/core/log_manager.py        NEW
-app/core/logging.py            REWRITE
-app/core/metrics.py            NEW
-app/core/tracing.py            NEW
-app/main.py                    MODIFIED (tracing + profiling + metrics)
-app/workers/celery_app.py      MODIFIED (tracing + profiling)
-admin/                         NEW (entire directory)
-infra/                         NEW (entire directory)
-infra/grafana/provisioning/alerting/rules.yml  FIXED (relativeTimeRange)
-```
-
----
-
-## Known Gotchas
-
-- `relativeTimeRange` required on **every** data block in Grafana 13 alert rules — `{from:0, to:0}` crashes provisioning
-- `pyroscope-io` must be in `pyproject.toml` deps and `uv sync` run; otherwise `configure_pyroscope` logs and no-ops
-- Streamlit `admin/app.py` uses `exec()` for page dispatch — ruff `S102` noqa needed
-- Admin container service name in compose must be `admin` (not `streamlit`) to match PRD
-- `CELERY_SEND_EVENTS=True` + `CELERY_TASK_TRACK_STARTED=True` still need to be added to worker env in `docker-compose.yml` (OBS-0 outstanding checkbox)
-- `example.env` additions (`GRAFANA_ADMIN_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ADMIN_PASSWORD`, log rotation vars, `PYROSCOPE_SERVER_URL`) still need to be verified as present
-
----
-
-## Skills for Next Session
-
-- `/tdd` — OBS-7 test writing
-- `/clean-code` — standard
-- `/caveman ultra` — output style
+- If Karthik shares the actual repo/PR diff, verify the 5 docs above landed correctly and the `make admin` fix was applied as given.
+- Sprint 6 has no defined scope yet. If Karthik starts planning it, expect a new `docs/sprints/Sprint-6.md`, at which point `ROADMAP.md` and `TODO.md` need updating again (same pattern as this session: read sprint doc, extract unchecked items, regenerate).
+- Recommended skills for continuation: `caveman` (ultra), `clean-code`, `tdd` — matches Karthik's standing preference (also in memory).
+- This session was pure documentation — no application code was written or modified. If next session involves real code changes (e.g. actual `make alerts`/`log-rotate` implementation), read `/mnt/skills/user/tdd/SKILL.md` first per Karthik's TDD convention.

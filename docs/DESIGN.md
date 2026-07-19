@@ -137,7 +137,26 @@ Horizontal layout. Thumbnail left (48×48, rounded-sm), title + metadata right, 
 - Active/playing song: left border 2px `--accent`, title color `--accent`
 - Hover: `--bg-elevated` background (CSS `:hover`)
 - Status pill inline for `pending` / `processing` / `failed`
+- Failed songs show an inline **Retry button** (`.btn--retry`, `↺ Retry`) next to the status pill — outlined in `--danger`, resubmits via `POST /songs`
 - Rendered as HTML string by `renderSongCard()` in `components.js`
+
+### Overflow Menu (Song Card `⋮`)
+
+Dropdown anchored to the song card's `⋮` icon button (`.dropdown` / `.dropdown__menu`), opened/closed via click and closed automatically on outside click.
+
+```
+┌────────────────────────┐
+│  Morning Mix           │
+│  Focus                 │
+│  + New playlist        │
+│  ─────────────────     │
+│  Delete                │
+└────────────────────────┘
+```
+
+- Lists existing playlists (add song to playlist), then a `+ New playlist` entry, then a divider, then a destructive **Delete** item (`--danger` color)
+- Positioned `absolute`, right-aligned under the trigger, fades in 80ms
+- Rendered inline as part of `renderSongCard()` — not a separate component function
 
 ### Player Bar
 
@@ -154,10 +173,11 @@ Fixed bottom. Full width. Three zones:
 - Progress bar: `<input type="range">` styled with accent color thumb
 - `player.js` syncs scrubber via `audio.ontimeupdate`
 - Hidden (`player-bar--empty` class) when no song loaded
+- Title/channel swap instantly on song change — no transition applied (see Motion table)
 
 ### Add Song Modal
 
-Full-screen overlay. Two-step flow managed in `app.js`.
+Full-screen overlay. Two-step flow managed in `app.js`. Built via inline HTML-string builders (`buildStep1Html`, `buildStep1LoadingHtml`, `showStep2`) — there is no `renderModal()` helper in `components.js`.
 
 **Step 1 — URL input:**
 ```
@@ -169,6 +189,19 @@ Full-screen overlay. Two-step flow managed in `app.js`.
 │                          [Preview]  │
 └─────────────────────────────────────┘
 ```
+- Inline error text (`.modal__error`) appears under the field on invalid URL or a failed preview fetch (e.g. 422/502 from `POST /songs/preview`), and the field/button re-enable for retry.
+
+**Step 1 (loading) — while metadata fetches:**
+```
+┌─────────────────────────────────────┐
+│  Paste YouTube URL                  │
+│  ┌─────────────────────────────┐    │
+│  │ https://youtube.com/... (disabled)
+│  └─────────────────────────────┘    │
+│                    [⟳ Fetching…]    │
+└─────────────────────────────────────┘
+```
+- URL input disabled, submit button replaced with a spinner (`.spinner`, CSS `spin` keyframe, 0.8s linear infinite) + "Fetching…" label.
 
 **Step 2 — Preview + params:**
 ```
@@ -186,6 +219,23 @@ Full-screen overlay. Two-step flow managed in `app.js`.
 - Modal open/close: opacity + `scale(0.97→1)`, 120ms
 - `Esc` closes modal (keydown listener in `app.js`)
 
+### Confirm Dialog
+
+Reused for both **Delete Song** and **Delete Playlist** — same modal shell (`.modal.confirm-dialog`), centered text, destructive confirm button.
+
+```
+┌─────────────────────────────────────┐
+│           Delete Song                │
+│  Delete this song? This cannot be   │
+│  undone.                             │
+│                                       │
+│  [Cancel]              [Delete]      │
+└─────────────────────────────────────┘
+```
+
+- `[Delete]` uses `.btn--danger`
+- Built inline via `confirmDeleteSong()` / `confirmDeletePlaylist()` in `app.js`, not a shared component function
+
 ### Status Pill
 
 ```
@@ -200,28 +250,52 @@ Rendered by `renderStatusPill(status)` in `components.js`. Returns empty string 
 ### Sidebar Nav
 
 ```
-  ◉ melo
+  melo
 
-  ▸ Library
-  ▸ Favorites
-  ▸ Playlists
+  Library
+  Favorites
+  Playlists
 
   [+ Add Song]   ← accent button, bottom of sidebar
 ```
 
-Active link detected via `window.location.hash`. Active: left border 2px `--accent`, text `--text-primary`. Inactive: `--text-secondary`.
+Plain text nav links — no bullet/icon glyphs in the markup. Active link detected via `window.location.hash`. Active: left border 2px `--accent`, text `--text-primary`. Inactive: `--text-secondary`.
 
 ### Toast
 
-Slide up from bottom, 3s auto-dismiss.
+Slides up from just above the player bar (`bottom: 88px`, not the viewport edge), 3s auto-dismiss. Stacks multiple toasts vertically via `#toast-root` flex column.
 
 ```
 ┌─────────────────────┐
-│  ✓  Added to Melo   │
+│  Added to Melo      │
 └─────────────────────┘
 ```
 
-Rendered by `renderToast(message, type)` in `components.js`. Appended to `<body>`, removed after 3s.
+- Rendered by `renderToast(message, type)` in `components.js`. Appended to `#toast-root`, removed after 3s.
+- `type: 'error'` applies `.toast--error` — red border and red text — used for failed API actions (delete, favorite toggle, playlist ops, etc).
+
+### Health Banner
+
+Full-width fixed banner at the very top of the viewport (`.health-banner`, `--danger` background, white text). Shown on boot if `GET /health` is unreachable or reports non-`ok` status. Persists until the page is refreshed (no dismiss button).
+
+```
+┌──────────────────────────────────────────────────────┐
+│      Cannot reach API. Is the server running?        │
+└──────────────────────────────────────────────────────┘
+```
+
+### Playlist Card
+
+```
+┌─────────────────────────┐
+│  Morning Mix        ✕  │
+│  3 songs                │
+└─────────────────────────┘
+```
+
+- Rendered by `renderPlaylistCard()` in `components.js`
+- Whole card is clickable → navigates to playlist detail
+- Inline `✕` delete icon button (`.icon-btn--danger`) in the corner opens the Confirm Dialog
 
 ---
 
@@ -235,10 +309,12 @@ Minimal. Nothing decorative.
 | Modal open/close          | Opacity + scale(0.97→1), 120ms      |
 | Song card hover           | Background transition, 80ms         |
 | Status pulse (processing) | Dot opacity 0.4→1, 1s infinite      |
-| Player bar song change    | Title fade out/in, 100ms            |
-| Toast notification        | Slide up from bottom, 200ms         |
+| Toast notification        | Slide up + fade in, 200ms           |
+| Dropdown menu open        | Fade in, 80ms                       |
+| Loading skeleton          | Background shimmer, 1.5s infinite   |
+| Add Song preview spinner  | Rotate 360°, 0.8s linear infinite   |
 
-No bounces. No spring physics. No page transitions.
+No bounces. No spring physics. No page transitions. Player bar title/channel swap instantly on song change with no transition — not animated, despite earlier plans.
 
 ---
 
@@ -332,11 +408,20 @@ ui/
   style.css       # :root tokens + all component styles + animations
   api.js          # apiFetch() + all endpoint wrappers (export)
   player.js       # loadSong(), play(), pause(), scrubber sync (export)
-  components.js   # renderSongCard(), renderStatusPill(), renderModal(), renderToast() (export)
-  app.js          # hash router, page renderers, polling, event delegation
+  components.js   # renderSongCard(), renderStatusPill(), renderPlaylistCard(), renderToast() (export)
+  app.js          # hash router, page renderers, polling, event delegation,
+                  #   modal markup (Add Song, Confirm Dialog) built inline here
   nginx.conf
   Dockerfile
 ```
+
+> Note: modal markup (Add Song flow, delete confirmations) is **not** a `renderModal()` export from `components.js` — it's built as inline HTML-string builders inside `app.js` (`buildStep1Html`, `buildStep1LoadingHtml`, `showStep2`, `confirmDeleteSong`, `confirmDeletePlaylist`).
+
+---
+
+## Admin Dashboard (out of scope for this spec)
+
+Melo also ships a separate **Streamlit-based admin dashboard** (`admin/`) for observability — health overview, song status/re-queue, live logs (Loki), metrics (Prometheus), alerts (Grafana), and DB health (Postgres/Redis exporters). It uses Streamlit's own theming rather than the tokens on this page and is not part of the main Melo UI. See `PRD.md` / `Sprint-5.md` for its design and page breakdown.
 
 ---
 
