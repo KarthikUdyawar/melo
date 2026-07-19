@@ -156,6 +156,7 @@ class TestPollSongStatusGauge:
                 "app.core.db.get_session_factory",
                 return_value=lambda: db_session,
             ),
+            patch.object(db_session, "close"),
             patch("app.core.metrics.songs_by_status_total") as mock_gauge,
         ):
             _poll_song_status_gauge()
@@ -172,6 +173,7 @@ class TestPollSongStatusGauge:
                 "app.core.db.get_session_factory",
                 return_value=lambda: db_session,
             ),
+            patch.object(db_session, "close"),
             patch("app.core.metrics.songs_by_status_total") as mock_gauge,
         ):
             _poll_song_status_gauge()
@@ -198,6 +200,7 @@ class TestPollSongStatusGauge:
                 "app.core.db.get_session_factory",
                 return_value=lambda: db_session,
             ),
+            patch.object(db_session, "close"),
             patch("app.core.metrics.songs_by_status_total") as mock_gauge,
         ):
             label_mocks: dict[str, MagicMock] = {}

@@ -23,8 +23,8 @@ PRESETS = {
 }
 
 
-def _run_query(expr: str) -> list[dict[str, Any]]:
-    """Execute a Prometheus instant query and return the result list."""
+def _run_query(expr: str) -> tuple[str, list[dict[str, Any]]]:
+    """Execute a Prometheus instant query and return (resultType, result list)."""
     try:
         response = requests.get(
             f"{PROMETHEUS_URL}/api/v1/query",
@@ -33,11 +33,13 @@ def _run_query(expr: str) -> list[dict[str, Any]]:
         )
         response.raise_for_status()
 
-        result = response.json().get("data", {}).get("result", [])
-        return cast(list[dict[str, Any]], result)
+        data = response.json().get("data", {})
+        result_type = cast(str, data.get("resultType", ""))
+        result = cast(list[dict[str, Any]], data.get("result", []))
+        return result_type, result
 
     except Exception:  # noqa: BLE001
-        return []
+        return "", []
 
 
 st.header("Metrics")
@@ -64,9 +66,17 @@ query = st.text_input(
 )
 
 if query:
-    results = _run_query(query)
+    result_type, results = _run_query(query)
 
-    if not results:
+    if result_type != "vector":
+        if not results and not result_type:
+            st.warning("No data returned.")
+        else:
+            st.warning(
+                f"Unsupported query result type: '{result_type or 'unknown'}'. "
+                "Only instant-vector queries are supported here."
+            )
+    elif not results:
         st.warning("No data returned.")
     else:
         rows: list[dict[str, str]] = []
@@ -75,10 +85,7 @@ if query:
             metric = cast(dict[str, str], item["metric"])
             value = cast(list[Any], item["value"])[1]
 
-            metric_labels = ", ".join(
-                f'{key}="{val}"'
-                for key, val in metric.items()
-            )
+            metric_labels = ", ".join(f'{key}="{val}"' for key, val in metric.items())
 
             rows.append(
                 {

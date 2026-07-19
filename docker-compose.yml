@@ -146,6 +146,5 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
-  worker_tmp:
   melo_melo_logs:
     name: melo_melo_logs

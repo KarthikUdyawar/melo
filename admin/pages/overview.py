@@ -74,8 +74,8 @@ st.subheader("Key Metrics")
 mcols = st.columns(4)
 
 metrics = {
-    "Songs (done)": 'songs_by_status_total{status="done"}',
-    "Songs (processing)": 'songs_by_status_total{status="processing"}',
+    "Songs (done)": 'songs_by_status{status="done"}',
+    "Songs (processing)": 'songs_by_status{status="processing"}',
     "Queue depth": "celery_queue_depth",
     "Active tasks": "celery_active_tasks",
 }

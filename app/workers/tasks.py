@@ -249,6 +249,7 @@ def _mark_failed(db: Session, song: Song) -> None:
 @contextmanager
 def _trace_context(headers: dict[str, Any] | None) -> Iterator[None]:
     """Attach OTEL context from headers, detach on exit."""
+    token = None
     try:
         from opentelemetry import context
         from opentelemetry.propagate import extract
@@ -256,13 +257,16 @@ def _trace_context(headers: dict[str, Any] | None) -> Iterator[None]:
         carrier = dict(headers) if headers is not None else {}
         ctx = extract(carrier)
         token = context.attach(ctx)
-        try:
-            yield
-        finally:
-            context.detach(token)
     except Exception:
         logger.debug(
             "Failed to restore OpenTelemetry trace context",
             headers=headers is not None,
             exc_info=True,
         )
+
+    try:
+        yield
+    finally:
+        if token is not None:
+            from opentelemetry import context
+            context.detach(token)

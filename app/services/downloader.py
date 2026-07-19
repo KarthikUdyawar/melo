@@ -145,6 +145,7 @@ def download_audio(url: str, song_id: str) -> tuple[Path, float | None]:
             "retries": 3,
             "socket_timeout": 30,
             "noplaylist": True,
+            "extractor_args": {"youtube": {"skip": ["hls", "dash"]}},
         }
 
         logger.info(LogEvent.DOWNLOAD_STARTED, song_id=song_id, url=url)

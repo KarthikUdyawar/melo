@@ -67,7 +67,7 @@ def _make_song_in_db(client: TestClient, db_session) -> str:
         created_at=datetime.now(UTC),
     )
     db_session.add(song)
-    db_session.commit()
+    db_session.flush()
     db_session.refresh(song)
     return str(song.id)
 

@@ -195,6 +195,7 @@ class LogManager:
         except Exception:
             # Active file + handler are already restored above — a failed
             # gzip/upload never leaves the service unable to log.
+            gz_path.unlink(missing_ok=True)
             raise
 
         # 6. Log events

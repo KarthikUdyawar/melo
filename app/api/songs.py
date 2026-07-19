@@ -146,8 +146,6 @@ def preview_song(payload: PreviewRequest) -> JSONResponse:
     """Fetch YouTube metadata (title, duration, thumbnail) without any DB write."""
     from app.services.downloader import DownloadError, probe_metadata
 
-    logger.info(LogEvent.PREVIEW_FETCHED, url=payload.url)
-
     try:
         youtube_id = extract_youtube_id(payload.url)
     except ValueError as exc:
@@ -161,6 +159,8 @@ def preview_song(payload: PreviewRequest) -> JSONResponse:
             status_code=502, detail=f"Failed to fetch metadata: {exc}"
         ) from exc
 
+    logger.info(LogEvent.PREVIEW_FETCHED, url=payload.url, youtube_id=youtube_id)
+
     preview = SongPreviewResponse(
         youtube_id=youtube_id,
         title=meta.get("title"),
@@ -172,7 +172,6 @@ def preview_song(payload: PreviewRequest) -> JSONResponse:
     return envelope_response(
         preview.model_dump(mode="json"), "Metadata fetched successfully."
     )
-
 
 @router.post(
     "",
@@ -464,6 +463,7 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
 
     # ── Case 1: no processing — proxy MinIO directly, forwarding Range header ─
     if not has_trim and not has_speed:
+        from contextlib import ExitStack
         from datetime import timedelta
 
         import httpx
@@ -487,22 +487,21 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
 
         timeout = httpx.Timeout(connect=5.0, read=None, write=30.0, pool=30.0)
 
+        stack = ExitStack()
+        success = False
         try:
-            client_cm = httpx.Client(timeout=timeout)
-            http_client = client_cm.__enter__()
+            http_client = stack.enter_context(httpx.Client(timeout=timeout))
 
-            stream_cm = http_client.stream(
-                "GET",
-                presigned,
-                headers=headers,
-                follow_redirects=False,
+            upstream = stack.enter_context(
+                http_client.stream(
+                    "GET",
+                    presigned,
+                    headers=headers,
+                    follow_redirects=False,
+                )
             )
 
-            upstream = stream_cm.__enter__()
-
             if upstream.status_code not in (200, 206):
-                stream_cm.__exit__(None, None, None)
-                client_cm.__exit__(None, None, None)
                 logger.error(
                     LogEvent.SONG_STREAM_FAILED,
                     song_id=str(song_id),
@@ -523,8 +522,9 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
                 if h in upstream.headers:
                     response_headers[h] = upstream.headers[h]
 
+            success = True
+
         except httpx.HTTPError as exc:
-            client_cm.__exit__(None, None, None)
             logger.error(
                 LogEvent.SONG_STREAM_FAILED, song_id=str(song_id), error=str(exc)
             )
@@ -532,13 +532,15 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
                 status_code=502,
                 detail=f"Failed to fetch audio from storage: {exc}",
             ) from exc
+        finally:
+            if not success:
+                stack.close()
 
         def stream_and_close() -> Iterator[bytes]:
             try:
                 yield from upstream.iter_bytes()
             finally:
-                stream_cm.__exit__(None, None, None)
-                client_cm.__exit__(None, None, None)
+                stack.close()
                 stream_duration_seconds.observe(time.monotonic() - stream_start)
 
         return StreamingResponse(
@@ -626,7 +628,7 @@ def stream_song(song_id: UUID, db: DbDep, request: Request) -> Response:
             background=BackgroundTask(_cleanup),
         )
 
-    except HTTPException:
+    except Exception:
         for p in created_paths:
             p.unlink(missing_ok=True)
         raise

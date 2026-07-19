@@ -86,7 +86,11 @@ export function togglePlayPause() {
     audio.paused ? play() : pause();
 }
 
-/** @returns {typeof currentSong} */
+export function getCurrentSongId() {
+    return currentSong?.id ?? null;
+}
+
+/** `@returns` {typeof currentSong} */
 export function getCurrentSong() {
     return currentSong;
 }

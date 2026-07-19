@@ -87,8 +87,8 @@ def create_app() -> FastAPI:
         redoc_url=None if settings.is_production else "/redoc",
     )
 
-    app.add_middleware(TraceIdMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(TraceIdMiddleware)
 
     app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
     app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
