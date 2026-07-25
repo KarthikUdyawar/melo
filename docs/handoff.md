@@ -1,53 +1,40 @@
-# Melo — Handoff
+# Handoff — Melo docs cleanup (ROADMAP/TODO/DECISIONS/README/CHANGELOG)
 
-**Repo:** `KarthikUdyawar/melo`
-**Branch:** `feature/api-polish` (API-3 complete)
-**Sprint doc:** `docs/sprints/Sprint-3.md`
+## Context
 
----
+Repo: `KarthikUdyawar/melo`, branch `feature/observability-stack`. Solo project, self-hosted YouTube→mp3 library (FastAPI/Celery/Postgres/Redis/MinIO, vanilla JS UI, full observability stack). Sprint 5 (Observability) is **done and verified** — 425 tests passing, 91% coverage, all manual runtime checks confirmed by Karthik (Grafana dashboards, Tempo traces, Pyroscope flame graph, log rotation → MinIO, Telegram alert firing).
 
-## State
+Conventions in effect: **caveman ultra**, **clean-code**, **TDD**. Terse responses, minimal-diff fixes, complete copy-ready files on request.
 
-Sprint 3 is **done**. All API-3 slices (1–7) are implemented and the test suite is green.
+## What this session did
 
-Two housekeeping tasks remain before closing the sprint branch:
-- [ ] Merge `feature/api-polish` → `develop`
-- [ ] Move `Sprint-3.md` to `docs/sprints/Sprint-3.md`
+Created/updated 5 docs, all currently in `/mnt/user-data/outputs/` (not yet placed in the actual repo by Karthik):
 
----
+1. **`docs/ROADMAP.md`** (new) — sprint-by-sprint history built from `docs/sprints/Sprint-1.md`…`Sprint-5.md`. Sprint 5 marked done. Sprint 6+ explicitly unscoped.
+2. **`docs/TODO.md`** (new) — replaces scattered per-sprint checkboxes. Down to near-empty after this session.
+3. **`docs/DECISIONS.md`** (rewrite) — regrouped the existing category-based decision log into sprint-based sections (Sprint 1–5), using each sprint doc's own decision log as ground truth.
+4. **`README.md`** (rewrite) — added Observability section, new ports table, new Makefile targets, updated folder structure (`admin/`, `infra/`), updated test counts (425 tests, 91% coverage), links out to `docs/DECISIONS.md`/`ROADMAP.md`/`TODO.md`.
+5. **`CHANGELOG.md`** (rewrite) — backfilled `0.3.0` (Sprint 3, finalized from "Unreleased"), `0.4.0` (Sprint 4 UI — previously had zero changelog entry), `0.5.0` (Sprint 5 Observability).
 
-## What was done this session
+## Decisions made (don't re-litigate these)
 
-### Bug fix (code)
-`app/api/_song_utils.py` — `_is_favorited` was missing `.filter(Favorite.deleted_at.is_(None))`, causing `is_favorite` to stay `True` after a soft-delete. Fixed.
+- **Versioning resolved**: `pyproject.toml` bumped to `0.5.0` by Karthik to match CHANGELOG's `0.3.0 -> 0.4.0 -> 0.5.0` progression. Settled — CHANGELOG's version-mismatch note has been removed.
+- **`make alerts` / `make log-rotate`**: promised in the original PRD/Sprint-5 doc but never implemented in the actual Makefile. Decision: dropped from docs entirely rather than implemented (removed from CHANGELOG's "Known limitations" section). If Karthik later adds these targets for real, docs will need the entries added back.
+- **`make admin` Makefile bug**: backticks around `@open` in the `admin:` target (`` `@open` http://localhost:8501 ``) — broken vs. the working `grafana`/`flower` pattern. Fix given to Karthik:
+  ```makefile
+  admin: ## Open Streamlit admin in browser
+  	@open http://localhost:8501 2>/dev/null || xdg-open http://localhost:8501
+  ```
+  Karthik said "done" — presumably applied. Not verified with code in this session, only confirmed verbally.
 
-### Test fixes (9 failures → 0)
-Files updated (outputs already produced):
+## Open items
 
-| Output file                 | Destination                                                         |
-| --------------------------- | ------------------------------------------------------------------- |
-| `_song_utils.py`            | `app/api/_song_utils.py`                                            |
-| `test_favorites.py`         | `tests/unit/test_favorites.py`                                      |
-| `test_preview.py`           | `tests/unit/test_preview.py`                                        |
-| `test_preview_api.py`       | `tests/integration/test_preview_api.py`                             |
-| `test_playlist_schemas.py`  | `tests/unit/test_playlist_schemas.py`                               |
-| `TestHealth_replacement.py` | Replace `TestHealth` class in `tests/integration/test_songs_api.py` |
+- `docs/TODO.md` is now essentially empty (just a Sprint 6+ placeholder). Nothing blocking.
+- Nothing else outstanding from this thread.
 
-### Docs updated
-- `README.md` — `DELETE /songs/{id}` in API table, `make clean-tmp` in targets, API-3 decision log rows, Out of Scope cleaned up
-- `Sprint-3.md` — All API-3 slices checked off, Definition of Done updated, test fix table added
+## For the next session
 
----
-
-## Next session — Sprint 4
-
-Sprint 4 focus: **Frontend UI**.
-Reference: `docs/sprints/SPRINT_X.md` (template) — create `Sprint-4.md` from it.
-
-Likely scope:
-- Streamlit or React frontend
-- `make seed` for sample data
-- `GET /favorites` cursor pagination (deferred from Sprint 3)
-- HTTP 206 range streaming (deferred)
-
-**Skills to activate:** `/clean-code /tdd` (if building backend additions), `/caveman` for token efficiency.
+- If Karthik shares the actual repo/PR diff, verify the 5 docs above landed correctly and the `make admin` fix was applied as given.
+- Sprint 6 has no defined scope yet. If Karthik starts planning it, expect a new `docs/sprints/Sprint-6.md`, at which point `ROADMAP.md` and `TODO.md` need updating again (same pattern as this session: read sprint doc, extract unchecked items, regenerate).
+- Recommended skills for continuation: `caveman` (ultra), `clean-code`, `tdd` — matches Karthik's standing preference (also in memory).
+- This session was pure documentation — no application code was written or modified. If next session involves real code changes (e.g. actual `make alerts`/`log-rotate` implementation), read `/mnt/skills/user/tdd/SKILL.md` first per Karthik's TDD convention.

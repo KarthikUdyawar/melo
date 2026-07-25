@@ -1,0 +1,156 @@
+.
+├── admin
+│   ├── app.py
+│   ├── auth.py
+│   ├── Dockerfile
+│   ├── __init__.py
+│   ├── pages
+│   │   ├── alerts.py
+│   │   ├── db_health.py
+│   │   ├── logs.py
+│   │   ├── metrics.py
+│   │   ├── overview.py
+│   │   └── songs.py
+│   └── requirements.txt
+├── app
+│   ├── api
+│   │   ├── favorites.py
+│   │   ├── __init__.py
+│   │   ├── playlists.py
+│   │   ├── responses.py
+│   │   ├── songs.py
+│   │   └── _song_utils.py
+│   ├── core
+│   │   ├── config.py
+│   │   ├── db.py
+│   │   ├── deps.py
+│   │   ├── exception_handlers.py
+│   │   ├── __init__.py
+│   │   ├── log_events.py
+│   │   ├── logging.py
+│   │   ├── log_manager.py
+│   │   ├── metrics.py
+│   │   ├── middleware.py
+│   │   ├── pollers.py
+│   │   ├── profiling.py
+│   │   └── tracing.py
+│   ├── __init__.py
+│   ├── main.py
+│   ├── models
+│   │   ├── favorite.py
+│   │   ├── __init__.py
+│   │   ├── playlist.py
+│   │   └── song.py
+│   ├── schemas
+│   │   ├── envelope.py
+│   │   ├── playlist.py
+│   │   └── song.py
+│   ├── services
+│   │   ├── downloader.py
+│   │   ├── __init__.py
+│   │   ├── processor.py
+│   │   └── storage.py
+│   └── workers
+│       ├── celery_app.py
+│       ├── __init__.py
+│       └── tasks.py
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── docker-compose.yml
+├── Dockerfile
+├── docs
+│   ├── API_DOC.md
+│   ├── ARCHITECTURE.md
+│   ├── DECISIONS.md
+│   ├── DESIGN.md
+│   ├── handoff.md
+│   ├── INFRA.md
+│   ├── MODELS.md
+│   ├── PIPELINE.md
+│   ├── PRD.md
+│   ├── PRROJECT.tree
+│   ├── ROADMAP.md
+│   ├── SERVICES.md
+│   ├── STORAGE.md
+│   ├── TODO.md
+│   └── USER-FLOW.md
+├── example.env
+├── infra
+│   ├── docker-compose.monitoring.yml
+│   ├── grafana
+│   │   └── provisioning
+│   │       ├── alerting
+│   │       │   ├── rules.yml
+│   │       │   └── telegram.yml
+│   │       ├── dashboards
+│   │       │   ├── all.yml
+│   │       │   ├── api.json
+│   │       │   ├── pipeline.json
+│   │       │   ├── system.json
+│   │       │   └── worker.json
+│   │       └── datasources
+│   │           └── all.yml
+│   ├── loki
+│   │   └── loki.yml
+│   ├── monitoring.sh
+│   ├── prometheus
+│   │   └── prometheus.yml
+│   ├── promtail
+│   │   └── promtail.yml
+│   ├── pyroscope
+│   │   └── pyroscope.yml
+│   └── tempo
+│       └── tempo.yml
+├── LICENSE
+├── Makefile
+├── pyproject.toml
+├── README.md
+├── SECURITY.md
+├── tests
+│   ├── conftest.py
+│   ├── docker-compose.test.yml
+│   ├── __init__.py
+│   ├── integration
+│   │   ├── conftest.py
+│   │   ├── __init__.py
+│   │   ├── test_db.py
+│   │   ├── test_favorites_api.py
+│   │   ├── test_metrics_api.py
+│   │   ├── test_playlists_api.py
+│   │   ├── test_preview_api.py
+│   │   ├── test_songs_api_filtering.py
+│   │   ├── test_songs_api.py
+│   │   └── test_tracing_api.py
+│   ├── pytest_plugin.py
+│   ├── smoke_test.sh
+│   ├── smoke_ui.sh
+│   └── unit
+│       ├── conftest.py
+│       ├── __init__.py
+│       ├── test_admin_auth.py
+│       ├── test_downloader.py
+│       ├── test_favorites.py
+│       ├── test_log_events.py
+│       ├── test_logging.py
+│       ├── test_log_manager.py
+│       ├── test_metrics_unit.py
+│       ├── test_middleware_health.py
+│       ├── test_playlist_schemas.py
+│       ├── test_pollers.py
+│       ├── test_preview.py
+│       ├── test_processor.py
+│       ├── test_schemas.py
+│       ├── test_storage.py
+│       └── test_tracing.py
+├── ui
+│   ├── api.js
+│   ├── app.js
+│   ├── components.js
+│   ├── Dockerfile
+│   ├── index.html
+│   ├── nginx.conf
+│   ├── player.js
+│   └── style.css
+└── uv.lock
+
+25 directories, 128 files

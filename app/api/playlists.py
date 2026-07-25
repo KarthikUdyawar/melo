@@ -1,12 +1,4 @@
-"""Playlists API — LIB-2.
-
-POST   /playlists                        → 201 created
-GET    /playlists                        → list
-GET    /playlists/{id}                   → detail with songs
-POST   /playlists/{id}/songs/{song_id}  → add song (idempotent)
-DELETE /playlists/{id}/songs/{song_id}  → remove song
-DELETE /playlists/{id}                  → soft-delete playlist
-"""
+"""Playlists API — LIB-2."""
 
 # app/api/playlists.py
 from datetime import UTC, datetime
@@ -20,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from app.api._song_utils import serialize_song
 from app.api.responses import envelope_response
 from app.core.deps import DbDep
+from app.core.log_events import LogEvent
 from app.core.logging import get_logger
 from app.models.favorite import Favorite
 from app.models.playlist import Playlist, PlaylistSong
@@ -121,12 +114,17 @@ def _next_position(playlist_id: UUID, db: DbDep) -> int:
 )
 def create_playlist(payload: PlaylistCreate, db: DbDep) -> JSONResponse:
     """Create a named playlist. Returns the created playlist with song_count=0."""
+    from app.core.metrics import playlist_ops_total
+
     playlist = Playlist(name=payload.name)
     db.add(playlist)
     db.commit()
     db.refresh(playlist)
 
-    logger.info("playlist_created", playlist_id=str(playlist.id), name=playlist.name)
+    playlist_ops_total.labels(action="create").inc()
+    logger.info(
+        LogEvent.PLAYLIST_CREATED, playlist_id=str(playlist.id), name=playlist.name
+    )
     return envelope_response(
         _serialize_playlist(playlist), "Playlist created.", status_code=201
     )
@@ -137,11 +135,7 @@ def create_playlist(payload: PlaylistCreate, db: DbDep) -> JSONResponse:
     summary="List all playlists ordered by creation date",
 )
 def list_playlists(db: DbDep) -> JSONResponse:
-    """List non-deleted playlists, newest first.
-
-    song_count reflects only non-deleted songs — soft-deleted songs are excluded
-    even when their PlaylistSong join rows remain.
-    """
+    """List non-deleted playlists, newest first."""
     rows = (
         db.query(Playlist, func.count(Song.id))
         .filter(Playlist.deleted_at.is_(None))
@@ -196,10 +190,9 @@ def get_playlist(playlist_id: UUID, db: DbDep) -> JSONResponse:
     },
 )
 def add_song_to_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> JSONResponse:
-    """Append song to playlist at the next position.
+    """Append song to playlist at the next position. Idempotent."""
+    from app.core.metrics import playlist_ops_total
 
-    Idempotent — returns 200 if already present.
-    """
     playlist = _get_playlist_or_404(playlist_id, db)
     _get_song_or_404(song_id, db)
 
@@ -212,9 +205,10 @@ def add_song_to_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> JSONRes
     )
     if existing:
         logger.info(
-            "playlist_song_already_exists",
+            LogEvent.PLAYLIST_SONG_ADDED,
             playlist_id=str(playlist_id),
             song_id=str(song_id),
+            already=True,
         )
         return envelope_response(
             _serialize_playlist(playlist), "Song already in playlist.", status_code=200
@@ -236,9 +230,10 @@ def add_song_to_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> JSONRes
             )
             if constraint == "uq_playlist_song":
                 logger.info(
-                    "playlist_song_race_condition",
+                    LogEvent.PLAYLIST_SONG_ADDED,
                     playlist_id=str(playlist_id),
                     song_id=str(song_id),
+                    already=True,
                 )
                 return envelope_response(
                     _serialize_playlist(playlist),
@@ -277,8 +272,9 @@ def add_song_to_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> JSONRes
         )
 
     db.refresh(playlist)
+    playlist_ops_total.labels(action="add_song").inc()
     logger.info(
-        "playlist_song_added",
+        LogEvent.PLAYLIST_SONG_ADDED,
         playlist_id=str(playlist_id),
         song_id=str(song_id),
         position=position,
@@ -296,6 +292,8 @@ def add_song_to_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> JSONRes
 )
 def remove_song_from_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> Response:
     """Hard-delete the PlaylistSong join row. 404 if not found."""
+    from app.core.metrics import playlist_ops_total
+
     _get_playlist_or_404(playlist_id, db)
     _get_song_or_404(song_id, db)
 
@@ -315,8 +313,11 @@ def remove_song_from_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> Re
     db.commit()
     db.expire_all()
 
+    playlist_ops_total.labels(action="remove_song").inc()
     logger.info(
-        "playlist_song_removed", playlist_id=str(playlist_id), song_id=str(song_id)
+        LogEvent.PLAYLIST_SONG_REMOVED,
+        playlist_id=str(playlist_id),
+        song_id=str(song_id),
     )
     return Response(status_code=204)
 
@@ -328,13 +329,13 @@ def remove_song_from_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> Re
     responses={404: {"description": "Playlist not found"}},
 )
 def delete_playlist(playlist_id: UUID, db: DbDep) -> Response:
-    """Soft-delete a playlist by setting deleted_at.
+    """Soft-delete a playlist by setting deleted_at. Song associations preserved."""
+    from app.core.metrics import playlist_ops_total
 
-    Song associations are preserved in DB.
-    """
     playlist = _get_playlist_or_404(playlist_id, db)
     playlist.deleted_at = datetime.now(UTC)
     db.commit()
 
-    logger.info("playlist_deleted", playlist_id=str(playlist_id))
+    playlist_ops_total.labels(action="delete").inc()
+    logger.info(LogEvent.PLAYLIST_DELETED, playlist_id=str(playlist_id))
     return Response(status_code=204)

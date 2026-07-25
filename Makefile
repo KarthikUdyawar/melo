@@ -11,8 +11,11 @@ SHELL := /bin/bash
 	lint fmt \
 	pre-commit-install pre-commit \
 	test test-unit test-integration test-cov \
-	test-up test-down smoke \
-	act-lint act-unit act-integration act-coverage act-ci
+	test-up test-down smoke smoke-ui \
+	act-lint act-unit act-integration act-coverage act-ci \
+	tree \
+	admin \
+	cadvisor-ids
 
 .DEFAULT_GOAL := help
 
@@ -62,6 +65,7 @@ up: ## Build + start all services detached
 
 	echo ""
 	echo -e "$(GREEN)✅ Melo stack is up$(NC)"
+	echo "   UI:           http://localhost:3000"
 	echo "   API:          http://localhost:8000"
 	echo "   API docs:     http://localhost:8000/docs"
 	echo "   MinIO:        http://localhost:9001"
@@ -88,6 +92,9 @@ logs-api: ## Tail API logs
 
 logs-worker: ## Tail worker logs
 	$(COMPOSE) logs -f worker
+
+logs-ui: ## Tail UI logs
+	$(COMPOSE) logs -f ui
 
 ps: ## Show container status
 	$(COMPOSE) ps
@@ -290,6 +297,10 @@ smoke: ## Run smoke test against running stack
 	chmod +x tests/smoke_test.sh
 	bash tests/smoke_test.sh $(if $(URL),--url "$(URL)",)
 
+smoke-ui: ## Run UI smoke test against running stack (requires make up)
+	chmod +x tests/smoke_ui.sh
+	bash tests/smoke_ui.sh
+
 # ──────────────────────────────────────────────────────────────────────────────
 # GitHub Actions locally via act
 # ──────────────────────────────────────────────────────────────────────────────
@@ -311,3 +322,48 @@ act-coverage: ## Run coverage GitHub Action locally
 
 act-ci: ## Run full GitHub Actions pipeline locally
 	act --reuse --var ACT=true
+
+tree: ## Show project tree (respects .gitignore)
+	tree --gitignore -I '__pycache__|*.pyc|*.egg-info' > docs/PRROJECT.tree && echo 'Done'
+
+# ── Monitoring (OBS-0) ────────────────────────────────────────────────────────
+
+monitoring-up: ## Start observability stack (main app must be running)
+	@chmod +x infra/monitoring.sh
+	@./infra/monitoring.sh up
+
+monitoring-up-all: ## Start app + observability stack together
+	@chmod +x infra/monitoring.sh
+	@./infra/monitoring.sh up --with-app
+
+monitoring-down: ## Stop observability stack
+	@./infra/monitoring.sh down
+
+monitoring-restart: ## Restart observability stack
+	@./infra/monitoring.sh restart
+
+monitoring-status: ## Show observability stack container status
+	@./infra/monitoring.sh status
+
+grafana: ## Open Grafana in browser
+	@open http://localhost:3001 2>/dev/null || xdg-open http://localhost:3001
+
+flower: ## Open Flower in browser
+	@open http://localhost:5555 2>/dev/null || xdg-open http://localhost:5555
+
+metrics: ## Curl /metrics endpoint
+	@curl -s http://localhost:8000/metrics | head -60
+
+logs-loki: ## Tail recent logs via Loki HTTP API
+	@curl -sG "http://localhost:3100/loki/api/v1/query_range" \
+		--data-urlencode 'query={job="melo"}' \
+		--data-urlencode 'limit=50' \
+		--data-urlencode "start=$$(date -u -d '5 minutes ago' +%s 2>/dev/null || date -u -v-5M +%s)000000000" \
+		| python3 -c "import sys,json; [print(v[1]) for s in json.load(sys.stdin)['data']['result'] for v in s['values']]"
+
+admin: ## Open Streamlit admin in browser
+	@open http://localhost:8501 2>/dev/null || xdg-open http://localhost:8501
+
+cadvisor-ids: ## Print cAdvisor container IDs for api and worker
+	@echo "api:   $$(docker inspect --format='{{.Id}}' melo-api-1)"
+	@echo "worker: $$(docker inspect --format='{{.Id}}' melo-worker-1)"

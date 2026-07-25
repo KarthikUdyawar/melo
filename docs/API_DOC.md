@@ -35,6 +35,16 @@ Paginated list responses put the list inside `body`:
 
 ---
 
+## Response Headers
+
+Every response (added by `TraceIdMiddleware`) carries:
+
+| Header       | Description                                                          |
+| ------------ | -------------------------------------------------------------------- |
+| `X-Trace-Id` | Hex OTEL trace ID for the request. Correlate with logs/Tempo traces. |
+
+---
+
 ## Song Object
 
 All song-returning endpoints share this shape:
@@ -56,28 +66,28 @@ All song-returning endpoints share this shape:
   "created_at": "2024-01-15T10:30:00.000000",
   "is_favorite": false,
   "stream_url": "/songs/019487ab-.../stream",
-  "effective_duration": 50.0
+  "effective_duration": 33.33
 }
 ```
 
-| Field                | Type                                              | Notes                                              |
-| -------------------- | ------------------------------------------------- | -------------------------------------------------- |
-| `id`                 | `string` (UUID v7)                                | Chronologically sortable                           |
-| `title`              | `string \| null`                                  | Populated after processing                         |
-| `youtube_id`         | `string \| null`                                  | 11-char YouTube ID                                 |
-| `file_url`           | `string \| null`                                  | MinIO object path                                  |
-| `duration`           | `number \| null`                                  | Full audio length in seconds                       |
-| `start`              | `number \| null`                                  | Trim start offset (seconds)                        |
-| `end`                | `number \| null`                                  | Trim end offset (seconds)                          |
-| `speed`              | `number`                                          | 0.5–4.0, default 1.0                               |
-| `status`             | `"pending" \| "processing" \| "done" \| "failed"` |                                                    |
-| `thumbnail_url`      | `string \| null`                                  | YouTube thumbnail                                  |
-| `channel`            | `string \| null`                                  | YouTube channel name                               |
-| `upload_date`        | `string \| null`                                  | ISO 8601 `YYYY-MM-DD`                              |
-| `created_at`         | `string`                                          | ISO 8601 timestamp                                 |
-| `is_favorite`        | `boolean`                                         |                                                    |
-| `stream_url`         | `string`                                          | `/songs/{id}/stream` when done, else `/songs/{id}` |
-| `effective_duration` | `number \| null`                                  | `end - start` if both set, else `duration`         |
+| Field                | Type                                              | Notes                                                                                                                                     |
+| -------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                 | `string` (UUID v7)                                | Chronologically sortable                                                                                                                  |
+| `title`              | `string \| null`                                  | Populated after processing                                                                                                                |
+| `youtube_id`         | `string \| null`                                  | 11-char YouTube ID                                                                                                                        |
+| `file_url`           | `string \| null`                                  | MinIO object path                                                                                                                         |
+| `duration`           | `number \| null`                                  | Full audio length in seconds                                                                                                              |
+| `start`              | `number \| null`                                  | Trim start offset (seconds)                                                                                                               |
+| `end`                | `number \| null`                                  | Trim end offset (seconds)                                                                                                                 |
+| `speed`              | `number`                                          | 0.5–4.0, default 1.0                                                                                                                      |
+| `status`             | `"pending" \| "processing" \| "done" \| "failed"` |                                                                                                                                           |
+| `thumbnail_url`      | `string \| null`                                  | YouTube thumbnail                                                                                                                         |
+| `channel`            | `string \| null`                                  | YouTube channel name                                                                                                                      |
+| `upload_date`        | `string \| null`                                  | ISO 8601 `YYYY-MM-DD`                                                                                                                     |
+| `created_at`         | `string`                                          | ISO 8601 timestamp                                                                                                                        |
+| `is_favorite`        | `boolean`                                         |                                                                                                                                           |
+| `stream_url`         | `string`                                          | `/songs/{id}/stream` when done, else `/songs/{id}`                                                                                        |
+| `effective_duration` | `number \| null`                                  | Playback duration after trim **and speed**: `(end - start, or duration) / speed`, rounded to 2 decimals. Not divided when `speed == 1.0`. |
 
 ---
 
@@ -156,15 +166,16 @@ List songs with filtering, sorting, and cursor pagination.
 
 **Query params:**
 
-| Param      | Type                                      | Default      | Description                                                  |
-| ---------- | ----------------------------------------- | ------------ | ------------------------------------------------------------ |
-| `status`   | `pending \| processing \| done \| failed` | —            | Filter by job status                                         |
-| `favorite` | `boolean`                                 | —            | `true` = favorited only, `false` = unfavorited only          |
-| `search`   | `string` (1–200 chars)                    | —            | Case-insensitive title match                                 |
-| `sort_by`  | `created_at \| title \| duration`         | `created_at` | Sort field                                                   |
-| `order`    | `asc \| desc`                             | `desc`       | Sort direction                                               |
-| `limit`    | `integer` (1–1000)                        | `50`         | Records per page                                             |
-| `after`    | `UUID`                                    | —            | Cursor for next page (use `bookmark` from previous response) |
+| Param      | Type                                      | Default      | Description                                                                                       |
+| ---------- | ----------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------- |
+| `status`   | `pending \| processing \| done \| failed` | —            | Filter by job status                                                                              |
+| `favorite` | `boolean`                                 | —            | `true` = favorited only, `false` = unfavorited only                                               |
+| `search`   | `string` (1–200 chars)                    | —            | Case-insensitive title match                                                                      |
+| `sort_by`  | `created_at \| title \| duration`         | `created_at` | Sort field                                                                                        |
+| `order`    | `asc \| desc`                             | `desc`       | Sort direction                                                                                    |
+| `limit`    | `integer` (1–1000)                        | `50`         | Records per page                                                                                  |
+| `offset`   | `integer` (>= 0)                          | `0`          | Offset-based skip. **Ignored whenever `after` is provided** — cursor pagination takes precedence. |
+| `after`    | `UUID`                                    | —            | Cursor for next page (use `bookmark` from previous response)                                      |
 
 **Response `200`:** Paginated list. `count` = total matching records before pagination.
 
@@ -172,8 +183,11 @@ List songs with filtering, sorting, and cursor pagination.
 # Done songs, newest first
 GET /songs?status=done&limit=10
 
-# Next page
+# Next page (cursor pagination)
 GET /songs?status=done&limit=10&after=<bookmark>
+
+# Next page (offset pagination — only used when `after` is absent)
+GET /songs?status=done&limit=10&offset=10
 
 # Title search
 GET /songs?search=lofi&sort_by=title&order=asc
@@ -181,6 +195,8 @@ GET /songs?search=lofi&sort_by=title&order=asc
 # Favorites only
 GET /songs?favorite=true
 ```
+
+> Prefer cursor pagination (`after`) for stable results under concurrent inserts. `offset` is provided as a convenience but is subject to drift.
 
 ---
 
@@ -212,26 +228,30 @@ Soft-delete a song. Also removes the file from MinIO.
 
 ### `GET /songs/{id}/stream`
 
-Stream the mp3. Trim and speed are applied on-the-fly via FFmpeg — no pre-processing needed.
+Stream the mp3. Trim and speed are applied on-the-fly via FFmpeg — no pre-processing needed. When no trim/speed is set, the API proxies the object directly from MinIO and forwards the `Range` header, supporting partial content.
 
-**Response `200`:** `audio/mpeg` binary stream with `Content-Disposition: attachment; filename="<title>.mp3"`.
+**Response `200` / `206`:** `audio/mpeg` binary stream with a dual-encoded `Content-Disposition` header (ASCII fallback + UTF-8 filename per RFC 5987), e.g.:
+```
+Content-Disposition: attachment; filename="Song.mp3"; filename*=UTF-8''Song.mp3
+```
 
-| Status | Meaning                            |
-| ------ | ---------------------------------- |
-| `200`  | Stream started                     |
-| `404`  | Song not found                     |
-| `409`  | Song not ready (`status != done`)  |
-| `500`  | Song is done but has no `file_url` |
-| `502`  | MinIO fetch or FFmpeg error        |
+| Status | Meaning                                                                                            |
+| ------ | -------------------------------------------------------------------------------------------------- |
+| `200`  | Full stream started                                                                                |
+| `206`  | Partial content — returned when the request includes a `Range` header (no-trim/no-speed path only) |
+| `404`  | Song not found                                                                                     |
+| `409`  | Song not ready (`status != done`)                                                                  |
+| `500`  | Song is done but has no `file_url`                                                                 |
+| `502`  | MinIO fetch or FFmpeg error                                                                        |
 
 **Stream pipeline by case:**
 
-| `start/end` set? | `speed != 1.0`? | Behavior                       |
-| ---------------- | --------------- | ------------------------------ |
-| ❌                | ❌               | Direct MinIO proxy (fastest)   |
-| ✅                | ❌               | Fetch → FFmpeg trim → stream   |
-| ❌                | ✅               | Fetch → FFmpeg atempo → stream |
-| ✅                | ✅               | Fetch → trim → atempo → stream |
+| `start/end` set? | `speed != 1.0`? | Behavior                                                                       |
+| ---------------- | --------------- | ------------------------------------------------------------------------------ |
+| ❌                | ❌               | Direct MinIO proxy via presigned URL, `Range` forwarded (supports `200`/`206`) |
+| ✅                | ❌               | Fetch → FFmpeg trim → `FileResponse` (`200` only)                              |
+| ❌                | ✅               | Fetch → FFmpeg atempo → `FileResponse` (`200` only)                            |
+| ✅                | ✅               | Fetch → trim → atempo → `FileResponse` (`200` only)                            |
 
 To play inline in the browser: `<audio src="/songs/{id}/stream" controls>`
 
@@ -391,7 +411,7 @@ Remove a song from a playlist (hard-delete join row).
 
 ---
 
-## Health
+## System
 
 ### `GET /health`
 
@@ -400,15 +420,37 @@ Probe all infrastructure dependencies.
 **Response `200`:**
 ```json
 {
+  "status_code": 200,
+  "message": "Health check complete.",
   "body": {
-    "db": "ok",
-    "redis": "ok",
-    "minio": "ok"
+    "status": "ok",
+    "db": "up",
+    "redis": "up",
+    "minio": "up",
+    "env": "production"
   }
 }
 ```
 
-Any value other than `"ok"` means that service is degraded.
+| Field    | Type                 | Notes                                                    |
+| -------- | -------------------- | -------------------------------------------------------- |
+| `status` | `"ok" \| "degraded"` | `"ok"` only when `db`, `redis`, and `minio` are all `up` |
+| `db`     | `"up" \| "down"`     |                                                          |
+| `redis`  | `"up" \| "down"`     |                                                          |
+| `minio`  | `"up" \| "down"`     |                                                          |
+| `env`    | `string`             | Current `APP_ENV` value                                  |
+
+Request logging is suppressed for `GET /health` when the response status is `200` (see log strategy in `ARCHITECTURE.md`/Sprint 5 docs).
+
+---
+
+### `GET /metrics`
+
+Prometheus scrape endpoint, exposed via `prometheus_fastapi_instrumentator`. Not part of the envelope format — returns raw Prometheus exposition text.
+
+**Response `200`:** `text/plain` Prometheus metrics, including HTTP auto-instrumentation (request count, latency histograms by endpoint/method/status) and custom counters/gauges/histograms defined in `app/core/metrics.py` (e.g. `songs_submitted_total`, `songs_completed_total`, `favorites_toggled_total`, `playlist_ops_total`, `download_duration_seconds`, `ffmpeg_duration_seconds`, `minio_upload_duration_seconds`, `stream_duration_seconds`).
+
+Excluded from request logging/instrumentation noise along with `/health`.
 
 ---
 
@@ -484,3 +526,7 @@ pending → processing → done   → stream_url = /songs/{id}/stream
 ```
 
 While `status` is `pending` or `processing`, `stream_url` points to `GET /songs/{id}` (the status endpoint), not the stream. Always check `status === 'done'` before attempting playback.
+
+### Trace correlation
+
+Every response includes an `X-Trace-Id` header. Pair it with the `Logs` page in the Streamlit admin dashboard or Grafana's Tempo datasource to trace a single request end-to-end (HTTP → Celery task → download/FFmpeg/MinIO spans).

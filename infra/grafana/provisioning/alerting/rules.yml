@@ -1,0 +1,300 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: melo-alerts
+    folder: Melo
+    interval: 1m
+    rules:
+      - uid: task-failed-storm
+        title: Task Failed Storm
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: increase(songs_completed_total{status="failed"}[5m])
+              intervalMs: 60000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { params: [3], type: gt }
+                  query: { params: [B] }
+        annotations:
+          summary: "≥3 Celery task failures in the last 5 minutes"
+        labels:
+          severity: critical
+        noDataState: OK
+        execErrState: Alerting
+        for: 0s
+
+      - uid: song-stuck-processing
+        title: Song Stuck Processing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: songs_by_status_total{status="processing"}
+              intervalMs: 60000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  query: { params: [B] }
+        annotations:
+          summary: "A song has been in 'processing' status for more than 10 minutes"
+        labels:
+          severity: warning
+        noDataState: OK
+        execErrState: Alerting
+        for: 10m
+
+      - uid: api-latency-high
+        title: API Latency High
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: >
+                histogram_quantile(0.99,
+                  sum(rate(http_request_duration_seconds_bucket[5m])) by (le)
+                )
+              intervalMs: 60000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { params: [2], type: gt }
+                  query: { params: [B] }
+        annotations:
+          summary: "API p99 latency exceeded 2s over the last 5 minutes"
+        labels:
+          severity: warning
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+
+      - uid: queue-depth-high
+        title: Queue Depth High
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: celery_queue_depth
+              intervalMs: 60000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { params: [50], type: gt }
+                  query: { params: [B] }
+        annotations:
+          summary: "Celery queue depth exceeded 50 tasks"
+        labels:
+          severity: warning
+        noDataState: OK
+        execErrState: Alerting
+        for: 0s
+
+      - uid: service-degraded
+        title: Service Degraded
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: >
+                count(
+                  up{job="melo_api"} == 0
+                  or
+                  redis_up == 0
+                  or
+                  pg_up == 0
+                )
+              intervalMs: 60000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  query: { params: [B] }
+        annotations:
+          summary: "One or more Melo infrastructure services are degraded"
+        labels:
+          severity: critical
+        noDataState: OK
+        execErrState: Alerting
+        for: 0s
+
+      - uid: minio-bucket-large
+        title: MinIO Bucket Large
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: minio_bucket_size_bytes
+              intervalMs: 60000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { params: [10737418240], type: gt } # 10 GB
+                  query: { params: [B] }
+        annotations:
+          summary: "MinIO bucket size exceeded 10 GB"
+        labels:
+          severity: info
+        noDataState: OK
+        execErrState: OK
+        for: 0s
+
+      - uid: log-backup-gap
+        title: Log Backup Gap
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 7200, to: 0 }
+            datasourceUid: loki
+            model:
+              expr: >
+                count_over_time(
+                  {service=~"api|worker"} |= "log_backup_uploaded" [2h]
+                )
+              intervalMs: 60000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 7200, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            relativeTimeRange: { from: 7200, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { params: [1], type: lt }
+                  query: { params: [B] }
+        annotations:
+          summary: "No log backup uploaded in the last 2 hours"
+        labels:
+          severity: warning
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 0s
+
+      - uid: target-down
+        title: Target Down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: count(up == 0)
+              intervalMs: 60000
+              maxDataPoints: 43200
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  query: { params: [B] }
+        annotations:
+          summary: "One or more scrape targets are down"
+        labels:
+          severity: critical
+        noDataState: OK
+        execErrState: Alerting
+        for: 1m

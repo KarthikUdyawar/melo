@@ -1,6 +1,18 @@
 services:
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
   api:
     build: .
+    container_name: melo-api-1
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
@@ -14,7 +26,9 @@ services:
         condition: service_healthy
     volumes:
       - ./app:/app/app
-      - melo_logs:/var/log/melo
+      - melo_melo_logs:/var/log/melo
+    tmpfs:
+      - /tmp/melo:mode=1777
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -25,8 +39,12 @@ services:
 
   worker:
     build: .
+    container_name: melo-worker-1
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q melo
     env_file: .env.staging
+    environment:
+      CELERY_SEND_EVENTS: "true"
+      CELERY_TASK_TRACK_STARTED: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -36,10 +54,21 @@ services:
         condition: service_healthy
     volumes:
       - ./app:/app/app
-      - worker_tmp:/tmp/melo
-      - melo_logs:/var/log/melo
+      - melo_melo_logs:/var/log/melo
+    tmpfs:
+      - /tmp/melo:mode=1777
     healthcheck:
-      test: ["CMD", "celery", "-A", "app.workers.celery_app", "inspect", "ping", "-t", "5"]
+      test:
+        [
+          "CMD",
+          "celery",
+          "-A",
+          "app.workers.celery_app",
+          "inspect",
+          "ping",
+          "-t",
+          "5",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -58,7 +87,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-melo} -d ${POSTGRES_DB:-melo}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-melo} -d ${POSTGRES_DB:-melo}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -88,6 +121,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_SERVER_URL: ${MINIO_PUBLIC_URL:-http://localhost:9000}
     volumes:
       - minio_data:/data
     healthcheck:
@@ -112,5 +146,5 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
-  worker_tmp:
-  melo_logs:
+  melo_melo_logs:
+    name: melo_melo_logs

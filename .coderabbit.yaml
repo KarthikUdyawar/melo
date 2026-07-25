@@ -9,26 +9,11 @@
 #   CodeRabbit handles → pipeline correctness, resource leaks, task safety, API contracts
 
 language: en-US
-early_access: false
-
-# Add these missing properties:
-tone_instructions: > # Optional: Custom tone for reviews/chat
-  "Be precise, focus on correctness, resource safety, and async pipeline robustness.
-  Prefer explicit over implicit."
-enable_free_tier: true # Usually true unless you want to restrict
-inheritance: false # Set to true if using central org config
-knowledge_base: # Optional but recommended
-  code_guidelines: { enabled: true }
-code_generation: # Newer section
-  enabled: false # Set true if you want CodeRabbit to suggest/generate code
-issue_enrichment: # For better issue/PR context
-  enabled: true
 
 # ── Review Settings ───────────────────────────────────────────────────────────
 reviews:
   profile: chill # Suggestions only, never blocking
   request_changes_workflow: false
-
   high_level_summary: true
   high_level_summary_placeholder: "@coderabbitai summary"
   poem: false
@@ -82,7 +67,8 @@ reviews:
     - label: "area:infra"
       instructions: >
         Apply when the PR changes Dockerfile, docker-compose.yml, Makefile,
-        pyproject.toml, uv.lock, or CI workflows.
+        pyproject.toml, uv.lock, CI workflows, or UI deployment targets like
+        ui/Dockerfile and ui/nginx.conf.
 
     - label: "area:config"
       instructions: >
@@ -97,6 +83,11 @@ reviews:
     - label: "area:docs"
       instructions: >
         Apply when the PR changes README.md, sprint docs, PRD, or docstrings.
+
+    - label: "area:ui"
+      instructions: >
+        Apply when the PR changes any file in ui/ — app.js, components.js,
+        api.js, player.js, style.css, index.html, nginx.conf, or ui/Dockerfile.
 
     # Type
     - label: "type:feature"
@@ -143,47 +134,33 @@ reviews:
 
     # Size
     - label: "size:small"
-      instructions: >
-        Apply when the PR changes fewer than 50 lines (excluding uv.lock).
+      instructions: "Apply when the PR changes fewer than 50 lines (excluding uv.lock)."
 
     - label: "size:medium"
-      instructions: >
-        Apply when the PR changes 50–200 lines (excluding uv.lock).
+      instructions: "Apply when the PR changes 50–200 lines (excluding uv.lock)."
 
     - label: "size:large"
-      instructions: >
-        Apply when the PR changes more than 200 lines (excluding uv.lock).
+      instructions: "Apply when the PR changes more than 200 lines (excluding uv.lock)."
 
     # Status
     - label: "status:wip"
-      instructions: >
-        Apply when the PR title contains WIP, the PR is a draft, or the
-        description states the work is not yet complete.
+      instructions: "Apply when the PR title contains WIP, the PR is a draft, or the description states the work is not yet complete."
 
     - label: "status:ready"
-      instructions: >
-        Apply when the PR is not a draft and the description states it is ready
-        for review.
+      instructions: "Apply when the PR is not a draft and the description states it is ready for review."
 
     # Priority
     - label: "priority:low"
-      instructions: >
-        Apply when the PR is a nice-to-have with no urgency — cosmetic tweaks,
-        optional features, doc improvements.
+      instructions: "Apply when the PR is a nice-to-have with no urgency — cosmetic tweaks, optional features, doc improvements."
 
     - label: "priority:medium"
-      instructions: >
-        Apply when the PR is planned sprint work to be merged this week.
+      instructions: "Apply when the PR is planned sprint work to be merged this week."
 
     - label: "priority:high"
-      instructions: >
-        Apply when the PR fixes an important bug or unblocks other sprint
-        tickets.
+      instructions: "Apply when the PR fixes an important bug or unblocks other sprint tickets."
 
     - label: "priority:critical"
-      instructions: >
-        Apply when the PR fixes a crash, data loss, or broken core pipeline that
-        must be merged immediately.
+      instructions: "Apply when the PR fixes a crash, data loss, or broken core pipeline that must be merged immediately."
 
   # ── Auto-review ─────────────────────────────────────────────────────────────
   auto_review:
@@ -368,6 +345,169 @@ reviews:
         - Module-level fixtures must not be defined inside a class
         - docker_services fixtures are session-scoped — flag function-scoped usage
 
+    - path: "ui/app.js"
+      instructions: |
+        Hash router + page renderers + event delegation. Focus on:
+
+        ROUTER
+        - Every hash pattern must render exactly one page and return early
+        - Unmatched hashes must fall back to renderLibraryPage()
+        - stopPoll() must be called on every hashchange before route()
+
+        POLLING
+        - pollTimer must be cleared via stopPoll() on page navigation
+        - Poll must stop when no song has status pending/processing
+        - Poll must not start a second interval if one is already running
+          (guard: !state.pollTimer)
+
+        EVENT DELEGATION
+        - All song-card and playlist-card interactions go through handleGlobalClick
+        - data-action values must match exactly what components.js emits
+        - Dropdown close-on-outside-click must not close the dropdown that was
+          just opened (guard: clickedDropdown !== menu.closest)
+
+        MODAL
+        - closeModal() must clear modal-root innerHTML — no orphaned overlays
+        - Esc keydown must call closeModal() regardless of which step is open
+        - fetchPreview must re-bind step1 events after error (url value preserved)
+
+        STATE MUTATION
+        - state.playlists cache must be refreshed after createPlaylist()
+        - state.bookmark must be reset to null on any filter/search/sort change
+        - loadLibrarySongs(false) replaces list; loadLibrarySongs(true) appends
+
+        PLAYER INTEGRATION
+        - playSongById must call player.loadSong() — never set audio.src directly
+        - Active card highlight must update via data-song-id match, not re-render
+
+        SECURITY
+        - All user-supplied strings rendered into innerHTML must go through escHtml()
+        - window.prompt() usage (handleNewPlaylistForSong) is acceptable for MVP —
+          flag if replaced with a DOM-based input that skips escHtml
+
+    - path: "ui/components.js"
+      instructions: |
+        Pure HTML-string render functions. No side effects, no API calls,
+        no state mutation. Focus on:
+
+        PURITY
+        - No fetch/api calls — flag any import of api.js
+        - No state reads from app.js — all data must come via arguments
+        - No DOM queries or getElementById — flag any document.* usage
+
+        XSS SAFETY
+        - Every user-supplied string (title, channel, name, playlist name)
+          must be wrapped in escHtml() before interpolation into HTML
+        - data-* attribute values that come from song/playlist objects must
+          also be escaped — flag any unescaped interpolation into data-* attrs
+        - SVG content is static — no dynamic content inside SVG tags
+
+        SONG CARD CONTRACT
+        - data-playable must be "true" only when song.status === 'done'
+        - data-song-id must always be present on .song-card root element
+        - data-action="toggle-favorite" button must carry data-song-id
+        - Overflow menu: every dropdown__item must have a data-action attribute
+
+        STATUS PILL
+        - 'done' → returns empty string (no element rendered)
+        - 'processing' → status-dot--pulse class must be present
+        - All other statuses → plain dot, matching CSS class name
+
+        PLAYLIST CARD
+        - data-playlist-id must be on the .playlist-card root
+        - song_count pluralisation: 1 → "song", other → "songs"
+
+    - path: "ui/api.js"
+      instructions: |
+        Thin fetch wrapper. All calls go through apiFetch(). Focus on:
+
+        ENVELOPE UNWRAP
+        - 204 responses must return undefined (no JSON parse attempt)
+        - Non-ok responses must throw Error with envelope.message, not res.statusText
+        - apiFetch must never return the raw envelope — always return envelope.body
+
+        ENDPOINT CONTRACT
+        - Every endpoint must match the API_DOC.md path exactly
+        - POST /songs/preview → body: { url }
+        - POST /songs → body: { url, start?, end?, speed? }
+        - GET /songs → query string built from params object
+        - Playlist add/remove use path params, no body
+
+        ERROR PROPAGATION
+        - Errors must bubble to callers — no try/catch inside api.js
+        - Flag any silent catch or default return on fetch failure
+
+    - path: "ui/player.js"
+      instructions: |
+        Single <audio> element + player state. Only stateful UI module. Focus on:
+
+        AUDIO ELEMENT
+        - Single Audio() instance at module scope — never replaced or re-created
+        - audio.src must only be set inside loadSong() — flag direct src mutation elsewhere
+        - loadSong() must guard song.status === 'done' before setting src
+
+        STATE
+        - currentSong is the only module-level mutable state — acceptable
+        - isSongLoaded(id) must check currentSong?.id === id (not audio.src)
+        - getCurrentSong() must return null when no song loaded
+
+        SCRUBBER
+        - bindScrubber() must be called once after DOM ready (app.js boot)
+        - timeupdate handler must guard audio.seeking before setting scrubber.value
+        - scrubber input handler must guard !audio.duration before seeking
+
+        PLAYER BAR SYNC
+        - loadSong() must remove player-bar--empty class
+        - ended handler must reset scrubber.value to 0
+        - play/pause icons toggled via updatePlayIcon() on 'play' and 'pause' events
+
+    - path: "ui/nginx.conf"
+      instructions: |
+        Static file server + API proxy. Focus on:
+
+        PROXY
+        - proxy_pass must point to http://api:8000/ (trailing slash required —
+          strips /api/ prefix before forwarding)
+        - proxy_buffering off is required for audio streaming — flag any removal
+        - proxy_set_header Host and X-Real-IP must be present
+
+        SPA FALLBACK
+        - try_files $uri $uri/ /index.html must be the fallback for all non-API routes
+        - Flag any location block that could intercept /api/ requests before
+          the proxy location
+
+    - path: "ui/style.css"
+      instructions: |
+        All design tokens and component styles. Focus on:
+
+        DESIGN TOKENS
+        - No raw hex values in component styles — all colors must use var(--*)
+        - No raw px values for colors or spacing outside :root token definitions
+        - Token names must match DESIGN.md exactly (--bg-base, --accent, etc.)
+
+        COMPONENT SCOPE
+        - Each component block must be scoped to its own class (.song-card, .player-bar, etc.)
+        - No global element selectors (a, button, div) outside reset/base section
+
+    - path: "ui/index.html"
+      instructions: |
+        App shell. Focus on:
+
+        SCRIPT LOADING
+        - app.js must be loaded as type="module"
+        - Google Fonts link must be present (Syne + DM Mono)
+        - No inline <script> blocks — all JS in .js module files
+
+        REQUIRED IDS
+        - #page-content, #modal-root, #toast-root, #player-bar must exist
+        - Player bar elements: #player-thumb, #player-title, #player-channel,
+          #player-scrubber, #player-time, #btn-play-pause, #icon-play, #icon-pause
+        - Sidebar: #btn-add-song, .nav-link elements with data-route attributes
+
+        ACCESSIBILITY
+        - Icon-only buttons must have aria-label
+        - Song list and playlist grid must have role="list"
+
     - path: "docker-compose.yml"
       instructions: |
         Focus on:
@@ -411,6 +551,8 @@ reviews:
     - "!.pytest_cache/**"
     - "!**/.mypy_cache/**"
 
-# ── Chat ──────────────────────────────────────────────────────────────────────
+code_generation:
+  unit_tests:
+
 chat:
   auto_reply: true

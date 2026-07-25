@@ -1,6 +1,6 @@
 [project]
 name = "melo"
-version = "0.3.0"
+version = "0.5.0"
 description = "Personal self-hosted audio library — paste a YouTube URL, get a trimmed playable mp3."
 readme = "README.md"
 license = { text = "MIT" }
@@ -31,6 +31,20 @@ dependencies = [
     "pydantic-settings>=2.5.0",
     "structlog>=24.1.0",
     "uuid6>=2025.0.1",
+    "httpx>=0.28.1",
+    "apscheduler>=3.10,<4",
+    "opentelemetry-api>=1.42.1",
+    "opentelemetry-sdk>=1.42.1",
+    "opentelemetry-instrumentation-fastapi>=0.63b1",
+    "opentelemetry-exporter-otlp>=1.42.1",
+    "prometheus-client>=0.25.0",
+    "prometheus-fastapi-instrumentator>=8.0.0",
+    "starlette>=1.2.1",
+    "httpx2>=2.3.0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.63b1",
+    "opentelemetry-instrumentation-httpx>=0.63b1",
+    "opentelemetry-instrumentation-redis>=0.63b1",
+    "pyroscope-io>=1.0.11",
 ]
 
 [project.urls]
