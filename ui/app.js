@@ -21,12 +21,14 @@ const state = {
     playlists: [], // cache for overflow menu
     routeToken: 0,
     loadedCount: 0, // Number of songs currently rendered in the library view.
+    currentSongList: [], // Song objects backing the currently rendered list —
+                          // becomes the player queue when a card is clicked.
 };
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 
 async function bootstrap() {
-    player.bindScrubber();
+    player.bindPlayerControls();
     bindGlobalEvents();
     checkApiHealth();
 
@@ -66,6 +68,7 @@ function route() {
 }
 
 function highlightNavLink(hash) {
+    // Matches sidebar links AND the phone tab-bar links (both carry .nav-link).
     document.querySelectorAll('.nav-link').forEach(link => {
         const route = link.dataset.route;
         const active =
@@ -198,6 +201,7 @@ async function loadLibrarySongs(append, token = state.routeToken) {
     if (append) {
         list.insertAdjacentHTML('beforeend', cards);
         state.loadedCount += data.records.length;
+        state.currentSongList = state.currentSongList.concat(data.records);
     } else {
         list.innerHTML =
             data.records.length === 0
@@ -205,6 +209,7 @@ async function loadLibrarySongs(append, token = state.routeToken) {
                 : cards;
 
         state.loadedCount = data.records.length;
+        state.currentSongList = data.records;
     }
 
     // Only show "Load more" if the API returned a full page AND there's a bookmark.
@@ -278,6 +283,7 @@ async function pollLibrary() {
         .join('');
 
     state.loadedCount = data.records.length;
+    state.currentSongList = data.records;
 
     const stillPending = data.records.some(
         song =>
@@ -328,6 +334,7 @@ async function renderFavoritesPage() {
     const list = document.getElementById('song-list');
     if (!list) return;
 
+    state.currentSongList = data.records;
     const currentSongId = player.getCurrentSongId?.() ?? null;
 
     list.innerHTML =
@@ -461,6 +468,7 @@ async function refreshPlaylistDetail(id, token = state.routeToken) {
     const root = document.getElementById('playlist-detail-root');
     if (!root) return;
 
+    state.currentSongList = playlist.songs ?? [];
     const currentSongId = player.getCurrentSongId?.() ?? null;
     const rows = (playlist.songs ?? []).map((s, i) => `
     <div class="playlist-song-row">
@@ -810,7 +818,11 @@ async function handleNewPlaylistForSong(songId) {
 function bindGlobalEvents() {
     document.addEventListener('click', handleGlobalClick);
     document.addEventListener('keydown', handleKeydown);
-    document.getElementById('btn-add-song')?.addEventListener('click', openAddSongModal);
+
+    // Both the sidebar (tablet/desktop) and phone FAB trigger the same modal.
+    document
+        .querySelectorAll('.btn-add-song-trigger')
+        .forEach(btn => btn.addEventListener('click', openAddSongModal));
 }
 
 function handleGlobalClick(e) {
@@ -894,20 +906,18 @@ function handleKeydown(e) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-async function playSongById(id) {
-    try {
-        const song = await api.getSong(id);
-        player.loadSong(song);
-        // Full DOM re-render of all visible song cards to sync active state
-        document.querySelectorAll('.song-card').forEach(card => {
-            const isActive = card.dataset.songId === id;
-            card.classList.toggle('song-card--active', isActive);
-            const titleEl = card.querySelector('.song-card__title');
-            if (titleEl) titleEl.style.color = isActive ? 'var(--accent)' : '';
-        });
-    } catch (err) {
-        renderToast(err.message, 'error');
-    }
+function playSongById(id) {
+    // state.currentSongList always mirrors the page currently on screen —
+    // becomes the player's queue so prev/next/shuffle/loop have context.
+    player.setQueueAndPlay(state.currentSongList, id);
+
+    // Full DOM re-render of all visible song cards to sync active state
+    document.querySelectorAll('.song-card').forEach(card => {
+        const isActive = card.dataset.songId === id;
+        card.classList.toggle('song-card--active', isActive);
+        const titleEl = card.querySelector('.song-card__title');
+        if (titleEl) titleEl.style.color = isActive ? 'var(--accent)' : '';
+    });
 }
 
 async function handleRemoveFromPlaylist(playlistId, songId) {

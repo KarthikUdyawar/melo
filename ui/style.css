@@ -39,6 +39,12 @@
     --radius-sm: 4px;
     --radius-md: 8px;
     --radius-lg: 12px;
+
+    /* FE-0: layout tier tokens */
+    --sidebar-width-desktop: 220px;
+    --sidebar-width-tablet: 56px;
+    --player-bar-height: 72px;
+    --tab-bar-height: 56px;
 }
 
 /* ─── Reset ──────────────────────────────────────────────────────────── */
@@ -55,10 +61,14 @@ body {
     height: 100%;
 }
 
+/* ─── App Shell — mobile-first ──────────────────────────────────────────
+   Phone (base, <=767px):  single column, sidebar hidden, bottom tab bar shown.
+   Tablet (>=768px):       sidebar becomes a 56px icon rail, tab bar hidden.
+   Desktop (>=1280px):     sidebar back to full 220px width + labels.        */
 body {
     display: grid;
-    grid-template-columns: 220px 1fr;
-    grid-template-rows: 1fr 72px;
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr var(--player-bar-height) var(--tab-bar-height);
     height: 100vh;
     overflow: hidden;
     background: var(--bg-base);
@@ -67,6 +77,19 @@ body {
     font-size: var(--text-base);
     line-height: var(--leading);
     letter-spacing: var(--tracking);
+}
+
+@media (min-width: 768px) {
+    body {
+        grid-template-columns: var(--sidebar-width-tablet) 1fr;
+        grid-template-rows: 1fr var(--player-bar-height);
+    }
+}
+
+@media (min-width: 1280px) {
+    body {
+        grid-template-columns: var(--sidebar-width-desktop) 1fr;
+    }
 }
 
 a {
@@ -88,16 +111,32 @@ select {
     color: inherit;
 }
 
-/* ─── Sidebar ────────────────────────────────────────────────────────── */
+/* ─── Sidebar ────────────────────────────────────────────────────────── *
+ * Hidden on phone (bottom tab bar takes over). Icon rail on tablet.
+ * Full width + labels on desktop.                                        */
 .sidebar {
-    grid-row: 1;
-    grid-column: 1;
-    background: var(--bg-surface);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    padding: var(--space-6);
-    gap: var(--space-4);
+    display: none;
+}
+
+@media (min-width: 768px) {
+    .sidebar {
+        display: flex;
+        grid-row: 1;
+        grid-column: 1;
+        background: var(--bg-surface);
+        border-right: 1px solid var(--border);
+        flex-direction: column;
+        align-items: center;
+        padding: var(--space-4) var(--space-2);
+        gap: var(--space-4);
+    }
+}
+
+@media (min-width: 1280px) {
+    .sidebar {
+        align-items: stretch;
+        padding: var(--space-6);
+    }
 }
 
 .sidebar__logo {
@@ -109,21 +148,49 @@ select {
     margin-bottom: var(--space-4);
 }
 
+.sidebar__logo-full {
+    display: none;
+}
+
+.sidebar__logo-icon {
+    display: inline;
+}
+
+@media (min-width: 1280px) {
+    .sidebar__logo-full {
+        display: inline;
+    }
+
+    .sidebar__logo-icon {
+        display: none;
+    }
+}
+
 .sidebar__nav {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
     flex: 1;
+    width: 100%;
 }
 
 .nav-link {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    justify-content: center;
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
     color: var(--text-secondary);
     font-size: var(--text-sm);
     transition: color 80ms ease, background 80ms ease;
     border-left: 2px solid transparent;
+}
+
+@media (min-width: 1280px) {
+    .nav-link {
+        justify-content: flex-start;
+    }
 }
 
 .nav-link:hover {
@@ -136,16 +203,109 @@ select {
     border-left-color: var(--accent);
 }
 
+.nav-link__label {
+    display: none;
+}
+
+@media (min-width: 1280px) {
+    .nav-link__label {
+        display: inline;
+    }
+}
+
 .sidebar__add {
     margin-top: auto;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+}
+
+.sidebar__add-label {
+    display: none;
+}
+
+@media (min-width: 1280px) {
+    .sidebar__add-label {
+        display: inline;
+    }
+}
+
+/* ─── Phone FAB (Add Song) ───────────────────────────────────────────── *
+ * Sidebar is hidden on phone, so Add Song surfaces as a floating button
+ * above the tab bar. Same handler as the sidebar button (app.js binds
+ * .btn-add-song-trigger).                                                */
+.fab-add {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    right: var(--space-4);
+    bottom: calc(var(--player-bar-height) + var(--tab-bar-height) + var(--space-4));
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #0e0e0e;
+    font-size: 26px;
+    font-weight: 700;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    z-index: 60;
+}
+
+@media (min-width: 768px) {
+    .fab-add {
+        display: none;
+    }
+}
+
+/* ─── Bottom Tab Bar (phone only) ────────────────────────────────────── */
+.tab-bar {
+    display: flex;
+    grid-row: 3;
+    grid-column: 1;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border);
+}
+
+@media (min-width: 768px) {
+    .tab-bar {
+        display: none;
+    }
+}
+
+.tab-bar__link {
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+    border-left: none;
+    border-radius: 0;
+}
+
+.tab-bar__link .nav-link__label {
+    display: block;
+    font-size: var(--text-xs);
+}
+
+.tab-bar__link.nav-link--active {
+    border-left: none;
+    color: var(--accent);
 }
 
 /* ─── Main ───────────────────────────────────────────────────────────── */
 .main {
     grid-row: 1;
-    grid-column: 2;
+    grid-column: 1;
     overflow-y: auto;
-    padding: var(--space-8);
+    padding: var(--space-4);
+}
+
+@media (min-width: 768px) {
+    .main {
+        grid-column: 2;
+        padding: var(--space-8);
+    }
 }
 
 #page-content {
@@ -162,17 +322,27 @@ select {
     }
 }
 
-/* ─── Player Bar ─────────────────────────────────────────────────────── */
+/* ─── Player Bar ─────────────────────────────────────────────────────── *
+ * Phone: compact — thumb + title + play/pause + scrubber only.
+ * Tablet/desktop: full bar with channel + time labels.                   */
 .player-bar {
     grid-row: 2;
-    grid-column: 1 / -1;
+    grid-column: 1;
     background: var(--player-bg);
     border-top: 1px solid var(--border);
     display: flex;
     align-items: center;
-    gap: var(--space-6);
-    padding: 0 var(--space-6);
-    height: 72px;
+    gap: var(--space-3);
+    padding: 0 var(--space-4);
+    height: var(--player-bar-height);
+}
+
+@media (min-width: 768px) {
+    .player-bar {
+        grid-column: 1 / -1;
+        gap: var(--space-6);
+        padding: 0 var(--space-6);
+    }
 }
 
 .player-bar--empty .player-bar__info,
@@ -184,18 +354,27 @@ select {
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    min-width: 200px;
+    min-width: 0;
+    flex-shrink: 1;
+}
+
+@media (min-width: 768px) {
+    .player-bar__info {
+        min-width: 200px;
+    }
 }
 
 .player-bar__thumb {
     border-radius: var(--radius-sm);
     object-fit: cover;
     background: var(--bg-elevated);
+    flex-shrink: 0;
 }
 
 .player-bar__meta {
     display: flex;
     flex-direction: column;
+    min-width: 0;
 }
 
 .player-bar__title {
@@ -204,12 +383,25 @@ select {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 160px;
+    max-width: 120px;
+}
+
+@media (min-width: 768px) {
+    .player-bar__title {
+        max-width: 160px;
+    }
 }
 
 .player-bar__channel {
+    display: none;
     font-size: var(--text-xs);
     color: var(--text-secondary);
+}
+
+@media (min-width: 768px) {
+    .player-bar__channel {
+        display: block;
+    }
 }
 
 .player-bar__controls {
@@ -217,6 +409,7 @@ select {
     align-items: center;
     gap: var(--space-4);
     flex: 1;
+    min-width: 0;
 }
 
 .player-btn {
@@ -228,6 +421,7 @@ select {
     height: 36px;
     border-radius: 50%;
     transition: background 80ms ease;
+    flex-shrink: 0;
 }
 
 .player-btn:hover {
@@ -236,6 +430,7 @@ select {
 
 .player-scrubber {
     flex: 1;
+    min-width: 0;
     -webkit-appearance: none;
     appearance: none;
     height: 3px;
@@ -262,9 +457,86 @@ select {
 }
 
 .player-time {
+    display: none;
     font-size: var(--text-xs);
     color: var(--text-secondary);
     white-space: nowrap;
+}
+
+@media (min-width: 768px) {
+    .player-time {
+        display: inline;
+    }
+}
+
+/* FE-1: shuffle / prev / next / loop / volume — hidden on phone per FE-0's
+   compact player bar spec (thumb + title + play/pause + scrubber only). */
+.player-ctrl-wide {
+    display: none;
+}
+
+@media (min-width: 768px) {
+    .player-ctrl-wide {
+        display: flex;
+    }
+}
+
+.player-btn[aria-pressed="true"] {
+    color: var(--accent);
+}
+
+.player-btn[data-mode="one"],
+.player-btn[data-mode="all"] {
+    color: var(--accent);
+}
+
+.loop-badge {
+    display: none;
+    position: absolute;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    transform: translate(8px, -8px);
+}
+
+#btn-loop {
+    position: relative;
+}
+
+#btn-loop[data-mode="one"] .loop-badge {
+    display: block;
+}
+
+.player-volume {
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.volume-slider {
+    width: 72px;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 3px;
+    background: var(--bg-elevated);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+}
+
+.volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 10px;
+    height: 10px;
+    background: var(--accent);
+    border-radius: 50%;
+}
+
+.volume-slider::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    background: var(--accent);
+    border-radius: 50%;
+    border: none;
 }
 
 /* ─── Buttons ────────────────────────────────────────────────────────── */
@@ -311,7 +583,9 @@ select {
     cursor: not-allowed;
 }
 
-/* ─── Song Card ──────────────────────────────────────────────────────── */
+/* ─── Song Card ──────────────────────────────────────────────────────── *
+ * Phone: stacked — thumbnail on top, title/meta below, actions row below.
+ * Tablet/desktop: unchanged horizontal row.                              */
 .song-list {
     display: flex;
     flex-direction: column;
@@ -320,8 +594,9 @@ select {
 
 .song-card {
     display: flex;
-    align-items: center;
-    gap: var(--space-3);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
     padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-md);
     border: 1px solid transparent;
@@ -329,6 +604,14 @@ select {
     cursor: pointer;
     transition: background 80ms ease;
     background: var(--bg-surface);
+}
+
+@media (min-width: 768px) {
+    .song-card {
+        flex-direction: row;
+        align-items: center;
+        gap: var(--space-3);
+    }
 }
 
 .song-card:hover {
@@ -344,17 +627,31 @@ select {
 }
 
 .song-card__thumb {
-    width: 48px;
-    height: 48px;
+    width: 64px;
+    height: 64px;
     border-radius: var(--radius-sm);
     object-fit: cover;
     background: var(--bg-elevated);
     flex-shrink: 0;
 }
 
+@media (min-width: 768px) {
+    .song-card__thumb {
+        width: 48px;
+        height: 48px;
+    }
+}
+
 .song-card__body {
     flex: 1;
     min-width: 0;
+    width: 100%;
+}
+
+@media (min-width: 768px) {
+    .song-card__body {
+        width: auto;
+    }
 }
 
 .song-card__title {
@@ -370,6 +667,7 @@ select {
     color: var(--text-secondary);
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: var(--space-2);
     margin-top: 2px;
 }
@@ -379,6 +677,15 @@ select {
     align-items: center;
     gap: var(--space-2);
     flex-shrink: 0;
+    width: 100%;
+    justify-content: space-between;
+}
+
+@media (min-width: 768px) {
+    .song-card__actions {
+        width: auto;
+        justify-content: flex-end;
+    }
 }
 
 .song-card__duration {
@@ -521,26 +828,47 @@ select {
     margin-top: var(--space-6);
 }
 
-/* ─── Modal ──────────────────────────────────────────────────────────── */
+/* ─── Modal ──────────────────────────────────────────────────────────── *
+ * Phone: full-screen (no radius, no backdrop margin) — app-sheet feel.
+ * Tablet/desktop: centered floating card (previous default look).        */
 .modal-overlay {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.75);
     display: flex;
-    align-items: center;
-    justify-content: center;
+    align-items: stretch;
+    justify-content: stretch;
     z-index: 100;
     animation: fade-in 120ms ease;
+}
+
+@media (min-width: 768px) {
+    .modal-overlay {
+        align-items: center;
+        justify-content: center;
+    }
 }
 
 .modal {
     background: var(--bg-surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    padding: var(--space-8);
-    width: 480px;
-    max-width: 95vw;
+    border-radius: 0;
+    padding: var(--space-6);
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    overflow-y: auto;
     animation: modal-in 120ms ease;
+}
+
+@media (min-width: 768px) {
+    .modal {
+        border-radius: var(--radius-lg);
+        padding: var(--space-8);
+        width: 480px;
+        max-width: 95vw;
+        height: auto;
+    }
 }
 
 @keyframes modal-in {
@@ -743,12 +1071,22 @@ select {
 /* ─── Toast ──────────────────────────────────────────────────────────── */
 #toast-root {
     position: fixed;
-    bottom: 88px;
-    right: var(--space-6);
+    bottom: calc(var(--player-bar-height) + var(--tab-bar-height) + var(--space-2));
+    right: var(--space-4);
+    left: var(--space-4);
     display: flex;
     flex-direction: column;
+    align-items: flex-end;
     gap: var(--space-2);
     z-index: 200;
+}
+
+@media (min-width: 768px) {
+    #toast-root {
+        bottom: 88px;
+        left: auto;
+        right: var(--space-6);
+    }
 }
 
 .toast {
