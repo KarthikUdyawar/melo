@@ -499,11 +499,11 @@ select {
     transform: translate(8px, -8px);
 }
 
-#btn-loop {
+.loop-btn {
     position: relative;
 }
 
-#btn-loop[data-mode="one"] .loop-badge {
+.loop-btn[data-mode="one"] .loop-badge {
     display: block;
 }
 
@@ -1233,4 +1233,72 @@ select {
     to {
         transform: rotate(360deg);
     }
+}
+
+/* ─── Now Playing Panel (FE-3) ───────────────────────────────────────── */
+.player-bar__info[role="button"] {
+    cursor: pointer;
+}
+
+.now-playing-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg-base);
+    z-index: 150;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fade-in 120ms ease;
+}
+
+.now-playing {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-4);
+    width: 100%;
+    max-width: 480px;
+    padding: var(--space-8) var(--space-6);
+}
+
+.now-playing__close {
+    position: absolute;
+    top: var(--space-4);
+    right: var(--space-4);
+}
+
+.now-playing__thumb {
+    width: 220px;
+    height: 220px;
+    border-radius: var(--radius-lg);
+    object-fit: cover;
+    background: var(--bg-elevated);
+}
+
+.now-playing__title {
+    font-family: var(--font-display);
+    font-size: var(--text-xl);
+    font-weight: 700;
+    text-align: center;
+}
+
+.now-playing__channel {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+}
+
+.now-playing__canvas {
+    width: 100%;
+    height: 80px;
+}
+
+.now-playing__transport {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+}
+
+#np-scrubber {
+    width: 100%;
 }

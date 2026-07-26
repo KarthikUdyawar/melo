@@ -71,6 +71,7 @@ function formatTime(seconds) {
 function updatePlayIcon() {
     elPlay().style.display = audio.paused ? '' : 'none';
     elPause().style.display = audio.paused ? 'none' : '';
+    emit();
 }
 
 function updateScrubber() {
@@ -79,6 +80,7 @@ function updateScrubber() {
     if (!scrubber || !audio.duration || isNaN(audio.duration)) return;
     scrubber.value = (audio.currentTime / audio.duration) * 100;
     elTime().textContent = `${formatTime(audio.currentTime)} / ${formatTime(audio.duration)}`;
+    emit();
 }
 
 function updateVolumeUi() {
@@ -89,10 +91,12 @@ function updateVolumeUi() {
     if (elIconVol()) elIconVol().style.display = muted ? 'none' : '';
     if (elIconMute()) elIconMute().style.display = muted ? '' : 'none';
     elVolumeBtn()?.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
+    emit();
 }
 
 function updateShuffleUi() {
     elShuffle()?.setAttribute('aria-pressed', String(shuffle));
+    emit();
 }
 
 function updateLoopUi() {
@@ -103,6 +107,7 @@ function updateLoopUi() {
         'aria-label',
         loopMode === 'off' ? 'Enable loop' : loopMode === 'one' ? 'Loop: one song' : 'Loop: all'
     );
+    emit();
 }
 
 // ── Audio element listeners ─────────────────────────────────────────────
@@ -171,6 +176,7 @@ export function loadSong(song) {
     const scrubber = elScrubber();
     if (scrubber) scrubber.value = 0;
     elTime().textContent = `0:00 / ${formatTime(song.effective_duration ?? song.duration ?? 0)}`;
+    emit();
 }
 
 function playCurrentQueueEntry() {
@@ -294,6 +300,18 @@ export function isSongLoaded(id) {
     return currentSong?.id === id;
 }
 
+/**
+ * Seek to a percentage of the current song's duration. Used by the
+ * Now Playing panel's scrubber (main player-bar scrubber uses its own
+ * internal bindScrubber wiring instead).
+ * @param {number} percent 0–100
+ */
+export function seekTo(percent) {
+    if (!audio.duration || isNaN(audio.duration)) return;
+    audio.currentTime = (clamp(percent, 0, 100) / 100) * audio.duration;
+}
+
+
 // ── Volume ───────────────────────────────────────────────────────────────
 
 export function setVolume(v) {
@@ -311,6 +329,78 @@ export function toggleMute() {
         setVolume(preMuteVolume || 1.0);
     }
 }
+
+// ── Now Playing panel subscription (FE-3) ───────────────────────────────
+
+const listeners = new Set();
+
+function emit() {
+    listeners.forEach(fn => fn({
+        song: currentSong,
+        paused: audio.paused,
+        currentTime: audio.currentTime,
+        duration: audio.duration,
+        volume: audio.volume,
+        shuffle,
+        loopMode,
+    }));
+}
+
+/** Subscribe to player state changes. Returns an unsubscribe fn. */
+export function subscribe(fn) {
+    listeners.add(fn);
+    fn({
+        song: currentSong, paused: audio.paused, currentTime: audio.currentTime,
+        duration: audio.duration, volume: audio.volume, shuffle, loopMode
+    });
+    return () => listeners.delete(fn);
+}
+
+// ── Waveform peaks (FE-3) ────────────────────────────────────────────────
+
+const PEAK_BUCKETS = 200;
+const peaksCache = new Map(); // songId -> Float32Array, in-memory only, session-scoped
+let sharedAudioCtx = null;
+
+function getAudioCtx() {
+    if (!sharedAudioCtx) sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    return sharedAudioCtx;
+}
+
+function downsamplePeaks(channelData, buckets) {
+    const blockSize = Math.floor(channelData.length / buckets);
+    const peaks = new Float32Array(buckets);
+    for (let i = 0; i < buckets; i++) {
+        const start = i * blockSize;
+        let max = 0;
+        for (let j = 0; j < blockSize; j++) {
+            const v = Math.abs(channelData[start + j] ?? 0);
+            if (v > max) max = v;
+        }
+        peaks[i] = max;
+    }
+    return peaks;
+}
+
+/**
+ * Fetch + decode a song's audio once, cache peaks in-memory for the
+ * session (cleared on reload, no persistence — FE-3 spec).
+ * @param {string} songId
+ * @returns {Promise<Float32Array>}
+ */
+export async function getPeaks(songId) {
+    if (peaksCache.has(songId)) return peaksCache.get(songId);
+
+    const res = await fetch(`/api/songs/${songId}/stream`);
+    if (!res.ok) throw new Error('Failed to fetch audio for waveform');
+    const arrayBuffer = await res.arrayBuffer();
+    const audioBuffer = await getAudioCtx().decodeAudioData(arrayBuffer);
+    const peaks = downsamplePeaks(audioBuffer.getChannelData(0), PEAK_BUCKETS);
+
+    peaksCache.set(songId, peaks);
+    return peaks;
+}
+
 
 // ── Bind controls — call once after DOM ready ───────────────────────────
 

@@ -64,7 +64,7 @@
     </main>
 
     <div class="player-bar player-bar--empty" id="player-bar">
-        <div class="player-bar__info">
+        <div class="player-bar__info" id="player-info-trigger" data-action="open-now-playing" role="button" tabindex="0" aria-label="Open now playing">
             <img class="player-bar__thumb" id="player-thumb" alt="" width="40" height="40" />
             <div class="player-bar__meta">
                 <span class="player-bar__title" id="player-title"></span>
@@ -108,7 +108,7 @@
             <span class="player-time" id="player-time">0:00 / 0:00</span>
         </div>
 
-        <button class="player-btn player-ctrl-wide" id="btn-loop" aria-label="Enable loop" data-mode="off">
+        <button class="player-btn player-ctrl-wide loop-btn" id="btn-loop" aria-label="Enable loop" data-mode="off">
             <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"
                 stroke-linecap="round" stroke-linejoin="round">
                 <path d="M14 3l3 3-3 3" />
@@ -171,6 +171,7 @@
         </a>
     </nav>
 
+    <div id="now-playing-root"></div>
     <div id="modal-root"></div>
     <div id="toast-root"></div>
 

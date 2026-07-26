@@ -42,15 +42,19 @@
 - [x] Frontend: optimistic reorder, re-fetch on failure to resync
 - [x] Manually confirmed working in browser by Karthik
 
-### FE-3 — Waveform Display (depends: FE-0, FE-1)
+### FE-3 — Waveform Display ✅ done (depends: FE-0, FE-1)
 
-- [ ] New "Now Playing" panel — full view, opens from player bar (tap thumb/title), new UI surface
-- [ ] Panel: large thumbnail, title, channel, waveform canvas, transport controls (mirrors player bar), close button
-- [ ] Fetch stream URL as `ArrayBuffer` on first play (separate from `<audio>` playback)
-- [ ] `AudioContext.decodeAudioData()` -> downsample to ~200 peak buckets
-- [ ] Render peaks to `<canvas>` inside Now Playing panel
-- [ ] Cache peaks in-memory `Map<songId, peaks>` per session, no persistence
+- [x] New "Now Playing" panel — full view, opens from player bar (tap thumb/title), new UI surface
+- [x] Panel: large thumbnail, title, channel, waveform canvas, transport controls (mirrors player bar), close button
+- [x] Fetch stream URL as `ArrayBuffer` on first play (separate from `<audio>` playback)
+- [x] `AudioContext.decodeAudioData()` -> downsample to ~200 peak buckets
+- [x] Render peaks to `<canvas>` inside Now Playing panel
+- [x] Cache peaks in-memory `Map<songId, peaks>` per session, no persistence — lives in `player.js` module scope, not `app.js`
 - [ ] Out of scope this sprint: click-to-seek on waveform
+- [x] Panel scrubber (separate control from the waveform) supports click-to-seek — bug found in manual testing, was shipped `disabled`; see DECISIONS.md
+- [x] Loop-mode badge ("1" in loop-one state) renders correctly in both player bar and panel — bug found in manual testing, was ID-scoped CSS; see DECISIONS.md
+- [x] Panel state (play/pause, scrubber, volume, shuffle, loop, song swap on next/prev) mirrors player bar live via `player.js`'s new `subscribe()` pub-sub
+- [x] Manually confirmed working in browser by Karthik, 2 bugs found + fixed (scrubber dead, loop badge missing)
 
 ### FE-4 — Accessibility Audit (depends: FE-0-FE-3)
 

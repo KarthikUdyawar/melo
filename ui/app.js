@@ -22,9 +22,13 @@ const state = {
     routeToken: 0,
     loadedCount: 0, // Number of songs currently rendered in the library view.
     currentSongList: [], // Song objects backing the currently rendered list —
-                          // becomes the player queue when a card is clicked.
+    // becomes the player queue when a card is clicked.
     currentPlaylistId: null, // needed by drop handler (delegation has no closure)
     dragSongId: null, // dragged song id, tracked outside dataTransfer
+    nowPlayingUnsub: null, // unsubscribe fn for the Now Playing panel's player.subscribe()
+    nowPlayingSongId: null, // last songId drawn on the waveform, avoids redundant redraw
+    npSeeking: false, // true while dragging the panel scrubber — mirrors player.js's isSeeking
+    npDuration: 0, // last known duration, used for live time label while dragging
 };
 
 // ── Boot ──────────────────────────────────────────────────────────────────
@@ -561,6 +565,192 @@ async function reorderPlaylistSongOptimistic(playlistId, songId, newPosition) {
     }
 }
 
+// ── Now Playing Panel (FE-3) ──────────────────────────────────────────────
+
+function openNowPlayingPanel() {
+    const song = player.getCurrentSong();
+    if (!song) return;
+
+    const root = document.getElementById('now-playing-root');
+    root.innerHTML = buildNowPlayingHtml(song);
+    bindNowPlayingEvents();
+
+    state.nowPlayingSongId = null; // force waveform draw on first subscribe tick
+    state.nowPlayingUnsub = player.subscribe(updateNowPlayingUi);
+
+    loadAndDrawWaveform(song.id);
+}
+
+function closeNowPlayingPanel() {
+    state.nowPlayingUnsub?.();
+    state.nowPlayingUnsub = null;
+    document.getElementById('now-playing-root').innerHTML = '';
+}
+
+function isNowPlayingOpen() {
+    return !!document.getElementById('now-playing-root')?.firstElementChild;
+}
+
+function buildNowPlayingHtml(song) {
+    return `<div class="now-playing-overlay" id="now-playing-overlay">
+    <div class="now-playing">
+      <button class="icon-btn now-playing__close" id="np-close" aria-label="Close">✕</button>
+      <img class="now-playing__thumb" id="np-thumb" src="${escHtml(song.thumbnail_url ?? '')}" alt="" />
+      <div class="now-playing__title" id="np-title">${escHtml(song.title ?? '')}</div>
+      <div class="now-playing__channel" id="np-channel">${escHtml(song.channel ?? '')}</div>
+      <canvas class="now-playing__canvas" id="np-canvas"></canvas>
+      <div class="now-playing__transport">
+        <button class="player-btn" id="np-shuffle" aria-label="Shuffle" aria-pressed="false">${shuffleSvg()}</button>
+        <button class="player-btn" id="np-prev" aria-label="Previous">${prevSvg()}</button>
+        <button class="player-btn" id="np-play-pause" aria-label="Play / Pause">
+          <svg id="np-icon-play" width="24" height="24" viewBox="0 0 20 20" fill="currentColor"><path d="M6 4l10 6-10 6V4z"/></svg>
+          <svg id="np-icon-pause" width="24" height="24" viewBox="0 0 20 20" fill="currentColor" style="display:none"><rect x="4" y="3" width="4" height="14" rx="1"/><rect x="12" y="3" width="4" height="14" rx="1"/></svg>
+        </button>
+        <button class="player-btn" id="np-next" aria-label="Next">${nextSvg()}</button>
+        <button class="player-btn loop-btn" id="np-loop" aria-label="Enable loop" data-mode="off">${loopSvg()}<span class="loop-badge" aria-hidden="true">1</span></button>
+      </div>
+      <input type="range" class="player-scrubber" id="np-scrubber" min="0" max="100" value="0" step="0.1" aria-label="Seek" disabled />
+      <span class="player-time" id="np-time">0:00 / 0:00</span>
+      <div class="player-volume" id="np-volume">
+        <button class="player-btn" id="np-mute" aria-label="Mute">${volumeSvg()}</button>
+        <input type="range" class="volume-slider" id="np-volume-slider" min="0" max="1" value="1" step="0.01" aria-label="Volume" />
+      </div>
+    </div>
+  </div>`;
+}
+
+function bindNowPlayingEvents() {
+    document.getElementById('np-close')?.addEventListener('click', closeNowPlayingPanel);
+    document.getElementById('now-playing-overlay')?.addEventListener('click', e => {
+        if (e.target.id === 'now-playing-overlay') closeNowPlayingPanel();
+    });
+    document.getElementById('np-play-pause')?.addEventListener('click', player.togglePlayPause);
+    document.getElementById('np-prev')?.addEventListener('click', player.prev);
+    document.getElementById('np-next')?.addEventListener('click', player.next);
+    document.getElementById('np-shuffle')?.addEventListener('click', player.toggleShuffle);
+    document.getElementById('np-loop')?.addEventListener('click', player.cycleLoopMode);
+    document.getElementById('np-mute')?.addEventListener('click', player.toggleMute);
+    document.getElementById('np-volume-slider')?.addEventListener('input', e =>
+        player.setVolume(parseFloat(e.target.value))
+    );
+    bindNowPlayingScrubber();
+}
+
+function bindNowPlayingScrubber() {
+    const scrubber = document.getElementById('np-scrubber');
+    if (!scrubber) return;
+    scrubber.removeAttribute('disabled');
+
+    scrubber.addEventListener('mousedown', () => { state.npSeeking = true; });
+    scrubber.addEventListener('touchstart', () => { state.npSeeking = true; });
+
+    scrubber.addEventListener('input', () => {
+        if (!state.npDuration) return;
+        const seekTime = (scrubber.value / 100) * state.npDuration;
+        const time = document.getElementById('np-time');
+        if (time) time.textContent = `${formatDuration(seekTime)} / ${formatDuration(state.npDuration)}`;
+    });
+
+    scrubber.addEventListener('change', () => {
+        player.seekTo(parseFloat(scrubber.value));
+        state.npSeeking = false;
+    });
+
+    scrubber.addEventListener('mouseup', () => { state.npSeeking = false; });
+    scrubber.addEventListener('touchend', () => { state.npSeeking = false; });
+}
+
+/** Mirrors player.js state onto the panel's own DOM. Does NOT touch the
+ *  player-bar elements — player.js already owns those via its own listeners. */
+function updateNowPlayingUi(s) {
+    if (!isNowPlayingOpen()) return;
+
+    if (s.song && s.song.id !== state.nowPlayingSongId) {
+        document.getElementById('np-thumb').src = s.song.thumbnail_url ?? '';
+        document.getElementById('np-title').textContent = s.song.title ?? '';
+        document.getElementById('np-channel').textContent = s.song.channel ?? '';
+        loadAndDrawWaveform(s.song.id);
+    }
+
+    const playIcon = document.getElementById('np-icon-play');
+    const pauseIcon = document.getElementById('np-icon-pause');
+    if (playIcon) playIcon.style.display = s.paused ? '' : 'none';
+    if (pauseIcon) pauseIcon.style.display = s.paused ? 'none' : '';
+
+    state.npDuration = s.duration || 0;
+
+    const scrubber = document.getElementById('np-scrubber');
+    if (scrubber && s.duration && !state.npSeeking) scrubber.value = (s.currentTime / s.duration) * 100;
+
+    const time = document.getElementById('np-time');
+    if (time && !state.npSeeking) time.textContent = `${formatDuration(s.currentTime)} / ${formatDuration(s.duration)}`;
+
+    const volSlider = document.getElementById('np-volume-slider');
+    if (volSlider) volSlider.value = s.volume;
+
+    document.getElementById('np-shuffle')?.setAttribute('aria-pressed', String(s.shuffle));
+    const loopBtn = document.getElementById('np-loop');
+    if (loopBtn) loopBtn.dataset.mode = s.loopMode;
+}
+
+async function loadAndDrawWaveform(songId) {
+    state.nowPlayingSongId = songId;
+    const canvas = document.getElementById('np-canvas');
+    if (!canvas) return;
+
+    let peaks;
+    try {
+        peaks = await player.getPeaks(songId);
+    } catch {
+        return; // waveform is visual-only; silent fail, no toast noise
+    }
+
+    if (!isNowPlayingOpen() || state.nowPlayingSongId !== songId) return;
+
+    drawWaveform(canvas, peaks);
+}
+
+function drawWaveform(canvas, peaks) {
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, height);
+
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    ctx.fillStyle = accent || '#c8f04e';
+
+    const barGap = 2;
+    const barWidth = width / peaks.length - barGap;
+    const mid = height / 2;
+
+    peaks.forEach((peak, i) => {
+        const barHeight = Math.max(2, peak * height);
+        const x = i * (barWidth + barGap);
+        ctx.fillRect(x, mid - barHeight / 2, barWidth, barHeight);
+    });
+}
+
+function shuffleSvg() {
+    return `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5h3.5L13 15h5"/><path d="M14.5 5H18v3.5"/><path d="M2 15h3.5L9 10"/><path d="M14.5 15H18v-3.5"/></svg>`;
+}
+function prevSvg() {
+    return `<svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor"><path d="M6 4h2v12H6zM16 4v12L7 10z"/></svg>`;
+}
+function nextSvg() {
+    return `<svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor"><path d="M14 4h-2v12h2zM4 4v12l9-6z"/></svg>`;
+}
+function loopSvg() {
+    return `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3l3 3-3 3"/><path d="M3 11V9a3 3 0 0 1 3-3h11"/><path d="M6 17l-3-3 3-3"/><path d="M17 9v2a3 3 0 0 1-3 3H3"/></svg>`;
+}
+function volumeSvg() {
+    return `<svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor"><path d="M3 8v4h3l4 4V4L6 8H3z"/></svg>`;
+}
+
 // ── Add Song Modal ────────────────────────────────────────────────────────
 
 function openAddSongModal() {
@@ -897,6 +1087,9 @@ function bindGlobalEvents() {
     document
         .querySelectorAll('.btn-add-song-trigger')
         .forEach(btn => btn.addEventListener('click', openAddSongModal));
+    document.getElementById('player-info-trigger')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openNowPlayingPanel(); }
+    });
 }
 
 function handleGlobalClick(e) {
@@ -930,6 +1123,9 @@ function handleGlobalClick(e) {
     switch (action) {
         case 'open-add-song':
             openAddSongModal();
+            break;
+        case 'open-now-playing':
+            openNowPlayingPanel();
             break;
         case 'close-modal':
             closeModal();
@@ -971,7 +1167,10 @@ function handleGlobalClick(e) {
 }
 
 function handleKeydown(e) {
-    if (e.key === 'Escape') closeModal();
+    if (e.key === 'Escape') {
+        if (isNowPlayingOpen()) { closeNowPlayingPanel(); return; }
+        closeModal();
+    }
     if (e.key === ' ' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
         e.preventDefault();
         player.togglePlayPause();
