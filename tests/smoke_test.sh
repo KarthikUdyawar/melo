@@ -9,6 +9,7 @@
 #   GET  /songs/{id}/stream
 #   POST/DELETE/GET /favorites  (LIB-1)
 #   POST/GET/DELETE /playlists  (LIB-2)
+#   PATCH /playlists/{id}/songs/{song_id}  (FE-2, reorder)
 #   GET /songs filtering, sorting, pagination (API-2)
 #   Validation error paths (422, 404)
 #
@@ -19,6 +20,15 @@
 #   API_URL=http://localhost:8000 ./tests/smoke_test.sh
 #
 # Requirements: curl, jq
+#
+# NOTE ON DEDUP + STALE STATE:
+#   S6 ingest may hit PIPELINE.md's dedup path (existing `done` song with the
+#   same youtube_id) rather than a fresh download. If Postgres and MinIO
+#   volumes ever drift out of sync (e.g. `minio_data` wiped without also
+#   wiping `postgres_data`), the deduped file_url can point at a MinIO object
+#   that no longer exists, and S8's stream check fails with a 502 that looks
+#   like an app bug but isn't. If S8 fails, run `make down-v && make up`
+#   (wipes both volumes together) before re-running this script.
 # =============================================================================
 
 set -euo pipefail
@@ -68,6 +78,14 @@ api_post() {
 
 api_post_raw() {
     curl -s --max-time 15 -X POST \
+        -H "Content-Type: application/json" \
+        -d "$2" \
+        -w "|||%{http_code}" \
+        "${API}$1"
+}
+
+api_patch_raw() {
+    curl -s --max-time 15 -X PATCH \
         -H "Content-Type: application/json" \
         -d "$2" \
         -w "|||%{http_code}" \
@@ -176,7 +194,7 @@ HTTP="${RAW##*|||}"
 pass "YouTube homepage (no video ID) → 422"
 
 # =============================================================================
-# S6. Ingest — POST /songs + poll
+# S6. Ingest — POST /songs
 # =============================================================================
 section "S6. Ingest — POST /songs"
 
@@ -212,6 +230,10 @@ done
 [[ "$STATUS" == "done" ]] || fail "Song not done after ${TIMEOUT}s (status=$STATUS)"
 pass "Song done in ${ELAPSED}s"
 
+if [[ "$ELAPSED" -le 5 ]]; then
+    warn "Done in ${ELAPSED}s — this likely hit the dedup path (PIPELINE.md), not a fresh download"
+fi
+
 # =============================================================================
 # S8. Stream
 # =============================================================================
@@ -223,6 +245,14 @@ HTTP="${STREAM_RAW%%|||*}"
 REST="${STREAM_RAW#*|||}"
 STREAM_HTTP="${REST%%|||*}"
 BYTES="${REST##*|||}"
+
+if [[ "$STREAM_HTTP" == "502" ]]; then
+    FILE_URL=$(api_get "/songs/$SONG_ID" | jq -r '.body.file_url // "null"')
+    fail "Stream 502 — likely a dangling file_url ($FILE_URL) from a deduped \
+song whose MinIO object no longer exists (DB/MinIO volume drift). \
+Run: make down-v && make up (wipes both volumes together), then re-run this script. \
+This is stale environment state, not an app regression — see file header note."
+fi
 
 [[ "$STREAM_HTTP" == "200" ]] || fail "Stream: expected 200, got $STREAM_HTTP"
 [[ "$BYTES" -gt 1000 ]] || fail "Stream response too small: ${BYTES} bytes"
@@ -420,9 +450,89 @@ HTTP="${RAW##*|||}"
 pass "GET /playlists/{unknown} → 404"
 
 # =============================================================================
-# S17. Playlists — remove song
+# S17. Playlists — reorder (FE-2)
 # =============================================================================
-section "S17. Playlists — remove song"
+section "S17. Playlists — reorder (FE-2)"
+
+# Build a 3-song playlist to exercise a real shift, not a 1-item no-op.
+SONG_B_RESP=$(api_post "/songs" "{\"url\": \"$YT_URL\", \"start\": 5, \"end\": 30}") \
+    || fail "POST /songs (song B, trimmed for uniqueness) failed"
+SONG_B_ID=$(echo "$SONG_B_RESP" | jq -r '.body.id')
+
+SONG_C_RESP=$(api_post "/songs" "{\"url\": \"$YT_URL\", \"start\": 10, \"end\": 40}") \
+    || fail "POST /songs (song C, trimmed for uniqueness) failed"
+SONG_C_ID=$(echo "$SONG_C_RESP" | jq -r '.body.id')
+
+# Dedup path means these resolve fast (same youtube_id, different start/end rows) —
+# poll briefly rather than assuming instant done.
+for ID in "$SONG_B_ID" "$SONG_C_ID"; do
+    T=0
+    ST="pending"
+    while [[ "$ST" != "done" && $T -lt 30 ]]; do
+        sleep 2; T=$((T + 2))
+        ST=$(api_get "/songs/$ID" | jq -r '.body.status')
+    done
+    [[ "$ST" == "done" ]] || fail "Song $ID not done after 30s (status=$ST)"
+done
+
+api_post "/playlists/$PLAYLIST_ID/songs/$SONG_B_ID" '{}' > /dev/null
+api_post "/playlists/$PLAYLIST_ID/songs/$SONG_C_ID" '{}' > /dev/null
+# Playlist is now [SONG_ID, SONG_B_ID, SONG_C_ID] at positions 0,1,2
+
+REORDER_RAW=$(api_patch_raw "/playlists/$PLAYLIST_ID/songs/$SONG_C_ID" '{"position": 0}')
+REORDER_BODY="${REORDER_RAW%|||*}"
+REORDER_HTTP="${REORDER_RAW##*|||}"
+[[ "$REORDER_HTTP" == "200" ]] || fail "PATCH reorder: expected 200, got $REORDER_HTTP"
+
+NEW_ORDER=$(echo "$REORDER_BODY" | jq -r '[.body.songs[].id]')
+FIRST_ID=$(echo "$NEW_ORDER" | jq -r '.[0]')
+[[ "$FIRST_ID" == "$SONG_C_ID" ]] || fail "Reorder: expected song C first, got $FIRST_ID"
+pass "PATCH /playlists/{id}/songs/{song_id} → 200, moved to front"
+
+# Verify it's not a swap — songs between old (2) and new (0) position should
+# all shift down by one, not just the two endpoints trading places.
+SECOND_ID=$(echo "$NEW_ORDER" | jq -r '.[1]')
+THIRD_ID=$(echo "$NEW_ORDER" | jq -r '.[2]')
+[[ "$SECOND_ID" == "$SONG_ID" ]] || fail "Expected original song at position 1 after shift, got $SECOND_ID"
+[[ "$THIRD_ID" == "$SONG_B_ID" ]] || fail "Expected song B at position 2 after shift, got $THIRD_ID"
+pass "Reorder shifts intermediate positions (not a two-item swap)"
+
+# Reflected in a fresh, separate GET
+PL_DETAIL_AFTER=$(api_get "/playlists/$PLAYLIST_ID") || fail "GET /playlists after reorder failed"
+FIRST_AFTER_GET=$(echo "$PL_DETAIL_AFTER" | jq -r '.body.songs[0].id')
+[[ "$FIRST_AFTER_GET" == "$SONG_C_ID" ]] || fail "Reorder not reflected in separate GET"
+pass "Reorder reflected in GET /playlists/{id}"
+
+RAW=$(api_patch_raw "/playlists/$PLAYLIST_ID/songs/$SONG_C_ID" '{"position": 99}')
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "422" ]] || fail "Out-of-range position: expected 422, got $HTTP"
+pass "PATCH reorder position out of range → 422"
+
+RAW=$(api_patch_raw "/playlists/$PLAYLIST_ID/songs/$SONG_C_ID" '{"position": -1}')
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "422" ]] || fail "Negative position: expected 422, got $HTTP"
+pass "PATCH reorder negative position → 422"
+
+RAW=$(api_patch_raw "/playlists/00000000-0000-0000-0000-000000000000/songs/$SONG_C_ID" '{"position": 0}')
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "404" ]] || fail "Reorder unknown playlist: expected 404, got $HTTP"
+pass "PATCH reorder unknown playlist → 404"
+
+RAW=$(api_patch_raw "/playlists/$PLAYLIST_ID/songs/00000000-0000-0000-0000-000000000000" '{"position": 0}')
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "404" ]] || fail "Reorder unknown membership: expected 404, got $HTTP"
+pass "PATCH reorder unknown song/membership → 404"
+
+# Clean up B and C so later sections don't see extra playlist rows from this block.
+api_delete_raw "/playlists/$PLAYLIST_ID/songs/$SONG_B_ID" > /dev/null
+api_delete_raw "/playlists/$PLAYLIST_ID/songs/$SONG_C_ID" > /dev/null
+api_delete_raw "/songs/$SONG_B_ID" > /dev/null
+api_delete_raw "/songs/$SONG_C_ID" > /dev/null
+
+# =============================================================================
+# S18. Playlists — remove song
+# =============================================================================
+section "S18. Playlists — remove song"
 
 DEL_SONG_RAW=$(api_delete_raw "/playlists/$PLAYLIST_ID/songs/$SONG_ID")
 DEL_SONG_HTTP="${DEL_SONG_RAW##*|||}"
@@ -440,9 +550,9 @@ HTTP="${RAW##*|||}"
 pass "DELETE /playlists/{id}/songs/{not-in-playlist} → 404"
 
 # =============================================================================
-# S18. Playlists — delete playlist
+# S19. Playlists — delete playlist
 # =============================================================================
-section "S18. Playlists — delete playlist"
+section "S19. Playlists — delete playlist"
 
 api_post "/playlists/$PLAYLIST_ID/songs/$SONG_ID" '{}' > /dev/null
 
@@ -463,13 +573,13 @@ pass "Deleted playlist absent from GET /playlists"
 
 RAW=$(api_delete_raw "/playlists/00000000-0000-0000-0000-000000000000")
 HTTP="${RAW##*|||}"
-[[ "$HTTP" == "404" ]] || fail "DELETE /playlists/unknown: expected 404, got $HTTP"
+[[ "$HTTP" == "404" ]] || fail "DELETE /playlists/{unknown} → 404"
 pass "DELETE /playlists/{unknown} → 404"
 
 # =============================================================================
-# S19. Playlists — same song in multiple playlists
+# S20. Playlists — same song in multiple playlists
 # =============================================================================
-section "S19. Playlists — same song in multiple playlists"
+section "S20. Playlists — same song in multiple playlists"
 
 PL_A=$(api_post "/playlists" '{"name": "Playlist A"}' | jq -r '.body.id') \
     || fail "Create playlist A failed"
@@ -496,9 +606,9 @@ api_delete_raw "/playlists/$PL_A" > /dev/null
 api_delete_raw "/playlists/$PL_B" > /dev/null
 
 # =============================================================================
-# S20. GET /songs — status filter
+# S21. GET /songs — status filter
 # =============================================================================
-section "S20. GET /songs — status filter"
+section "S21. GET /songs — status filter"
 
 DONE_RESP=$(api_get "/songs?status=done") || fail "GET /songs?status=done failed"
 DONE_RECORDS=$(echo "$DONE_RESP" | jq -r '.body.records')
@@ -514,9 +624,9 @@ HTTP="${RAW##*|||}"
 pass "GET /songs?status=bogus → 422"
 
 # =============================================================================
-# S21. GET /songs — search filter
+# S22. GET /songs — search filter
 # =============================================================================
-section "S21. GET /songs — search filter"
+section "S22. GET /songs — search filter"
 
 if [[ "$TITLE" != "null" && -n "$TITLE" ]]; then
     SEARCH_TERM=$(echo "$TITLE" | cut -c1-4 | tr '[:upper:]' '[:lower:]')
@@ -535,11 +645,10 @@ NO_COUNT=$(echo "$NO_MATCH" | jq -r '.body.count')
 pass "GET /songs?search=zzznomatch_xyz → 0 results"
 
 # =============================================================================
-# S22. GET /songs — favorite filter
+# S23. GET /songs — favorite filter
 # =============================================================================
-section "S22. GET /songs — favorite filter"
+section "S23. GET /songs — favorite filter"
 
-# Favorite the song and verify it took
 FAV_RAW=$(api_post_raw "/favorites/$SONG_ID" '{}')
 FAV_HTTP="${FAV_RAW##*|||}"
 [[ "$FAV_HTTP" == "200" || "$FAV_HTTP" == "201" ]] \
@@ -565,9 +674,9 @@ pass "GET /songs?favorite=maybe → 422"
 api_delete_raw "/favorites/$SONG_ID" > /dev/null || true
 
 # =============================================================================
-# S23. GET /songs — sort_by + order
+# S24. GET /songs — sort_by + order
 # =============================================================================
-section "S23. GET /songs — sort_by + order"
+section "S24. GET /songs — sort_by + order"
 
 SORTED=$(api_get "/songs?sort_by=created_at&order=asc") || fail "GET /songs?sort_by=created_at&order=asc failed"
 TIMESTAMPS=$(echo "$SORTED" | jq -r '[.body.records[].created_at]')
@@ -586,9 +695,9 @@ HTTP="${RAW##*|||}"
 pass "GET /songs?order=sideways → 422"
 
 # =============================================================================
-# S24. GET /songs — pagination + bookmark cursor
+# S25. GET /songs — pagination + bookmark cursor
 # =============================================================================
-section "S24. GET /songs — pagination + bookmark cursor"
+section "S25. GET /songs — pagination + bookmark cursor"
 
 PAGE1=$(api_get "/songs?sort_by=created_at&order=asc&limit=1") || fail "GET /songs?limit=1 failed"
 P1_COUNT=$(echo "$PAGE1" | jq -r '.body.count')
@@ -624,9 +733,9 @@ HTTP="${RAW##*|||}"
 pass "GET /songs?offset=-1 → 422"
 
 # =============================================================================
-# S25. GET /metrics — Prometheus endpoint
+# S26. GET /metrics — Prometheus endpoint
 # =============================================================================
-section "S25. GET /metrics — Prometheus endpoint"
+section "S26. GET /metrics — Prometheus endpoint"
 
 METRICS_RAW=$(curl -s --max-time 10 -w "|||%{http_code}" "${API}/metrics")
 METRICS_HTTP="${METRICS_RAW##*|||}"
@@ -644,9 +753,9 @@ echo "$METRICS_BODY" | grep -q "songs_completed_total" \
 pass "GET /metrics contains songs_completed_total"
 
 # =============================================================================
-# S26. X-Trace-Id header present on API responses
+# S27. X-Trace-Id header present on API responses
 # =============================================================================
-section "S26. X-Trace-Id header present on API responses"
+section "S27. X-Trace-Id header present on API responses"
 
 for ENDPOINT in "/health" "/songs" "/favorites" "/playlists"; do
     HEADERS=$(curl -s --max-time 10 -I "${API}${ENDPOINT}" | tr -d '\r')
@@ -661,5 +770,5 @@ done
 # Summary
 # =============================================================================
 echo -e "\n${GREEN}════════════════════════════════════════${NC}"
-echo -e "${GREEN}  ✓ All smoke tests passed! (26 sections)${NC}"
+echo -e "${GREEN}  ✓ All smoke tests passed! (27 sections)${NC}"
 echo -e "${GREEN}════════════════════════════════════════${NC}\n"

@@ -11,34 +11,36 @@
 - [x] **Waveform placement**: expandable "now playing" panel (new UI surface — FE-3 scope up from inline default)
 - [x] **Nav pattern**: bottom tab bar (phone) + icon rail 56px, no drawer (tablet) — Spotify-style
 
-### FE-0 — Responsive Layout
+### FE-0 — Responsive Layout ✅ done
 
-- [ ] Breakpoints: desktop >=1280px (unchanged), tablet 768-1279px, phone <=767px
-- [ ] Tablet: sidebar -> icon rail (56px), no drawer, no hamburger needed
-- [ ] Phone: sidebar -> bottom tab bar (Library/Favorites/Playlists)
-- [ ] Phone: song card stacks title under thumbnail
-- [ ] Phone: player bar compacts -- thumb + title + play/pause + scrubber only, hide time labels + prev/next
-- [ ] Modal: full-screen below 768px, no radius/backdrop margin
-- [ ] CSS-only breakpoint switching -- no JS layout logic beyond drawer/tab-bar toggle state
+- [x] Breakpoints: desktop >=1280px (unchanged), tablet 768-1279px, phone <=767px
+- [x] Tablet: sidebar -> icon rail (56px), no drawer, no hamburger needed
+- [x] Phone: sidebar -> bottom tab bar (Library/Favorites/Playlists)
+- [x] Phone: song card stacks title under thumbnail
+- [x] Phone: player bar compacts -- thumb + title + play/pause + scrubber only, hide time labels + prev/next
+- [x] Modal: full-screen below 768px, no radius/backdrop margin
+- [x] CSS-only breakpoint switching -- no JS layout logic beyond drawer/tab-bar toggle state
+- [x] Phone-only: Add Song FAB added (sidebar's add button is hidden on phone with no sidebar) -- not in original PRD wording, needed since nav tabs don't include Add
 
-### FE-1 — Player Features (depends: FE-0)
+### FE-1 — Player Features ✅ done (depends: FE-0)
 
-- [ ] Volume: slider in player bar, persist `localStorage['melo:volume']`, default 1.0
-- [ ] Volume: click icon to mute/unmute, remembers pre-mute level
-- [ ] Loop: off/one/all, persist `localStorage['melo:loop']`, default off, icon-button 3-state
-- [ ] Shuffle: session-only (not persisted), Fisher-Yates reshuffle, keeps current song in place on toggle
-- [ ] Queue: set from clicked song's page list (Library/Favorites/Playlist Detail) + clicked index
-- [ ] `audio.onended`: loop-one replays, else advance queue (wrap if loop-all), stop + keep bar visible if loop-off at queue end
-- [ ] Prev/Next buttons operate on queue
+- [x] Volume: slider in player bar, persist `localStorage['melo:volume']`, default 1.0
+- [x] Volume: click icon to mute/unmute, remembers pre-mute level
+- [x] Loop: off/one/all, persist `localStorage['melo:loop']`, default off, icon-button 3-state
+- [x] Shuffle: session-only (not persisted), Fisher-Yates reshuffle, keeps current song in place on toggle
+- [x] Queue: set from clicked song's page list (Library/Favorites/Playlist Detail) + clicked index
+- [x] `audio.onended`: loop-one replays, else advance queue (wrap if loop-all), stop + keep bar visible if loop-off at queue end
+- [x] Prev/Next buttons operate on queue, skip non-`done` entries
 
-### FE-2 — Drag-Reorder Playlists (depends: FE-0)
+### FE-2 — Drag-Reorder Playlists ✅ done (depends: FE-0)
 
-- [ ] Backend: `PATCH /playlists/{id}/songs/{song_id}` body `{ "position": int }`
-- [ ] Shift-down logic between old/new position (not a two-item swap)
-- [ ] Retry on `IntegrityError` vs `uq_playlist_position`, reusing existing pattern from `add_song_to_playlist`
-- [ ] Response: `200` + updated playlist detail / `404` / `422` out-of-range / `409` conflict after retries
-- [ ] Frontend: native HTML5 DnD (`draggable`, `dragstart`/`dragover`/`drop`) on Playlist Detail rows, via existing event-delegation listener
-- [ ] Frontend: optimistic reorder, re-fetch on failure to resync
+- [x] Backend: `PATCH /playlists/{id}/songs/{song_id}` body `{ "position": int }`
+- [x] Shift-down logic between old/new position (not a two-item swap)
+- [x] ~~Retry on `IntegrityError` vs `uq_playlist_position`~~ — N/A, see DECISIONS.md (sentinel approach has no retry loop)
+- [x] Response: `200` + updated playlist detail / `404` / `422` out-of-range — 409 dropped, see DECISIONS.md
+- [x] Frontend: native HTML5 DnD (`draggable`, `dragstart`/`dragover`/`drop`) on Playlist Detail rows, via existing event-delegation listener
+- [x] Frontend: optimistic reorder, re-fetch on failure to resync
+- [x] Manually confirmed working in browser by Karthik
 
 ### FE-3 — Waveform Display (depends: FE-0, FE-1)
 
@@ -62,15 +64,25 @@
 
 - [ ] Log bugs found during FE-0-FE-4 here as they surface -- no fixed list at sprint start
 
-### FE-6 — Tests (depends: FE-2)
+Flagged during FE-0/FE-1 (not bugs, undocumented calls -- confirm or override):
+- [ ] `prev()` restarts current song if >3s played, only jumps to previous track if <3s in -- standard player convention, not in original PRD spec. Confirm keep or remove.
+- [ ] Song card "stacks title under thumbnail" on phone implemented as: thumb top (64px), title/meta/actions stacked below -- literal reading of PRD wording, not yet visually confirmed by Karthik on a device
 
-- [ ] Unit: reorder correctly shifts positions (not a swap)
-- [ ] Unit: reorder retries on `IntegrityError`
-- [ ] Integration: `422` on out-of-range position
-- [ ] Integration: `404` on missing playlist/song/membership
-- [ ] Integration: full reorder reflected in `GET /playlists/{id}`
-- [ ] Manual smoke additions to `smoke-ui.sh`: responsive breakpoints, player controls (volume/shuffle/loop/autoplay), drag-drop, waveform render, focus trap, dropdown Escape-close
-- [ ] Maintain >=80% backend coverage (currently 91%) -- FE-2 endpoint is the only backend surface this sprint
+Flagged during FE-2 (not bugs, undocumented calls -- confirm or override):
+- [x] Drop-onto-row semantics implemented as "insert after target row" (splice at dropped-on index) -- not specified in PRD. **Resolved: keeping as-is** (Karthik confirmed working via manual test; no request to change). See DECISIONS.md.
+- [ ] Song thumbnail inside dragged row is natively `draggable` in most browsers, so the drag-preview image shows just the thumbnail, not the full row -- cosmetic only, reorder still functions correctly. Low priority; fix requires `draggable="false"` on shared `.song-card__thumb` in `components.js` (touches Library/Favorites too). Confirm fix now or defer to Sprint 7.
+
+### FE-6 — Tests (depends: FE-2) ✅ backend + smoke done
+
+- [x] Unit: reorder correctly shifts positions (not a swap)
+- [x] Unit: reorder retries on `IntegrityError` — N/A, see DECISIONS.md (sentinel approach has no retry loop)
+- [x] Integration: `422` on out-of-range position
+- [x] Integration: `404` on missing playlist/song/membership
+- [x] Integration: full reorder reflected in `GET /playlists/{id}`
+- [x] `smoke_test.sh` S17: reorder end-to-end (shift-not-swap, 422/404 paths, separate-GET reflection) — full suite 27/27 passing
+- [x] `smoke_ui.sh`: proxy-layer contract checks for reorder (404 paths through nginx), plus expanded coverage for previously-untested proxied endpoints (preview validation, stream 404, metrics content-type, playlist CRUD lifecycle, trace header) — 38/38 passing
+- [ ] Manual smoke checklist added to `smoke_ui.sh` (comment block, not automatable via curl): responsive breakpoints, player controls (volume/shuffle/loop/autoplay), drag-drop DOM behavior, waveform render, focus trap, dropdown Escape-close — still require an actual browser
+- [x] Maintain >=80% backend coverage (currently 91%) -- FE-2 endpoint is the only backend surface this sprint
 
 ---
 
@@ -80,4 +92,5 @@ Not scoped yet. Candidates already known but deferred:
 
 - Waveform click-to-seek
 - Bulk/multi-select playlist reorder
+- Fix drag-preview showing only thumbnail (cosmetic, `draggable="false"` on `.song-card__thumb`) — deferred from FE-5, see flagged item above
 - Multi-user auth, Alembic -- still explicitly out of scope, not just deferred

@@ -23,6 +23,8 @@ const state = {
     loadedCount: 0, // Number of songs currently rendered in the library view.
     currentSongList: [], // Song objects backing the currently rendered list —
                           // becomes the player queue when a card is clicked.
+    currentPlaylistId: null, // needed by drop handler (delegation has no closure)
+    dragSongId: null, // dragged song id, tracked outside dataTransfer
 };
 
 // ── Boot ──────────────────────────────────────────────────────────────────
@@ -436,18 +438,14 @@ async function refreshPlaylistGrid(token = state.routeToken) {
 
 async function renderPlaylistDetailPage(id) {
     const token = nextRouteToken();
-
     document.title = 'Melo — Playlist';
-
     const content = document.getElementById('page-content');
-
     content.innerHTML = `
       <a class="back-link" href="#/playlists">
         ← Playlists
       </a>
       <div id="playlist-detail-root"></div>
     `;
-
     await refreshPlaylistDetail(id, token);
 }
 
@@ -461,33 +459,106 @@ async function refreshPlaylistDetail(id, token = state.routeToken) {
        <a class="btn btn--ghost" href="#/playlists">Back</a></div>`;
         return;
     }
-
     if (token !== state.routeToken) return;
-
     document.title = `Melo — ${playlist.name}`;
     const root = document.getElementById('playlist-detail-root');
     if (!root) return;
-
+    state.currentPlaylistId = id;
     state.currentSongList = playlist.songs ?? [];
-    const currentSongId = player.getCurrentSongId?.() ?? null;
-    const rows = (playlist.songs ?? []).map((s, i) => `
-    <div class="playlist-song-row">
-      <span class="playlist-song-row__pos">${i + 1}</span>
-      ${renderSongCard(s, s.id === currentSongId, [])}
-      <button class="icon-btn" data-action="remove-from-playlist"
-              data-playlist-id="${id}" data-song-id="${s.id}"
-              aria-label="Remove from playlist">✕</button>
-    </div>`).join('');
-
     root.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">${escHtml(playlist.name)}</h1>
     </div>
-    <div class="song-list" role="list">${rows || buildEmptyPlaylist()}</div>`;
+    <div class="song-list" id="playlist-song-list" role="list"></div>`;
+    renderPlaylistRows(id, state.currentSongList);
+}
+
+function renderPlaylistRows(playlistId, songs) {
+    const list = document.getElementById('playlist-song-list');
+    if (!list) return;
+    const currentSongId = player.getCurrentSongId?.() ?? null;
+    list.innerHTML = songs.length
+        ? songs
+            .map((s, i) => buildPlaylistRow(s, i, playlistId, s.id === currentSongId))
+            .join('')
+        : buildEmptyPlaylist();
+}
+
+function buildPlaylistRow(song, position, playlistId, isActive) {
+    return `
+    <div class="playlist-song-row"
+         draggable="true"
+         data-position="${position}"
+         data-song-id="${song.id}">
+      <span class="playlist-song-row__pos">${position + 1}</span>
+      ${renderSongCard(song, isActive, [])}
+      <button class="icon-btn" data-action="remove-from-playlist"
+              data-playlist-id="${playlistId}" data-song-id="${song.id}"
+              aria-label="Remove from playlist">✕</button>
+    </div>`;
 }
 
 function buildEmptyPlaylist() {
     return `<div class="empty-state"><span class="empty-state__label">No songs in playlist.</span></div>`;
+}
+
+// ── Playlist Drag Reorder ─────────────────────────────────────────────────
+
+function handleDragStart(e) {
+    const row = e.target.closest('.playlist-song-row[draggable="true"]');
+    if (!row) return;
+    state.dragSongId = row.dataset.songId;
+    e.dataTransfer.effectAllowed = 'move';
+    row.classList.add('playlist-song-row--dragging');
+}
+
+function handleDragOver(e) {
+    const row = e.target.closest('.playlist-song-row');
+    if (!row || !state.dragSongId) return;
+    e.preventDefault(); // required to allow drop
+    row.classList.add('playlist-song-row--drag-over');
+}
+
+function handleDragLeave(e) {
+    e.target.closest('.playlist-song-row')?.classList.remove('playlist-song-row--drag-over');
+}
+
+function handleDrop(e) {
+    const row = e.target.closest('.playlist-song-row');
+    if (!row || !state.dragSongId) return;
+    e.preventDefault();
+    row.classList.remove('playlist-song-row--drag-over');
+    const targetSongId = row.dataset.songId;
+    const targetPosition = parseInt(row.dataset.position, 10);
+    if (targetSongId !== state.dragSongId) {
+        reorderPlaylistSongOptimistic(state.currentPlaylistId, state.dragSongId, targetPosition);
+    }
+    state.dragSongId = null;
+}
+
+function handleDragEnd() {
+    document.querySelectorAll('.playlist-song-row--dragging, .playlist-song-row--drag-over')
+        .forEach(el => el.classList.remove('playlist-song-row--dragging', 'playlist-song-row--drag-over'));
+    state.dragSongId = null;
+}
+
+async function reorderPlaylistSongOptimistic(playlistId, songId, newPosition) {
+    const songs = state.currentSongList;
+    const oldIndex = songs.findIndex(s => s.id === songId);
+    if (oldIndex === -1 || oldIndex === newPosition) return;
+    // Optimistic local reorder — insert-after-target semantics, matches
+    // "drop onto row N" as "place after row N" rather than "before".
+    const reordered = songs.slice();
+    const [moved] = reordered.splice(oldIndex, 1);
+    reordered.splice(newPosition, 0, moved);
+    state.currentSongList = reordered;
+    renderPlaylistRows(playlistId, reordered);
+    try {
+        await api.reorderSongInPlaylist(playlistId, songId, newPosition);
+    } catch (err) {
+        renderToast(err.message, 'error');
+        await refreshPlaylistDetail(playlistId); // resync from server on failure
+    }
 }
 
 // ── Add Song Modal ────────────────────────────────────────────────────────
@@ -818,8 +889,11 @@ async function handleNewPlaylistForSong(songId) {
 function bindGlobalEvents() {
     document.addEventListener('click', handleGlobalClick);
     document.addEventListener('keydown', handleKeydown);
-
-    // Both the sidebar (tablet/desktop) and phone FAB trigger the same modal.
+    document.addEventListener('dragstart', handleDragStart);
+    document.addEventListener('dragover', handleDragOver);
+    document.addEventListener('dragleave', handleDragLeave);
+    document.addEventListener('drop', handleDrop);
+    document.addEventListener('dragend', handleDragEnd);
     document
         .querySelectorAll('.btn-add-song-trigger')
         .forEach(btn => btn.addEventListener('click', openAddSongModal));

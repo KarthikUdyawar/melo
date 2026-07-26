@@ -398,3 +398,112 @@ class TestSongInMultiplePlaylists:
         client.delete(f"/playlists/{p1.id}/songs/{song.id}")
         assert len(client.get(f"/playlists/{p1.id}").json()["body"]["songs"]) == 0
         assert len(client.get(f"/playlists/{p2.id}").json()["body"]["songs"]) == 1
+
+
+class TestReorderPlaylistSong:
+    def test_moves_song_to_new_position(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        playlist = _make_playlist(db_session)
+        s1 = _make_song(db_session, youtube_id="aaaaaaaaaaa", title="First")
+        s2 = _make_song(db_session, youtube_id="bbbbbbbbbbb", title="Second")
+        s3 = _make_song(db_session, youtube_id="ccccccccccc", title="Third")
+        client.post(f"/playlists/{playlist.id}/songs/{s1.id}")
+        client.post(f"/playlists/{playlist.id}/songs/{s2.id}")
+        client.post(f"/playlists/{playlist.id}/songs/{s3.id}")
+
+        resp = client.patch(
+            f"/playlists/{playlist.id}/songs/{s3.id}", json={"position": 0}
+        )
+
+        assert resp.status_code == 200
+        titles = [s["title"] for s in resp.json()["body"]["songs"]]
+        assert titles == ["Third", "First", "Second"]
+
+    def test_unknown_playlist_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        song = _make_song(db_session)
+        resp = client.patch(
+            f"/playlists/{uuid.uuid4()}/songs/{song.id}", json={"position": 0}
+        )
+        assert resp.status_code == 404
+
+    def test_unknown_song_404(self, client: TestClient, db_session: Session) -> None:
+        playlist = _make_playlist(db_session)
+        resp = client.patch(
+            f"/playlists/{playlist.id}/songs/{uuid.uuid4()}", json={"position": 0}
+        )
+        assert resp.status_code == 404
+
+    def test_membership_not_found_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        playlist = _make_playlist(db_session)
+        song = _make_song(db_session)
+        resp = client.patch(
+            f"/playlists/{playlist.id}/songs/{song.id}", json={"position": 0}
+        )
+        print(resp.status_code, resp.json())
+        assert resp.status_code == 404
+
+    def test_position_below_zero_returns_422(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        playlist = _make_playlist(db_session)
+        song = _make_song(db_session)
+        client.post(f"/playlists/{playlist.id}/songs/{song.id}")
+        resp = client.patch(
+            f"/playlists/{playlist.id}/songs/{song.id}", json={"position": -1}
+        )
+        assert resp.status_code == 422
+
+    def test_position_at_or_above_song_count_returns_422(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        playlist = _make_playlist(db_session)
+        s1 = _make_song(db_session, youtube_id="aaaaaaaaaaa")
+        s2 = _make_song(db_session, youtube_id="bbbbbbbbbbb")
+        client.post(f"/playlists/{playlist.id}/songs/{s1.id}")
+        client.post(f"/playlists/{playlist.id}/songs/{s2.id}")
+
+        resp = client.patch(
+            f"/playlists/{playlist.id}/songs/{s1.id}", json={"position": 2}
+        )
+        assert resp.status_code == 422
+
+    def test_shifts_intermediates_not_a_swap(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        playlist = _make_playlist(db_session)
+        s1 = _make_song(db_session, youtube_id="aaaaaaaaaaa", title="A")
+        s2 = _make_song(db_session, youtube_id="bbbbbbbbbbb", title="B")
+        s3 = _make_song(db_session, youtube_id="ccccccccccc", title="C")
+        s4 = _make_song(db_session, youtube_id="ddddddddddd", title="D")
+        for s in (s1, s2, s3, s4):
+            client.post(f"/playlists/{playlist.id}/songs/{s.id}")
+
+        resp = client.patch(
+            f"/playlists/{playlist.id}/songs/{s2.id}", json={"position": 3}
+        )
+
+        assert resp.status_code == 200
+        titles = [s["title"] for s in resp.json()["body"]["songs"]]
+        assert titles == ["A", "C", "D", "B"]
+
+    def test_reorder_reflected_in_subsequent_get(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        playlist = _make_playlist(db_session)
+        s1 = _make_song(db_session, youtube_id="aaaaaaaaaaa", title="A")
+        s2 = _make_song(db_session, youtube_id="bbbbbbbbbbb", title="B")
+        client.post(f"/playlists/{playlist.id}/songs/{s1.id}")
+        client.post(f"/playlists/{playlist.id}/songs/{s2.id}")
+
+        client.patch(f"/playlists/{playlist.id}/songs/{s2.id}", json={"position": 0})
+
+        titles = [
+            s["title"]
+            for s in client.get(f"/playlists/{playlist.id}").json()["body"]["songs"]
+        ]
+        assert titles == ["B", "A"]
