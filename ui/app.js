@@ -489,13 +489,17 @@ function renderPlaylistRows(playlistId, songs) {
 }
 
 function buildPlaylistRow(song, position, playlistId, isActive) {
+    const total = state.currentSongList.length;
     return `
     <div class="playlist-song-row"
          draggable="true"
+         tabindex="0"
+         aria-label="${escHtml(song.title ?? 'Song')}, position ${position + 1} of ${total}"
          data-position="${position}"
          data-song-id="${song.id}">
       <span class="playlist-song-row__pos">${position + 1}</span>
       ${renderSongCard(song, isActive, [])}
+      <span class="sr-only">Press Arrow Up or Arrow Down to reorder.</span>
       <button class="icon-btn" data-action="remove-from-playlist"
               data-playlist-id="${playlistId}" data-song-id="${song.id}"
               aria-label="Remove from playlist">✕</button>
@@ -1097,7 +1101,10 @@ function handleGlobalClick(e) {
     const clickedDropdown = e.target.closest('[data-dropdown]');
     document.querySelectorAll('.dropdown__menu').forEach(menu => {
         const dropdown = menu.closest('[data-dropdown]');
-        if (dropdown !== clickedDropdown) menu.style.display = 'none';
+        if (dropdown !== clickedDropdown) {
+            menu.style.display = 'none';
+            dropdown?.querySelector('[data-action="open-menu"]')?.setAttribute('aria-expanded', 'false');
+        }
     });
 
     // Song card click → play (BEFORE action guard)
@@ -1137,7 +1144,9 @@ function handleGlobalClick(e) {
         }
         case 'open-menu': {
             const menu = el.closest('[data-dropdown]').querySelector('.dropdown__menu');
-            menu.style.display = menu.style.display === 'none' ? '' : 'none';
+            const opening = menu.style.display === 'none';
+            menu.style.display = opening ? '' : 'none';
+            el.setAttribute('aria-expanded', String(opening));
             e.stopPropagation();
             break;
         }
@@ -1169,7 +1178,17 @@ function handleGlobalClick(e) {
 function handleKeydown(e) {
     if (e.key === 'Escape') {
         if (isNowPlayingOpen()) { closeNowPlayingPanel(); return; }
+        if (closeOpenDropdown()) return;
         closeModal();
+        return;
+    }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        handlePlaylistRowKeydown(e);
+        return;
+    }
+    if (e.key === 'Tab') {
+        const container = document.querySelector('.now-playing') || document.querySelector('.modal');
+        if (container) trapFocus(container, e);
     }
     if (e.key === ' ' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
         e.preventDefault();
@@ -1265,4 +1284,55 @@ function escHtml(str) {
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+}
+
+// ── Accessibility: focus trap + dropdown close ──────────────────────────
+
+function closeOpenDropdown() {
+    const openMenu = [...document.querySelectorAll('.dropdown__menu')]
+        .find(m => m.style.display !== 'none');
+    if (!openMenu) return false;
+    openMenu.style.display = 'none';
+    openMenu.closest('[data-dropdown]')?.querySelector('[data-action="open-menu"]')
+        ?.setAttribute('aria-expanded', 'false');
+    return true;
+}
+
+function trapFocus(container, e) {
+    if (e.key !== 'Tab') return;
+    const focusables = [...container.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )].filter(el => !el.disabled && el.offsetParent !== null);
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+    }
+}
+
+function handlePlaylistRowKeydown(e) {
+    const row = e.target.closest('.playlist-song-row');
+    if (!row || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+
+    e.preventDefault();
+
+    const songId = row.dataset.songId;
+    const currentPos = parseInt(row.dataset.position, 10);
+    const newPos = currentPos + (e.key === 'ArrowUp' ? -1 : 1);
+
+    if (newPos < 0 || newPos > state.currentSongList.length - 1) return;
+
+    reorderPlaylistSongOptimistic(state.currentPlaylistId, songId, newPos).then(() => {
+        // Row is replaced on re-render — refocus it so keyboard users don't lose their place.
+        requestAnimationFrame(() => {
+            document
+                .querySelector(`.playlist-song-row[data-song-id="${songId}"]`)
+                ?.focus();
+        });
+    });
 }

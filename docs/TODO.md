@@ -58,11 +58,14 @@
 
 ### FE-4 — Accessibility Audit (depends: FE-0-FE-3)
 
-- [ ] Dropdown: close on `Escape`, same listener as modal-close
-- [ ] Modal: manual focus trap (query focusables, wrap `Tab`/`Shift+Tab`)
-- [ ] `#toast-root`: `aria-live="polite"`
-- [ ] Status pill: `aria-label` matching visible text
-- [ ] Manual tab-order pass across all pages incl. new FE-0-FE-3 markup
+- [x] Dropdown: close on `Escape` — `closeOpenDropdown()` in `app.js`, slotted into `handleKeydown`'s Esc chain (panel → dropdown → modal)
+- [x] Modal: manual focus trap (`trapFocus()`, wraps `Tab`/`Shift+Tab` on `.modal` focusables)
+- [x] Now Playing panel: same focus trap extended to it — new surface, wasn't in original ticket list (written pre-FE-3), added this session. See DECISIONS.md.
+- [x] `#toast-root`: `aria-live="polite"` added in `index.html`
+- [x] Status pill: `aria-label="Status: {status}"` added, dot marked `aria-hidden`
+- [x] Dropdown: `aria-haspopup`/`aria-expanded` on trigger, `role="menu"`/`menuitem"` on menu + items, kept in sync on open/close/outside-click/Escape
+- [ ] Manual tab-order pass across all pages incl. FE-0-FE-3 markup — still needs an actual browser, ask Karthik
+- [x] Playlist drag-reorder keyboard alt — Karthik's call: fix now. Rows focusable (`tabindex="0"`), Arrow Up/Down calls the same `reorderPlaylistSongOptimistic()` path drag uses, focus restored to the moved row after re-render. `aria-label` states position/total; sr-only hint states the key binding.
 
 ### FE-5 — UX Bug Fixes (ongoing, audit-driven)
 

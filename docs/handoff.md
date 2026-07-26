@@ -1,62 +1,45 @@
-# Handoff — Melo Sprint 6, FE-3 fully closed, FE-4 next
+# Handoff — Melo Sprint 6, FE-4 code-complete, manual pass is the only gate left
 
 ## Context
 
 Repo: `KarthikUdyawar/melo`, branch `feature/s6-frontend-polish`. Conventions: `/caveman ultra`, `/clean-code`, `/tdd`.
-Spec: `docs/PRD.md`. Decisions: `docs/DECISIONS.md` (Sprint 6 table, now includes Now Playing panel entries). Checklist: `docs/TODO.md`.
+Spec: `docs/PRD.md`. Decisions: `docs/DECISIONS.md` (Sprint 6 table). Checklist: `docs/TODO.md`.
+Supersedes the prior FE-4 handoff (same session block, just the keyboard-gap resolved since).
 
 ## What this session closed out
 
-**FE-3 (Waveform Display / Now Playing panel) — fully done: panel UI, waveform, transport mirroring, 2 bugs found in manual browser testing and fixed.**
+**FE-4 (Accessibility Audit) — all code items done. Karthik decided: fix the keyboard-reorder gap now, not defer.**
 
-### Frontend changes
-- `ui/index.html`:
-  - `.player-bar__info` is now a click/keyboard target (`id="player-info-trigger"`, `role="button"`, `tabindex="0"`, `data-action="open-now-playing"`) that opens the panel.
-  - New `<div id="now-playing-root"></div>` mount point, alongside `#modal-root`/`#toast-root`.
-  - Player bar's `#btn-loop` got a `.loop-btn` class (see bugfix below).
-- `ui/player.js`:
-  - New `subscribe(fn)` pub-sub — `emit()` fires from the 5 existing UI-update functions (`updatePlayIcon`, `updateScrubber`, `updateVolumeUi`, `updateShuffleUi`, `updateLoopUi`) plus once at the end of `loadSong()`. Panel uses this to mirror state live without polling or duplicating timers.
-  - New `getPeaks(songId)` — fetches `/api/songs/{id}/stream` as an `ArrayBuffer` (separate fetch from the `<audio>` element's own request), `AudioContext.decodeAudioData()`, downsamples to 200 peak buckets, caches in a module-scope `Map<songId, Float32Array>` (session-only, cleared on reload — no persistence, per PRD).
-  - New `seekTo(percent)` — used by the panel's scrubber only; the player-bar scrubber keeps its own internal wiring untouched.
+### Keyboard-reorder fix (this session's only new work)
 - `ui/app.js`:
-  - New Now Playing panel section: `openNowPlayingPanel()`, `closeNowPlayingPanel()`, `isNowPlayingOpen()`, `buildNowPlayingHtml()`, `bindNowPlayingEvents()`, `updateNowPlayingUi()` (the `subscribe()` callback), `loadAndDrawWaveform()`, `drawWaveform()` (canvas bar rendering, reads `--accent` via `getComputedStyle` at draw time — no hardcoded color).
-  - Panel transport (play/pause, prev/next, shuffle, loop, volume, mute) calls straight through to the same `player.js` exports the bar uses — no duplicate logic.
-  - `handleKeydown` updated: `Esc` closes the panel first if open, falls through to modal-close otherwise.
-  - `bindGlobalEvents` gained the `open-now-playing` switch case and an Enter/Space keydown handler on the info-trigger.
-- `ui/style.css`: new `.now-playing-overlay` / `.now-playing` block (full-view dark overlay, centered card, 220px thumb, waveform canvas, transport row). Loop-badge selector changed (see bugfix below).
+  - `buildPlaylistRow`: rows now `tabindex="0"`, `aria-label="{title}, position {n} of {total}"`, plus an `.sr-only` hint span stating the Arrow Up/Down binding.
+  - New `handlePlaylistRowKeydown(e)` — Arrow Up/Down on a focused row computes `newPos`, clamps to list bounds, calls the *existing* `reorderPlaylistSongOptimistic()` (same function drag-drop uses — no duplicate reorder logic). Refocuses the moved row after re-render via `requestAnimationFrame` so keyboard users don't lose their place.
+  - `handleKeydown` gained an ArrowUp/ArrowDown branch that delegates to the above and returns early; no-ops when focus isn't on a row, so it doesn't affect any other page.
+- `ui/style.css`: new `.sr-only` utility (clip-based, standard pattern) for the hint text.
 
-### Bugs found in manual browser testing (Karthik) — both fixed this session
-1. **Panel scrubber didn't seek** — shipped as `disabled` in HTML with no seek wiring (an earlier over-cautious reading of "no click-to-seek" scoped to the *scrubber* instead of just the *waveform*). Fixed: `player.seekTo()` added, `bindNowPlayingScrubber()` wires `mousedown`/`touchstart` → `state.npSeeking = true`, `input` → live time label, `change` → actual seek + `npSeeking = false`. Mirrors the player-bar's own `isSeeking` pattern but kept as a **separate** flag (`state.npSeeking`) since the two scrubbers must not interrupt each other.
-2. **Loop badge ("1") not rendering in panel** — CSS was ID-scoped: `#btn-loop[data-mode="one"] .loop-badge`, which only ever matched the player bar's button, never the panel's `#np-loop`. Fixed: both buttons now carry a shared `.loop-btn` class; CSS rule changed to `.loop-btn[data-mode="one"] .loop-badge`.
+### Decisions logged (`DECISIONS.md`, Sprint 6 table, bottom 2 rows)
+- Keyboard reorder reuses `reorderPlaylistSongOptimistic()` rather than a separate code path
+- Row kept as a plain focusable `<div>` (no `role="button"`/listbox pattern) — avoids nested-interactive ARIA ambiguity since the row wraps other interactive children (song card, remove button)
 
-Both fixes went out as diffs in-chat; **confirm they've actually landed in the working tree** before starting FE-4 — this session never received a fresh copy of the files post-patch, only pasted diffs.
+### TODO.md
+FE-4's keyboard-gap line changed from open-flagged to `[x]` with the resolution summary.
 
-### Decisions logged this session (see `DECISIONS.md` Sprint 6 table, bottom 5 rows)
-- Panel state sync via `subscribe()` pub-sub, not polling/duplication
-- Peaks cache lives in `player.js`, not `app.js` state
-- Scrubber seek vs. waveform seek are different controls — PRD's out-of-scope note only covers the waveform
-- Loop-badge CSS scoping fix (`.loop-btn` shared class)
-- Panel scrubber drag-state kept independent from the bar's `isSeeking`
+## Still open — the only remaining FE-4 gate
 
-## Still open in FE-3 scope
+- [ ] **Manual tab-order pass** across all pages including FE-0–FE-3 markup (tab bar, icon rail, Now Playing panel, drag/keyboard-reorder rows). This is the last item blocking FE-4 closure and it's browser-only — not code-reviewable from here. **Ask Karthik whether it's been run yet; if yes, get findings; if no, that's the next concrete action.**
 
-- [ ] Nothing functionally — TODO.md FE-3 is fully checked off. The one PRD-listed exclusion (waveform click-to-seek) remains correctly excluded.
-- Not yet re-verified after the 2 bugfixes: full manual smoke pass (see checklist given to Karthik in-chat — open/close, waveform cache-hit behavior, transport mirroring, responsive, regression checks). **Ask Karthik whether that pass happened and whether anything else surfaced.**
+Once that pass is done (and any findings triaged into FE-5), FE-4 can be marked fully `✅ done` in `TODO.md`.
 
-## For the next session — FE-4 (Accessibility Audit)
+## For the next session
 
-Depends on FE-0–FE-3 (all done now). From `PRD.md`/`TODO.md`:
-- Dropdown (song-card `⋮` menu): close on `Escape`, reuse the same listener that already closes the modal/panel (note: `handleKeydown` in `app.js` now has an `Esc` priority chain — panel first, modal second; dropdown-close needs to slot in without breaking that order).
-- Modal: minimal manual focus trap (query focusable elements in `.modal`, wrap `Tab`/`Shift+Tab`). **New this sprint:** the Now Playing panel (`.now-playing`) is a second full-screen surface with its own focusable controls (close button, transport buttons, 2 sliders) — decide whether it needs the same focus-trap treatment as modals, since it wasn't in the original FE-4 ticket list (written before FE-3 existed).
-- `#toast-root`: `aria-live="polite"`.
-- Status pill: `aria-label` matching visible text.
-- Manual tab-order pass across all pages **including** FE-0–FE-3 markup — the panel, drag-reorder rows, and phone-tier nav are all new surfaces since the original a11y ticket was scoped.
-
-**Ask Karthik for current `ui/index.html`, `ui/app.js`, `ui/style.css` before starting** — same verify-before-writing rule as always; this handoff's diffs may not be losslessly reflected in what's actually in the repo.
+1. Verify-before-writing: ask for current `ui/app.js`, `ui/style.css` before any further edits — same standing rule, diffs given in-chat aren't confirmed landed until checked.
+2. Get the manual tab-order pass result from Karthik. Log any findings as new FE-5 items.
+3. FE-5 (UX Bug Fixes) is still open/ongoing — no fixed list, audit-driven. Check if anything else surfaced across FE-0–FE-4 that hasn't been logged yet.
+4. FE-6: backend suites (`smoke_test.sh` 27/27, `smoke_ui.sh` 38/38) still untouched — no backend surface touched since FE-2. Frontend manual-smoke checklist items in `TODO.md` (FE-6) also still unconfirmed — same "ask Karthik if it happened" pattern as the tab-order pass.
+5. Once FE-4/FE-5 wrap, Sprint 6 is essentially done — worth checking with Karthik whether to start scoping Sprint 7 (candidates already listed at the bottom of `ROADMAP.md`/`TODO.md`: waveform click-to-seek, bulk playlist reorder, drag-preview thumbnail cosmetic fix).
 
 ## Standing reminders
 
-- Verify-before-writing: always ask for current file contents before editing, don't assume shape from doc snapshots or prior diffs.
-- TDD is vertical-slice only (one test → one impl → repeat) for backend work; frontend has no test framework (Sprint 4 standing decision) — manual smoke only, and manual bug reports (like this session's 2) are the primary QA signal for `ui/`.
+- Verify-before-writing: always ask for current file contents before editing.
+- TDD is vertical-slice only (backend). Frontend: manual smoke only, no test framework (Sprint 4 standing decision).
 - Recommended skills: `caveman` (ultra), `clean-code`, `tdd`.
-- Backend test suites (`smoke_test.sh` 27/27, `smoke_ui.sh` 38/38) untouched this session — no backend surface was touched by FE-3.

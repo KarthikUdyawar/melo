@@ -9,8 +9,8 @@
 export function renderStatusPill(status) {
   if (status === 'done') return '';
   const pulse = status === 'processing' ? ' status-dot--pulse' : '';
-  return `<span class="status-pill status-pill--${status}">
-    <span class="status-dot${pulse}"></span>${status}
+  return `<span class="status-pill status-pill--${status}" aria-label="Status: ${status}">
+    <span class="status-dot${pulse}" aria-hidden="true"></span>${status}
   </span>`;
 }
 
@@ -36,6 +36,8 @@ export function renderSongCard(song, isActive, playlistNames = []) {
   return `
   <div class="song-card${activeClass}"
        data-song-id="${song.id}"
+       aria-haspopup="true"
+       aria-expanded="false"
        data-playable="${isPlayable}"
        role="listitem">
     <img class="song-card__thumb"
@@ -67,10 +69,11 @@ export function renderSongCard(song, isActive, playlistNames = []) {
                 aria-label="More options">
           ${moreIcon()}
         </button>
-        <div class="dropdown__menu" style="display:none">
+        <div class="dropdown__menu" style="display:none" role="menu">
           ${playlistItems}
           <div class="dropdown__divider"></div>
           <button class="dropdown__item dropdown__item--danger"
+                  role="menuitem"
                   data-action="delete-song"
                   data-song-id="${song.id}">Delete</button>
         </div>
@@ -89,12 +92,14 @@ function renderRetryButton(songId) {
 function renderPlaylistMenuItems(names, songId) {
   const items = names.map(n =>
     `<button class="dropdown__item"
+             role="menuitem"
              data-action="add-to-playlist"
              data-playlist-name="${escHtml(n)}"
              data-song-id="${songId}">${escHtml(n)}</button>`
   ).join('');
   return `${items}
     <button class="dropdown__item"
+            role="menuitem"
             data-action="new-playlist-for-song"
             data-song-id="${songId}">+ New playlist</button>`;
 }
