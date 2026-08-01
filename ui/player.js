@@ -434,7 +434,10 @@ export function getPeaks(songId, signal) {
         const audioBuffer = await getAudioCtx().decodeAudioData(arrayBuffer);
         return downsamplePeaks(audioBuffer.getChannelData(0), PEAK_BUCKETS);
     })().catch(err => {
-        peaksCache.delete(songId); // allow a later retry
+        // Only clear the cache if this rejected promise is still the entry
+        // stored for songId — an older abort's rejection firing after a
+        // newer getPeaks() call for the same song must not evict it.
+        if (peaksCache.get(songId) === pending) peaksCache.delete(songId);
         throw err;
     });
 

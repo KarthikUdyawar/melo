@@ -116,6 +116,26 @@ def _lock_playlist_songs(playlist_id: UUID, db: DbDep) -> list[PlaylistSong]:
     )
 
 
+def _lock_playlist(playlist_id: UUID, db: DbDep) -> Playlist:
+    """Lock the parent Playlist row itself.
+
+    Serializes add, reorder, and remove operations against each other.
+    `_lock_playlist_songs` alone only locks *existing*
+    PlaylistSong rows via FOR UPDATE — it doesn't block a concurrent INSERT
+    into the same playlist, so a concurrent add could still slip in between
+    a reorder/remove's lock-acquire and commit. Locking the parent row closes
+    that gap. SQLite ignores row locks (same caveat as `_lock_playlist_songs`).
+    """
+    playlist = (
+        db.query(Playlist).filter(Playlist.id == playlist_id).with_for_update().first()
+    )
+    if not playlist:
+        raise HTTPException(
+            status_code=404, detail=f"Playlist {playlist_id} not found."
+        )
+    return playlist
+
+
 def _next_position(playlist_id: UUID, db: DbDep) -> int:
     result = (
         db.query(func.max(PlaylistSong.position))
@@ -302,6 +322,8 @@ def add_song_to_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> JSONRes
             _serialize_playlist(playlist), "Song already in playlist.", status_code=200
         )
 
+    _lock_playlist(playlist_id, db)
+
     for attempt in range(_MAX_POSITION_RETRIES):
         position = _next_position(playlist_id, db)
         entry = PlaylistSong(
@@ -389,6 +411,7 @@ def reorder_song_in_playlist(
     playlist = _get_playlist_or_404(playlist_id, db)
     _get_song_or_404(song_id, db)
 
+    _lock_playlist(playlist_id, db)
     locked_rows = _lock_playlist_songs(playlist_id, db)
     entry = next((r for r in locked_rows if r.song_id == song_id), None)
     if entry is None:
@@ -433,6 +456,7 @@ def remove_song_from_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> Re
 
     _get_playlist_or_404(playlist_id, db)
     _get_song_or_404(song_id, db)
+    _lock_playlist(playlist_id, db)
     locked_rows = _lock_playlist_songs(playlist_id, db)
 
     entry = next((r for r in locked_rows if r.song_id == song_id), None)
