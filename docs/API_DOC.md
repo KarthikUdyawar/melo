@@ -398,6 +398,33 @@ Add a song to a playlist. Appended at the end (auto-position). Idempotent.
 
 ---
 
+### `PATCH /playlists/{id}/songs/{song_id}`
+
+Reorder a song within a playlist. Moves song to given 0-indexed position; other songs shift accordingly (shift-between-old-and-new, not a swap).
+
+**Request body:**
+```json
+{ "position": 2 }
+```
+
+| Field      | Type      | Required | Constraints |
+| ---------- | --------- | -------- | ----------- |
+| `position` | `integer` | ✅        | `>= 0`      |
+
+Upper bound (`< song_count`) checked in the route handler, not the schema — depends on a DB query.
+
+**Response `200`:** Playlist detail object (same shape as `GET /playlists/{id}`), reflecting new order.
+
+| Status | Meaning                                            |
+| ------ | -------------------------------------------------- |
+| `200`  | Reordered                                          |
+| `404`  | Playlist, song, or membership not found            |
+| `422`  | `position` out of range (`< 0` or `>= song_count`) |
+
+No `409` — reorder uses a sentinel-position swap inside one transaction (no concurrent-write race window), unlike `add_song_to_playlist`'s optimistic-insert retry. See `DECISIONS.md`.
+
+---
+
 ### `DELETE /playlists/{id}/songs/{song_id}`
 
 Remove a song from a playlist (hard-delete join row).

@@ -1,45 +1,42 @@
-# Handoff — Melo Sprint 6, FE-4 code-complete, manual pass is the only gate left
+# Handoff — Melo Sprint 6 (Frontend Polish) — FE-5 UX bugfix batch
 
 ## Context
 
-Repo: `KarthikUdyawar/melo`, branch `feature/s6-frontend-polish`. Conventions: `/caveman ultra`, `/clean-code`, `/tdd`.
-Spec: `docs/PRD.md`. Decisions: `docs/DECISIONS.md` (Sprint 6 table). Checklist: `docs/TODO.md`.
-Supersedes the prior FE-4 handoff (same session block, just the keyboard-gap resolved since).
+Repo: `KarthikUdyawar/melo`. Solo project, self-hosted YouTube→mp3 library. **Correction from an earlier handoff in this project**: Sprint 6 ("Frontend Polish") is a fully-scoped sprint (FE-0 through FE-6, see `docs/TODO.md`), not an unscoped ad-hoc batch — FE-0 (responsive layout), FE-1 (player features), FE-2 (drag-reorder), FE-3 (waveform/Now Playing panel), and FE-4 (accessibility audit) are all done. FE-6 (tests) is backend/smoke-complete. **FE-5 (UX Bug Fixes) is the ongoing, audit-driven bucket this session's work belongs to.**
 
-## What this session closed out
+Conventions in effect: **caveman ultra**, **clean-code**, **tdd**, **ponytail** (lazy/minimal-diff bias). Terse responses, minimal-diff fixes only. No repo access — Karthik pastes files, Claude returns diffs, Karthik applies + rebuilds `ui` container + hard-refreshes to test.
 
-**FE-4 (Accessibility Audit) — all code items done. Karthik decided: fix the keyboard-reorder gap now, not defer.**
+## What this session did (all `ui/`, logged under FE-5)
 
-### Keyboard-reorder fix (this session's only new work)
-- `ui/app.js`:
-  - `buildPlaylistRow`: rows now `tabindex="0"`, `aria-label="{title}, position {n} of {total}"`, plus an `.sr-only` hint span stating the Arrow Up/Down binding.
-  - New `handlePlaylistRowKeydown(e)` — Arrow Up/Down on a focused row computes `newPos`, clamps to list bounds, calls the *existing* `reorderPlaylistSongOptimistic()` (same function drag-drop uses — no duplicate reorder logic). Refocuses the moved row after re-render via `requestAnimationFrame` so keyboard users don't lose their place.
-  - `handleKeydown` gained an ArrowUp/ArrowDown branch that delegates to the above and returns early; no-ops when focus isn't on a row, so it doesn't affect any other page.
-- `ui/style.css`: new `.sr-only` utility (clip-based, standard pattern) for the hint text.
+1. Playlist Detail row width bug — `.song-card` wasn't stretching inside `.playlist-song-row` (row-flex, no stretch by default, unlike Library's column-flex `.song-list`). Fixed via `.playlist-song-row .song-card { flex: 1; min-width: 0; }`.
+2. Scrubber + volume slider progress-fill color — added `--progress` CSS var, set in JS on every tick/input, `linear-gradient` background in CSS. Applied to both Player Bar (`player.js`) and Now Playing panel (`app.js`).
+3. Waveform played/unplayed bar coloring — `drawWaveform()` takes a `progress` param, redraws every `timeupdate` tick via `updateNowPlayingUi`.
+4. Now Playing panel scrubber seek bug — **fixed twice**. First pass unified `change`/`mouseup`/`touchend` into a guarded `commitSeek()`. A regression from that fix (stray undefined `scrubber` reference in `player.js`'s exported `seekTo()`, plus a malformed duplicate-line `updateScrubber()`) was caught and fixed in a follow-up diff. **Not re-confirmed by Karthik after the second fix — verify first if seeking comes up again.**
+5. Now Playing panel volume icon alignment — `.player-volume` was missing `display:flex`.
+6. Playlist grid card delete button — moved from bottom-of-card to top-right via `position:relative`/`absolute`.
+7. Custom favicon + sidebar logo — Karthik generated `ui/assets/logo.png` (AI-generated, lime music note on dark rounded square, 255×255) from a prompt Claude wrote. Wired as `<link rel="icon">`; a sidebar `<img>` swap-in was also given as an **optional** diff. **Not confirmed whether Karthik applied the sidebar-logo part — check next session.**
+8. Player Bar empty state — added a placeholder icon+text element, toggled opposite the existing `visibility:hidden` info/controls via `.player-bar--empty`.
+9. Shuffle button reordered next to loop button in the Player Bar only (pure DOM move in `index.html`; Now Playing panel's shuffle/loop order left untouched per Karthik's explicit request).
 
-### Decisions logged (`DECISIONS.md`, Sprint 6 table, bottom 2 rows)
-- Keyboard reorder reuses `reorderPlaylistSongOptimistic()` rather than a separate code path
-- Row kept as a plain focusable `<div>` (no `role="button"`/listbox pattern) — avoids nested-interactive ARIA ambiguity since the row wraps other interactive children (song card, remove button)
+All items confirmed working via Karthik's screenshots after each round **except** item 4's second fix and item 7's sidebar-logo scope (see above).
 
-### TODO.md
-FE-4's keyboard-gap line changed from open-flagged to `[x]` with the resolution summary.
+## Docs — diffs given this session, not yet confirmed applied
 
-## Still open — the only remaining FE-4 gate
+- `docs/TODO.md` — FE-5 section: replaced the empty placeholder bullet with the 9 items above as checked-off entries (matches the doc's actual existing structure with FE-0–FE-6 sections, corrected from an earlier wrong assumption that Sprint 6 was unscoped).
+- `docs/DECISIONS.md` — appended ~5 new rows to the **existing** Sprint 6 table (not a new section — Sprint 6 already had an extensive decision table in place: `--progress` CSS var pattern, waveform redraw-per-tick, NP seek unification via `commitSeek()`, favicon-as-PNG choice, empty-state placeholder-vs-visibility-toggle).
 
-- [ ] **Manual tab-order pass** across all pages including FE-0–FE-3 markup (tab bar, icon rail, Now Playing panel, drag/keyboard-reorder rows). This is the last item blocking FE-4 closure and it's browser-only — not code-reviewable from here. **Ask Karthik whether it's been run yet; if yes, get findings; if no, that's the next concrete action.**
+Note: an earlier handoff/response in this session incorrectly treated Sprint 6 as unscoped and duplicated content differently — the diffs above are the corrected versions, given after Karthik pasted the real current `TODO.md`/`DECISIONS.md`. If a stale version of these diffs was already applied, reconcile against the corrected diffs before proceeding.
 
-Once that pass is done (and any findings triaged into FE-5), FE-4 can be marked fully `✅ done` in `TODO.md`.
+## Open items / verify next session
+
+- Re-confirm Now Playing panel seek (item 4) works after the second fix.
+- Confirm whether the optional sidebar `<img>` logo diff (item 7) was applied.
+- `docs/DESIGN.md` still not updated despite new elements from this batch (`.player-bar__placeholder`, `--progress` pattern, logo mark, delete-button absolute positioning) — flagged, not done. Do a verify-against-source pass if/when Karthik wants it current.
+- FE-5's other pre-existing flagged items (from `TODO.md`, not this session): `prev()` >3s-restart convention needs Karthik's confirm/override; phone song-card stacking not yet visually confirmed on a real device; drag-preview-shows-only-thumbnail is deferred to Sprint 7.
+- FE-4's flagged manual tab-order pass and FE-6's manual smoke checklist items remain open (both need an actual browser, not automatable).
 
 ## For the next session
 
-1. Verify-before-writing: ask for current `ui/app.js`, `ui/style.css` before any further edits — same standing rule, diffs given in-chat aren't confirmed landed until checked.
-2. Get the manual tab-order pass result from Karthik. Log any findings as new FE-5 items.
-3. FE-5 (UX Bug Fixes) is still open/ongoing — no fixed list, audit-driven. Check if anything else surfaced across FE-0–FE-4 that hasn't been logged yet.
-4. FE-6: backend suites (`smoke_test.sh` 27/27, `smoke_ui.sh` 38/38) still untouched — no backend surface touched since FE-2. Frontend manual-smoke checklist items in `TODO.md` (FE-6) also still unconfirmed — same "ask Karthik if it happened" pattern as the tab-order pass.
-5. Once FE-4/FE-5 wrap, Sprint 6 is essentially done — worth checking with Karthik whether to start scoping Sprint 7 (candidates already listed at the bottom of `ROADMAP.md`/`TODO.md`: waveform click-to-seek, bulk playlist reorder, drag-preview thumbnail cosmetic fix).
-
-## Standing reminders
-
-- Verify-before-writing: always ask for current file contents before editing.
-- TDD is vertical-slice only (backend). Frontend: manual smoke only, no test framework (Sprint 4 standing decision).
-- Recommended skills: `caveman` (ultra), `clean-code`, `tdd`.
+- No app/API code touched this session — pure `ui/` (HTML/CSS/JS, vanilla, no build step, no frontend tests per Sprint 4 decision).
+- Recommended skills: `caveman` (ultra), `clean-code`, `ponytail`. `tdd` stays active per standing preference though there's no frontend test surface for these changes.
+- Read `docs/TODO.md` and `docs/DECISIONS.md` fresh at the start of the next session rather than trusting any prior handoff summary of them — this session found a stale/incorrect assumption about Sprint 6's scope baked into an earlier response.

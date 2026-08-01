@@ -69,7 +69,15 @@
 
 ### FE-5 — UX Bug Fixes (ongoing, audit-driven)
 
-- [ ] Log bugs found during FE-0-FE-4 here as they surface -- no fixed list at sprint start
+- [x] Playlist Detail row: song card wasn't stretching full width — `.playlist-song-row` is row-flex (no stretch by default), unlike Library's column-flex `.song-list`. Fixed: `.playlist-song-row .song-card { flex: 1; min-width: 0; }`
+- [x] Player Bar + Now Playing panel scrubber/volume slider had no progress-fill color — both were flat `--bg-elevated`. Fixed: `--progress` CSS var set on every tick, `linear-gradient` in `style.css`
+- [x] Now Playing panel waveform didn't indicate playback position — bars now recolor played/unplayed on each `timeupdate` tick
+- [x] Now Playing panel scrubber: seeking to a new position and resuming playback snapped back to the pre-seek time. Root cause found in two passes — first, `change`/`mouseup`/`touchend` handlers could race; second (regression introduced fixing the first), a stray undefined `scrubber` reference in `player.js`'s `seekTo()` threw silently. Both fixed; **needs Karthik re-confirm**, not retested after 2nd fix
+- [x] Now Playing panel volume icon misaligned above slider — `.player-volume` was missing `display:flex`
+- [x] Playlist grid card delete (✕) button rendered at bottom of card instead of top-right — added `position:relative`/`absolute`
+- [x] Player Bar showed nothing when no song loaded — added placeholder icon+text, toggled via existing `.player-bar--empty` state
+- [x] Player Bar: shuffle button moved to sit next to loop button (pure DOM reorder in `index.html`; Now Playing panel's shuffle/loop order deliberately left as-is)
+- [x] Custom favicon + sidebar logo mark wired in (`ui/assets/logo.png`, Karthik-generated) — **confirm whether optional sidebar `<img>` diff was applied, or only the `<link rel="icon">` favicon**
 
 Flagged during FE-0/FE-1 (not bugs, undocumented calls -- confirm or override):
 - [ ] `prev()` restarts current song if >3s played, only jumps to previous track if <3s in -- standard player convention, not in original PRD spec. Confirm keep or remove.

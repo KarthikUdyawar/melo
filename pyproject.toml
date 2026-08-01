@@ -1,6 +1,6 @@
 [project]
 name = "melo"
-version = "0.5.0"
+version = "0.6.0"
 description = "Personal self-hosted audio library — paste a YouTube URL, get a trimmed playable mp3."
 readme = "README.md"
 license = { text = "MIT" }

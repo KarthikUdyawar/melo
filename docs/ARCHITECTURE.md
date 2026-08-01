@@ -12,10 +12,10 @@ This document is the index. Detail lives in the linked files — each is scoped 
 | [`STORAGE.md`](./STORAGE.md)     | MinIO bucket layout, presigned-URL proxy pattern, log backup storage                        |
 | [`INFRA.md`](./INFRA.md)         | Docker Compose services, ports, health checks, Makefile targets, monitoring stack           |
 | [`DECISIONS.md`](./DECISIONS.md) | Consolidated decision log across all sprints                                                |
-| `API_DOC.md`                     | Endpoint reference                                                                          |
-| `DESIGN.md`                      | Frontend design spec                                                                        |
-| `USER-FLOW.md`                   | UI user flows                                                                               |
-| `PROJECT.tree`                   | Current repo tree (`make tree`)                                                             |
+| [`API_DOC.md`](./API_DOC.md)     | Endpoint reference                                                                          |
+| [`DESIGN.md`](./DESIGN.md)       | Frontend design spec                                                                        |
+| [`USER-FLOW.md`](./USER-FLOW.md) | UI user flows                                                                               |
+| [`PROJECT.tree`](./PROJECT.tree) | Current repo tree (`make tree`)                                                             |
 
 ---
 
@@ -141,6 +141,7 @@ graph LR
         P4["DELETE /playlists/{id}"]
         P5["POST /playlists/{id}/songs/{song_id}"]
         P6["DELETE /playlists/{id}/songs/{song_id}"]
+        P7["PATCH /playlists/{id}/songs/{song_id}"]
     end
 
     subgraph System
