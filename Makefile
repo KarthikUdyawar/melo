@@ -324,7 +324,7 @@ act-ci: ## Run full GitHub Actions pipeline locally
 	act --reuse --var ACT=true
 
 tree: ## Show project tree (respects .gitignore)
-	tree --gitignore -I '__pycache__|*.pyc|*.egg-info' > docs/PRROJECT.tree && echo 'Done'
+	tree --gitignore -I '__pycache__|*.pyc|*.egg-info' > docs/PROJECT.tree && echo 'Done'
 
 # ── Monitoring (OBS-0) ────────────────────────────────────────────────────────
 

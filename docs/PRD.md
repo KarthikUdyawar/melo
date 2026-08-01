@@ -1,19 +1,19 @@
-# Melo — Sprint 5: Observability & Monitoring
+# Melo — Sprint 6: Frontend Polish
 
-**Owner:** Karthik | **Repo:** `melo` | **Sprint:** 5 | **Timeline:** 1 week (solo)
-**Stack additions:** Prometheus · Loki · Promtail · Tempo · Grafana · Pyroscope · Flower · Streamlit · OpenTelemetry · APScheduler · cAdvisor · Node Exporter · Postgres Exporter · Redis Exporter
+**Owner:** Karthik | **Repo:** `melo` | **Sprint:** 6 | **Timeline:** no fixed deadline (solo)
+**Reverses:** Sprint 4 decision "no responsive/mobile layout" (`DECISIONS.md`) — mobile support now in scope.
 
 ---
 
 ## Problem
 
-Melo has zero runtime visibility. Stuck song in `processing`, silent Celery retry, degraded MinIO — no signal. Debugging = `docker compose logs` + guesswork. Sprint 5 ships full three-pillar observability (logs, metrics, traces) + continuous profiling + Telegram alerting + Streamlit admin — all provisioned as code, all starting with `docker compose up`.
+Melo's UI is desktop-only (1280px min), has no volume/shuffle/loop/autoplay, no playlist reordering, no waveform, and hasn't had an accessibility pass since Sprint 4. Solo-use is fine on a desktop, but the app is unusable on a phone and the player is missing controls any music app is expected to have.
 
 ---
 
 ## Goal
 
-> *Know what broke, when, and why — without touching the terminal.*
+> *Melo works and feels good on a phone, and the player behaves like a real music player.*
 
 ---
 
@@ -21,492 +21,176 @@ Melo has zero runtime visibility. Stuck song in `processing`, silent Celery retr
 
 ### ✅ In
 
-| Feature                      | Details                                                                         |
-| ---------------------------- | ------------------------------------------------------------------------------- |
-| Structured logging           | structlog dual renderer: string → stdout, JSONL → file                          |
-| Log rotation                 | Size (10 MB) OR age (24 h), whichever first                                     |
-| Log backup                   | Gzip on roll → upload MinIO `melo-log-backups/` immediately                     |
-| Log retention                | APScheduler daily job: delete backups > 90 days                                 |
-| Metrics                      | Prometheus: HTTP auto-instrumentation + custom counters/gauges/histograms       |
-| Postgres metrics             | `postgres-exporter`: connection count, query latency, table bloat, locks        |
-| Redis metrics                | `redis-exporter`: memory, hit/miss, client count, evicted keys, command latency |
-| MinIO metrics                | Native `/minio/v1/metrics` scrape target with bearer token auth                 |
-| Distributed tracing          | OTEL auto + manual spans → Tempo; `trace_id` in every log line                  |
-| `X-Trace-Id` header          | Every API response carries active trace ID                                      |
-| Celery event stream          | `CELERY_SEND_EVENTS=True` + `CELERY_TASK_TRACK_STARTED=True` in worker          |
-| Profiling                    | Pyroscope continuous profiling on FastAPI + Celery worker                       |
-| Grafana dashboards           | 3 dashboards provisioned as YAML/JSON                                           |
-| Alerting                     | Grafana Alertmanager → Telegram bot (provisioned as YAML)                       |
-| Celery monitor               | Flower at `:5555`, no auth                                                      |
-| Admin dashboard              | Streamlit at `:8501`, single password from env                                  |
-| Log coverage                 | `LogEvent` enum — every request, task state, service op, rotation event         |
-| Health log noise suppression | Skip `REQUEST_STARTED`/`REQUEST_FINISHED` for `GET /health` if status = 200     |
+| Ticket | Feature                                                            |
+| ------ | ------------------------------------------------------------------ |
+| FE-0   | Responsive layout — desktop/tablet/phone breakpoints               |
+| FE-1   | Player features — volume, shuffle, loop, autoplay-next             |
+| FE-2   | Drag-reorder playlists (native HTML5 DnD + backend position PATCH) |
+| FE-3   | Waveform display (client-side, no stored variant)                  |
+| FE-4   | Accessibility audit — keyboard, focus, aria                        |
+| FE-5   | UX bug fixes — audit-driven, logged in `TODO.md` as found          |
+| FE-6   | Tests — backend TDD for new endpoint; manual smoke for frontend    |
 
 ### ❌ Out
 
-Multi-user auth on admin, custom Alertmanager service, external SaaS log shipping, mobile Streamlit layout, SLO/error-budget tracking.
+- Waveform *seeking* (click-to-scrub on waveform) — display only this sprint, seek is a candidate for Sprint 7
+- Multi-user auth, Alembic — still explicitly out of scope per prior sprints
+- Bulk/multi-select drag reorder — one song moved at a time
 
 ---
 
-## Services
+## FE-0 — Responsive Layout
 
-| Service             | Image                         | Port             | Purpose                                            |
-| ------------------- | ----------------------------- | ---------------- | -------------------------------------------------- |
-| `prometheus`        | `prom/prometheus`             | 9090             | Scrape all targets                                 |
-| `loki`              | `grafana/loki`                | 3100             | Log aggregation                                    |
-| `promtail`          | `grafana/promtail`            | —                | Scrape JSONL from shared log volume                |
-| `tempo`             | `grafana/tempo`               | 4317 (OTLP gRPC) | Trace backend (72h retention)                      |
-| `grafana`           | `grafana/grafana`             | 3001             | Dashboards + Alertmanager (named volume for state) |
-| `pyroscope`         | `grafana/pyroscope`           | 4040             | Continuous profiling (7d retention)                |
-| `celery-exporter`   | `danihodovic/celery-exporter` | 9808             | Celery → Prometheus metrics                        |
-| `flower`            | `mher/flower`                 | 5555             | Celery task monitor, no auth                       |
-| `cadvisor`          | `gcr.io/cadvisor/cadvisor`    | 8090             | Container CPU/mem/net/disk                         |
-| `node-exporter`     | `prom/node-exporter`          | 9100             | Host OS metrics                                    |
-| `postgres-exporter` | `prom/postgres-exporter`      | 9187             | PostgreSQL internals                               |
-| `redis-exporter`    | `oliver006/redis_exporter`    | 9121             | Redis health + broker stats                        |
-| `admin`             | custom (Streamlit)            | 8501             | Admin dashboard                                    |
+**Breakpoints** (mobile-first CSS, existing desktop styles become the `min-width: 1280px` tier):
 
-All added to `docker-compose.yml`. Zero breaking changes to existing services.
+| Tier    | Width      | Layout change                                                                                                                                                                                             |
+| ------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop | ≥ 1280px   | Current: fixed 220px sidebar + main + player bar (unchanged)                                                                                                                                              |
+| Tablet  | 768–1279px | Sidebar collapses to icon-only rail (56px), always visible, no drawer/hamburger — Spotify-style                                                                                                           |
+| Phone   | ≤ 767px    | Sidebar becomes a bottom tab bar (Library/Favorites/Playlists); song card stacks title under thumbnail; player bar compacts (thumb + title + play/pause + scrubber only, hides time labels and prev/next) |
 
-> **Note — Node Exporter on Docker Desktop (Mac/Windows):** reports VM metrics, not host machine. Accurate on Linux only.
+**Modal:** full-screen (no border radius, no backdrop margin) below 768px — matches native app-sheet feel rather than a floating card.
+
+**Grid:** replace fixed `grid-template-columns: 220px 1fr` with a CSS variable swapped per breakpoint via media query, so `app.js` doesn't need JS-driven layout logic — pure CSS.
+
+**No new JS framework** — tablet navigation remains an always-visible icon rail; no hamburger/drawer toggle is added.
 
 ---
 
-## Infra Config Notes
+## FE-1 — Player Features
 
-### `depends_on` health checks
-
-Grafana, Promtail, Pyroscope need backends ready before start. Add `depends_on` with `condition: service_healthy` for all infra services in `docker-compose.yml`. Without this, datasource probes fail on first Grafana load.
-
-### Grafana state persistence
-
-Pin `GF_DATABASE_PATH` to named volume. Container wipe → dashboards survive. Sufficient for self-hosted.
-
-### Celery exporter prerequisites
-
-Worker config must have:
+New player state (module-scope in `player.js`, alongside the existing `<audio>` element):
 
 ```
-CELERY_SEND_EVENTS=True
-CELERY_TASK_TRACK_STARTED=True
+volume     0.0–1.0, persisted to localStorage['melo:volume'], default 1.0
+loopMode   'off' | 'one' | 'all', persisted to localStorage['melo:loop'], default 'off'
+shuffle    boolean, session-only (not persisted — tied to the current queue)
+queue      ordered list of song ids the player is currently traversing + currentIndex
 ```
 
-Without these, `celery-exporter` emits no metrics.
+**Queue semantics:**
+- Loading a song from any page (Library/Favorites/Playlist Detail) sets `queue` = that page's current visible song list (in list order), `currentIndex` = clicked song's position.
+- Shuffle on: `queue` reshuffled (Fisher–Yates) but `currentIndex` repositioned to keep the currently-playing song in place — toggling shuffle mid-playback doesn't skip the current song.
+- `audio.onended`:
+  - `loopMode === 'one'` → replay same song
+  - else advance `currentIndex` (wrapping if `loopMode === 'all'`)
+  - `loopMode === 'off'` and at end of queue → stop, player bar stays visible on last song (not hidden)
+- Prev/Next buttons operate on the same queue, independent of autoplay.
 
-### MinIO metrics auth
-
-MinIO native endpoint `/minio/v1/metrics` requires bearer token. Add dedicated Prometheus scrape job with `bearer_token` from MinIO env. Free disk usage, object count, API latency, error rate, S3 op counters.
-
-### Retention
-
-| Service           | Retention                         |
-| ----------------- | --------------------------------- |
-| Tempo             | 72 h (explicit in `tempo.yml`)    |
-| Pyroscope         | 7 d (explicit in `pyroscope.yml`) |
-| MinIO log backups | 90 d (APScheduler cleanup job)    |
+**UI additions to Player Bar** (see FE-0 for phone-tier hides): volume slider (icon + `<input type="range">`, click icon to mute/unmute — remembers pre-mute volume), shuffle icon-button (toggled state = accent color), loop icon-button (three visual states: off / one / all — reuses existing icon-button pattern from `components.js`).
 
 ---
 
-## Log Strategy
+## FE-2 — Drag-Reorder Playlists
 
-### Dual renderer
+### API: `PATCH /playlists/{id}/songs/{song_id}`
 
-```
-stdout  → ConsoleRenderer   (human-readable string, dev-friendly)
-file    → JSONRenderer      (/var/log/melo/<service>.jsonl, one JSON object per line)
-```
-
-Both share same structlog processor chain. `trace_id` injected from OTEL context into every record via middleware — present on both outputs.
-
-### Rotation trigger
-
-Roll when `file_size >= LOG_MAX_SIZE_MB` **OR** `file_age_hours >= LOG_MAX_AGE_HOURS` (background thread checks every 60 s).
-
-### On-roll sequence
-
-```
-1. Close current file handle
-2. Rename  → <service>.<ISO-timestamp>.jsonl
-3. Gzip    → <service>.<ISO-timestamp>.jsonl.gz  (in-process, no shell)
-4. Upload  → MinIO  melo-log-backups/<service>/<YYYY>/<MM>/<filename>.gz
-5. Delete  local .gz
-6. Open    fresh <service>.jsonl
-7. Log     LogEvent.LOG_ROTATED + LogEvent.LOG_BACKUP_UPLOADED
+**Request body:**
+```json
+{ "position": 2 }
 ```
 
-### Retention cleanup
+**Behavior:** moves the song to the given 0-indexed position within that playlist. Implemented via a temp sentinel position (`-1`) inside one transaction: the target row is parked at the sentinel, the songs strictly between its old and new position shift by one (down if moving earlier, up if moving later), then the row is placed at the new position. No `IntegrityError` retry loop — the shift has no concurrent-write race window within the transaction (see `DECISIONS.md`).
 
-APScheduler daily at 02:00: list `melo-log-backups/`, delete objects older than `LOG_RETENTION_DAYS`. Emit `LogEvent.LOG_BACKUP_CLEANED` with deleted count.
+| Status | Meaning                                            |
+| ------ | -------------------------------------------------- |
+| `200`  | Reordered — returns updated playlist detail        |
+| `404`  | Playlist, song, or membership not found            |
+| `422`  | `position` out of range (`< 0` or `>= song_count`) |
 
-### Health endpoint noise
+No model changes — reuses `PlaylistSong.position`.
 
-Middleware: skip `REQUEST_STARTED`/`REQUEST_FINISHED` for `GET /health` when status = 200. Prevents Grafana datasource probes (every 10 s) from flooding Loki.
+### Frontend
 
-### `LogEvent` enum (`app/core/log_events.py`)
-
-No raw string event names anywhere. Single source of truth.
-
-```
-Request:     REQUEST_STARTED, REQUEST_FINISHED, REQUEST_FAILED
-Song API:    SONG_SUBMITTED, SONG_NOT_FOUND, SONG_DELETED,
-             SONG_STREAM_STARTED, SONG_STREAM_FAILED,
-             PREVIEW_FETCHED, PREVIEW_FAILED
-Worker:      TASK_RECEIVED, TASK_PROCESSING, TASK_DONE,
-             TASK_FAILED, TASK_RETRY
-Download:    DOWNLOAD_STARTED, DOWNLOAD_DONE, DOWNLOAD_FAILED
-FFmpeg:      FFMPEG_TRIM_STARTED, FFMPEG_TRIM_DONE,
-             FFMPEG_SPEED_STARTED, FFMPEG_SPEED_DONE, FFMPEG_FAILED
-Storage:     MINIO_UPLOAD_STARTED, MINIO_UPLOAD_DONE, MINIO_UPLOAD_FAILED,
-             MINIO_STREAM_STARTED, MINIO_STREAM_FAILED
-Log:         LOG_ROTATED, LOG_COMPRESSED, LOG_BACKUP_UPLOADED, LOG_BACKUP_CLEANED
-Favorites:   FAVORITE_ADDED, FAVORITE_REMOVED
-Playlists:   PLAYLIST_CREATED, PLAYLIST_DELETED,
-             PLAYLIST_SONG_ADDED, PLAYLIST_SONG_REMOVED
-Health:      HEALTH_CHECKED, HEALTH_DEGRADED
-```
+Native HTML5 drag-and-drop on Playlist Detail rows (`draggable="true"`, `dragstart`/`dragover`/`drop` handlers via the existing event-delegation listener in `app.js` — no new library, consistent with Sprint 4's no-framework decision). On `drop`: optimistic reorder in the DOM, `PATCH` call, re-fetch on failure to resync.
 
 ---
 
-## Metrics
+## FE-3 — Waveform Display
 
-### HTTP auto (`prometheus_fastapi_instrumentator`)
+**Client-side only** — no backend change, no stored variant (consistent with the "trim/speed at stream time, one source file" philosophy from `PIPELINE.md`/`DECISIONS.md`).
 
-Request count, latency histogram (p50/p95/p99), error rate — labelled by endpoint + method.
+**New surface: Now Playing panel.** Waveform lives in a new full view, not the 72px player bar (too cramped). Tapping the thumbnail/title in the player bar opens it; a close button (or `Esc`) returns to the previous page. Panel content: large thumbnail, title, channel, waveform canvas, transport controls (play/pause, prev/next, scrubber, volume, shuffle, loop — mirrors player bar state, doesn't duplicate it).
 
-### Custom metrics (`app/core/metrics.py`)
+**Flow:**
+1. On first play of a song, `player.js` fetches the stream URL as an `ArrayBuffer` (separate from the `<audio>` element's own streaming playback).
+2. `AudioContext.decodeAudioData()` → extract peak amplitudes (downsampled to ~200 buckets).
+3. Render to a `<canvas>` inside the Now Playing panel.
+4. Cache peaks in an in-memory `Map<songId, peaks>` for the session — avoids re-fetching/re-decoding on repeat plays; cache is cleared on page reload (no persistence).
 
-All metric definitions live here. No metric name defined outside this file.
-
-```
-Counters
-  songs_submitted_total
-  songs_completed_total          labels: status=done|failed
-  favorites_toggled_total        labels: action=add|remove
-  playlist_ops_total             labels: action=create|delete|add_song|remove_song
-
-Gauges  (polled every 30 s)
-  celery_queue_depth
-  celery_active_tasks
-  minio_bucket_size_bytes
-  songs_by_status_total          labels: status=pending|processing|done|failed
-
-Histograms
-  download_duration_seconds
-  ffmpeg_duration_seconds        labels: op=trim|speed|trim_speed
-  minio_upload_duration_seconds
-  stream_duration_seconds
-```
-
-Celery task metrics (success/failure rate, runtime, queue depth) → `celery-exporter` sidecar, zero worker code changes.
-
-PostgreSQL internals → `postgres-exporter`.
-Redis health + broker stats → `redis-exporter`.
-Container CPU/mem/net/disk → `cadvisor`.
-Host OS → `node-exporter`.
+**Not in scope:** click-to-seek on the waveform (visual only this sprint).
 
 ---
 
-## Distributed Tracing
+## FE-4 — Accessibility Audit
 
-### Auto-instrumented at startup
+| Gap                                                                        | Fix                                                                                     |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Song-card dropdown only closes on outside click (`USER-FLOW.md` §Keyboard) | Add `Escape` handling to close dropdown, same listener that already closes modals       |
+| Modals have no focus trap                                                  | Minimal manual focus trap: query focusable elements in `.modal`, wrap `Tab`/`Shift+Tab` |
+| Toast/status-pill changes not announced                                    | Add `aria-live="polite"` to `#toast-root`; status pill gets `aria-label` matching text  |
+| Tab order not verified                                                     | Manual pass — no automated a11y test tooling introduced this sprint                     |
 
-`FastAPIInstrumentor`, `SQLAlchemyInstrumentor`, `HTTPXClientInstrumentor`, `RedisInstrumentor` — zero per-endpoint code.
-
-### Manual spans
-
-```python
-# services/downloader.py
-with tracer.start_as_current_span("download_audio"):
-    span.set_attribute("song.id", ...)
-    span.set_attribute("youtube.id", ...)
-
-# services/processor.py
-with tracer.start_as_current_span("ffmpeg.trim"): ...
-with tracer.start_as_current_span("ffmpeg.speed"): ...
-
-# services/storage.py
-with tracer.start_as_current_span("minio.upload"): ...
-```
-
-### Celery context propagation
-
-`traceparent` baggage serialised into Celery task headers at enqueue. Worker reconstructs OTEL context on task receive → child spans appear in same trace as originating HTTP request.
-
-### `X-Trace-Id` response header
-
-Middleware extracts `trace_id` from active OTEL span → injects `X-Trace-Id` on every response. Same ID in log lines + Tempo → log ↔ trace correlation in Grafana without leaving UI.
+Existing principles (`DESIGN.md`: focus-visible rings, aria-label on icon buttons, color-not-sole-indicator) already in place — this ticket closes the gaps, not a rewrite.
 
 ---
 
-## Grafana Dashboards
+## FE-5 — UX Bug Fixes
 
-All dashboards + datasources provisioned via `infra/grafana/provisioning/`. No manual clicking after `docker compose up`.
-
-### Dashboard 1 — API Health
-
-Request rate, error rate, p50/p95/p99 latency by endpoint, active streams, top 5 slowest endpoints, `X-Trace-Id` drill-through to Tempo.
-
-### Dashboard 2 — Celery Pipeline
-
-Songs submitted/done/failed rate, queue depth over time, task duration percentiles, download duration, FFmpeg duration, MinIO upload duration, stuck task count (processing > 10 m).
-
-### Dashboard 3 — System
-
-Container CPU + memory (cAdvisor), host OS metrics (node-exporter), PostgreSQL stats (postgres-exporter), Redis stats (redis-exporter), MinIO bucket size + API latency, log backup count + age, Pyroscope flame graph embed.
+Audit-driven. No fixed list at sprint start — bugs found during FE-0…FE-4 work (or reported separately) get logged in `TODO.md` under a Sprint 6 section as found, then fixed in this ticket. `TODO.md` was empty at sprint start; this sprint is what fills it.
 
 ---
 
-## Alerting
+## FE-6 — Tests
 
-All rules provisioned via `infra/grafana/provisioning/alerting/`. Contact point: Telegram bot (env vars).
+| Behavior                                                             | Type        |
+| -------------------------------------------------------------------- | ----------- |
+| `PATCH /playlists/{id}/songs/{song_id}` reorders positions correctly | Unit        |
+| Reorder shifts intermediate songs' positions, doesn't just swap two  | Unit        |
+| Reorder retries on `IntegrityError` against `uq_playlist_position`   | Unit        |
+| Reorder returns `422` for out-of-range position                      | Integration |
+| Reorder returns `404` for missing playlist/song/membership           | Integration |
+| Full reorder → `GET /playlists/{id}` reflects new order              | Integration |
 
-| Rule                  | Condition                                  | Severity |
-| --------------------- | ------------------------------------------ | -------- |
-| Task failed storm     | ≥ 3 failures in 5 m                        | critical |
-| Song stuck processing | Any song in `processing` > 10 m            | warning  |
-| API latency high      | p99 > 2 s over 5 m                         | warning  |
-| Queue depth high      | `celery_queue_depth` > 50                  | warning  |
-| Service degraded      | Any health check ≠ `ok`                    | critical |
-| MinIO bucket large    | Bucket > 10 GB                             | info     |
-| Log backup gap        | `LOG_BACKUP_UPLOADED` absent > 2 h         | warning  |
-| Target down           | Any `up` metric = 0 (covers all exporters) | critical |
+Frontend (player queue/shuffle/loop, waveform peaks, drag-drop, responsive breakpoints, focus trap): **manual smoke only** — Sprint 4's "no frontend tests, no framework = no component test surface" decision still holds. `tests/smoke_ui.sh` gets new manual-check entries, not automated assertions.
 
-Telegram message: alert name, summary annotation, severity, firing time.
+Coverage target: maintain ≥ 80% on backend (currently 91%) — FE-2's new endpoint is the only backend surface this sprint touches.
 
 ---
 
-## Profiling
+## Ticket Breakdown & Order
 
-`pyroscope-io` SDK at startup in `app/main.py` (FastAPI) + `app/workers/celery_app.py` (Celery). Continuous wall-clock + CPU. Flame graphs via Grafana Pyroscope datasource plugin. Always-on, no sampling.
-
-Labels: `app=melo.api` / `app=melo.worker`, `env=$APP_ENV`.
-
----
-
-## Streamlit Admin Dashboard
-
-### Auth
-
-`ADMIN_PASSWORD` env var. `st.session_state` guards every page. Wrong password → login redirect.
-
-### Pages
-
-| Page      | Data source                                                        |
-| --------- | ------------------------------------------------------------------ |
-| Overview  | Melo `GET /health` + key Prometheus queries                        |
-| Songs     | Melo `GET /songs` — status breakdown, re-queue failed              |
-| Logs      | Loki `/loki/api/v1/query_range` — tail recent lines                |
-| Metrics   | Prometheus `/api/v1/query` — live query results                    |
-| Alerts    | Grafana Alerts API — active alerts                                 |
-| DB Health | Prometheus queries on `postgres-exporter` + `redis-exporter` stats |
-
-### External links (sidebar, open new tab)
-
-```
-Grafana        http://localhost:3001
-Prometheus     http://localhost:9090
-MinIO Console  http://localhost:9001
-Adminer        http://localhost:8080
-Flower         http://localhost:5555
-```
-
-All live data via HTTP APIs. No iframe embeds.
+| Ticket | Depends on | Notes                                                                                                                              |
+| ------ | ---------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| FE-0   | —          | Foundation — do first, everything else builds on the new layout                                                                    |
+| FE-1   | FE-0       | Player bar changes assume responsive shell exists                                                                                  |
+| FE-2   | FE-0       | Playlist Detail page changes assume responsive shell                                                                               |
+| FE-3   | FE-0, FE-1 | Waveform lives in the Now Playing panel, depends on the player state (play/pause, scrubber, volume, shuffle, loop) FE-1 builds out |
+| FE-4   | FE-0–FE-3  | Audits the new markup, not just the old                                                                                            |
+| FE-5   | ongoing    | Runs alongside FE-0–FE-4, not a discrete phase                                                                                     |
+| FE-6   | FE-2       | Backend tests as soon as FE-2's endpoint exists                                                                                    |
 
 ---
 
-## Security Notes
+## Open Questions — resolved
 
-`GRAFANA_ADMIN_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `ADMIN_PASSWORD` go in `.env.staging` (gitignored). Never committed. Consistent with existing `APP_ENV`-driven config pattern.
-
----
-
-## Folder Structure (additions only)
-
-```
-melo/
-├── infra/
-│   ├── prometheus/
-│   │   └── prometheus.yml          # scrape targets: api, celery-exporter, cadvisor,
-│   │                               #   node-exporter, postgres-exporter, redis-exporter,
-│   │                               #   minio (bearer token)
-│   ├── loki/
-│   │   └── loki.yml
-│   ├── promtail/
-│   │   └── promtail.yml
-│   ├── tempo/
-│   │   └── tempo.yml               # retention_period: 72h
-│   ├── pyroscope/
-│   │   └── pyroscope.yml           # retention: 7d
-│   └── grafana/
-│       └── provisioning/
-│           ├── datasources/
-│           │   └── all.yml         # Loki, Prometheus, Tempo, Pyroscope
-│           ├── dashboards/
-│           │   ├── all.yml
-│           │   ├── api.json
-│           │   ├── pipeline.json
-│           │   └── system.json
-│           └── alerting/
-│               ├── rules.yml       # all alert rules
-│               └── telegram.yml    # contact point + notification policy
-├── admin/
-│   ├── app.py                      # entry + login gate + sidebar
-│   ├── auth.py                     # session password check
-│   ├── pages/
-│   │   ├── overview.py
-│   │   ├── songs.py
-│   │   ├── logs.py
-│   │   ├── metrics.py
-│   │   ├── alerts.py
-│   │   └── db_health.py            # postgres + redis exporter stats
-│   ├── Dockerfile
-│   └── requirements.txt
-└── app/
-    └── core/
-        ├── log_events.py           # LogEvent enum
-        ├── log_manager.py          # rotation + gzip + MinIO upload + cleanup
-        ├── logging.py              # dual renderer (rewrite)
-        ├── metrics.py              # all Prometheus metric definitions
-        └── tracing.py              # OTEL setup + X-Trace-Id middleware
-```
-
----
-
-## New Env Vars
-
-```bash
-# Grafana
-GRAFANA_ADMIN_PASSWORD=admin
-
-# Telegram alerts
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHAT_ID=
-
-# Streamlit
-ADMIN_PASSWORD=
-
-# Log rotation
-LOG_MAX_SIZE_MB=10
-LOG_MAX_AGE_HOURS=24
-LOG_BACKUP_BUCKET=melo-log-backups
-LOG_RETENTION_DAYS=90
-
-# Pyroscope
-PYROSCOPE_SERVER_URL=http://pyroscope:4040
-
-# Celery (add to worker)
-CELERY_SEND_EVENTS=True
-CELERY_TASK_TRACK_STARTED=True
-```
-
----
-
-## New Ports
-
-| Service           | URL                               |
-| ----------------- | --------------------------------- |
-| Grafana           | http://localhost:3001             |
-| Prometheus        | http://localhost:9090             |
-| Loki              | http://localhost:3100             |
-| Tempo             | http://localhost:4317 (OTLP gRPC) |
-| Pyroscope         | http://localhost:4040             |
-| Flower            | http://localhost:5555             |
-| cAdvisor          | http://localhost:8090             |
-| Node Exporter     | http://localhost:9100             |
-| Postgres Exporter | http://localhost:9187             |
-| Redis Exporter    | http://localhost:9121             |
-| Streamlit admin   | http://localhost:8501             |
-
----
-
-## New Makefile Targets
-
-| Target            | Description                                       |
-| ----------------- | ------------------------------------------------- |
-| `make grafana`    | Open Grafana in browser                           |
-| `make flower`     | Open Flower in browser                            |
-| `make admin`      | Open Streamlit admin in browser                   |
-| `make metrics`    | Curl `/metrics` endpoint                          |
-| `make logs-loki`  | Tail recent logs via Loki HTTP API                |
-
----
-
-## Ticket Breakdown
-
-| Ticket | Description                                                                                                                                         | Depends on          |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| OBS-0  | Docker Compose infra: all new services, volumes, configs, `depends_on` health checks, named Grafana volume, retention configs, `CELERY_SEND_EVENTS` | —                   |
-| OBS-1  | Structured logging: dual renderer, `LogEvent` enum, full coverage, rotation + gzip + MinIO backup, APScheduler cleanup, health log suppression      | OBS-0               |
-| OBS-2  | Metrics: `prometheus_fastapi_instrumentator` + custom metrics, MinIO bearer token scrape                                                            | OBS-0               |
-| OBS-3  | Tracing: OTEL setup, auto + manual spans, Celery propagation, `X-Trace-Id` header, `trace_id` in logs                                               | OBS-0, OBS-1        |
-| OBS-4  | Grafana: 3 dashboards + Alertmanager → Telegram + `TargetDown` alert rule (all provisioned as YAML)                                                 | OBS-1, OBS-2, OBS-3 |
-| OBS-5  | Profiling: Pyroscope SDK in FastAPI + Celery, Grafana plugin                                                                                        | OBS-0, OBS-4        |
-| OBS-6  | Streamlit admin: login, 6 pages, live data from all APIs, tool links, DB health page                                                                | OBS-0, OBS-4        |
-| OBS-7  | Tests: log shape, metric counters, trace context, `X-Trace-Id`, smoke `/metrics`, Streamlit auth                                                    | all above           |
-
-OBS-1, OBS-2 parallel after OBS-0. OBS-3 needs OBS-1. OBS-4 needs all three. OBS-5, OBS-6 parallel after OBS-4.
-
----
-
-## Tests
-
-TDD: one behavior per red-green cycle.
-
-| Behavior                                                               | Type        |
-| ---------------------------------------------------------------------- | ----------- |
-| Every log line emits `trace_id` field                                  | Unit        |
-| File output valid JSONL (one object per line, required fields present) | Unit        |
-| Roll triggers when file size ≥ 10 MB                                   | Unit        |
-| Roll triggers when file age ≥ 24 h                                     | Unit        |
-| Rolled file compressed to `.gz`                                        | Unit        |
-| MinIO upload called on roll with correct bucket path                   | Unit        |
-| Cleanup deletes objects > 90 d, preserves newer                        | Unit        |
-| `GET /health` logs suppressed when status = 200                        | Unit        |
-| `songs_submitted_total` increments on `POST /songs`                    | Integration |
-| `X-Trace-Id` header present on every API response                      | Integration |
-| `GET /metrics` returns 200 + contains `songs_submitted_total`          | Integration |
-| Celery task headers contain `traceparent` baggage                      | Unit        |
-| Streamlit login rejects wrong password                                 | Unit        |
-| Streamlit login accepts correct password from env                      | Unit        |
-
-Coverage target: maintain ≥ 80% (currently 94.77%).
-
----
-
-## Quality Constraints
-
-- All infra config provisioned as code — zero manual steps after `docker compose up`
-- `LogEvent` enum = single source of truth for event names — no raw strings in log calls
-- No metric name defined outside `app/core/metrics.py`
-- OTEL instrumentation applied at startup — no per-endpoint decoration
-- Grafana dashboards checked into `infra/` — reproducible from scratch
-- Sensitive env vars in `.env.staging` (gitignored) — never committed
-- Clean Code contract from Sprint 4 extends to all new modules
+- Waveform placement → expandable "now playing" panel (Karthik's call). FE-3 scope increased accordingly (new panel UI, not just a canvas drop-in).
+- Nav pattern → bottom tabs (phone) + icon rail, no drawer (tablet), Spotify-style (Karthik's call).
 
 ---
 
 ## Decision Log
 
-| Decision                                        | Reason                                                                              |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Grafana Alertmanager over standalone            | Built-in to Grafana 10+; zero extra service; YAML-provisioned; sufficient for solo  |
-| Promtail scrapes JSONL file (not Docker driver) | Label extraction from structured JSON; decouples format from transport              |
-| Gzip + upload on roll (not batch)               | Minimises local disk; no cron; simpler failure model                                |
-| APScheduler for cleanup (not cron container)    | Runs inside existing API process; no extra service; survives container restart      |
-| stdout stays string format                      | Human-readable in `docker compose logs`; Loki scrapes file not stdout               |
-| `trace_id` in log lines                         | Grafana log ↔ trace correlation without leaving UI                                  |
-| Pyroscope continuous (not on-demand)            | Catches intermittent CPU spikes; low overhead at this scale                         |
-| Streamlit password in env (not DB)              | Solo user; simplest; consistent with existing env-driven config                     |
-| `X-Trace-Id` in every response                  | Browser-side debugging without opening Grafana                                      |
-| Single `metrics.py` module                      | All definitions in one place; prevents duplicate registration errors                |
-| cAdvisor + Node Exporter added                  | Standard Prometheus stack; container + host visibility; zero code change            |
-| Postgres + Redis exporters added                | DB + broker visibility; no Melo code change required                                |
-| MinIO native metrics scrape                     | Free data already exposed; just needs bearer token scrape job                       |
-| `TargetDown` alert covers all exporters         | One rule; catches any silent exporter failure                                       |
-| Grafana named volume                            | Survives container wipe; dashboards + alert state preserved                         |
-| Tempo 72h retention                             | Adequate for debugging recent issues; controls disk on self-hosted                  |
-| Pyroscope 7d retention                          | Sufficient for trend analysis; low disk footprint                                   |
-| Health log suppression                          | Prevents 10s Grafana probe × all datasources from flooding Loki                     |
-| Streamlit DB health page added                  | Postgres + Redis exporter stats directly queryable; completes admin coverage        |
-| `depends_on` health checks                      | Prevents Grafana boot-before-backends race; datasource probes succeed on first load |
-| `CELERY_SEND_EVENTS=True` explicit              | `celery-exporter` emits nothing without it; easy to miss                            |
+| Decision                                                         | Reason                                                                                              |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Mobile support added, overturning Sprint 4's "desktop-only" call | Karthik's call this sprint — personal use now includes phone                                        |
+| Breakpoints 1280 / 768 / 480(-ish, "phone" tier ≤767)            | Standard tablet/phone split; desktop tier unchanged from existing CSS                               |
+| Sidebar → bottom tab bar on phone, icon rail on tablet           | Matches common mobile music-app patterns; avoids a hamburger-only phone nav                         |
+| Reorder API: single-song `PATCH`, not a bulk ordered-list `POST` | Simpler diff against existing `position`-shift logic; Karthik's call, accepts N calls on multi-move |
+| Queue reshuffle keeps current song in place                      | Toggling shuffle mid-playback shouldn't interrupt what's currently playing                          |
+| Waveform computed client-side, cached in-memory only             | No new stored variant (matches existing trim/speed-at-stream philosophy); avoids disk/MinIO cost    |
+| Loop 'off' at end of queue stops but keeps player bar visible    | Matches Sprint 4's existing choice to not auto-hide the player bar except on song deletion          |
+| FE-5 has no fixed scope at sprint start                          | Karthik chose audit-as-we-go over a pre-supplied bug list                                           |
+| No automated frontend tests introduced                           | Consistent with Sprint 4 decision — still no component framework/test surface                       |
+| Tablet nav = icon rail (56px), no drawer/hamburger               | Spotify-style; Karthik's call, simpler than a toggled drawer                                        |
+| Waveform → new expandable Now Playing panel, not inline in bar   | Karthik's call; 72px bar too cramped for a useful waveform — FE-3 scope grows to include the panel  |

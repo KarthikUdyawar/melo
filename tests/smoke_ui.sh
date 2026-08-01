@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # tests/smoke_ui.sh — UI smoke tests (curl only, no browser)
-# Requires: docker compose up (ui on :3000, api on :8000)
+# Requires: docker compose up (ui on :3000, api on :8000), jq installed
 
 set -uo pipefail  # -e removed: test failures must not abort script
 
 UI_BASE="${UI_BASE:-http://localhost:3000}"
 API_BASE="${API_BASE:-http://localhost:8000}"
+NIL_UUID="00000000-0000-0000-0000-000000000000"
 
 PASS=0
 FAIL=0
@@ -18,9 +19,14 @@ pass() { echo -e "${GREEN}✅ PASS${NC}  $1"; ((PASS++)) || true; }
 fail() { echo -e "${RED}❌ FAIL${NC}  $1"; ((FAIL++)) || true; }
 
 check_status() {
-  local label="$1" url="$2" expected="$3"
+  local label="$1" url="$2" expected="$3" method="${4:-GET}" body="${5:-}"
   local actual
-  actual=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+  if [[ -n "$body" ]]; then
+    actual=$(curl -s -o /dev/null -w "%{http_code}" -X "$method" \
+      -H "Content-Type: application/json" -d "$body" "$url")
+  else
+    actual=$(curl -s -o /dev/null -w "%{http_code}" -X "$method" "$url")
+  fi
   if [[ "$actual" == "$expected" ]]; then
     pass "$label (HTTP $actual)"
   else
@@ -50,6 +56,19 @@ check_header() {
   fi
 }
 
+check_header_get() {
+  local label="$1" url="$2" pattern="$3"
+  local headers
+  headers=$(curl -s -D - -o /dev/null "$url" 2>/dev/null | tr -d '\r' || true)
+  if echo "$headers" | grep -qi "$pattern" 2>/dev/null; then
+    pass "$label"
+  else
+    fail "$label — header pattern '$pattern' not found"
+  fi
+}
+
+has_jq() { command -v jq >/dev/null 2>&1; }
+
 echo ""
 echo "🎵 Melo UI Smoke Tests"
 echo "   UI:  $UI_BASE"
@@ -73,7 +92,7 @@ check_status   "app.js served"                          "$UI_BASE/app.js"       
 check_status   "Unknown path → SPA fallback (not 404)"  "$UI_BASE/nonexistent"   "200"
 check_contains "SPA fallback returns index.html"        "$UI_BASE/some/deep/path" "class=\"sidebar"
 
-# ── nginx proxy → api ─────────────────────────────────────────────────────────
+# ── nginx proxy → api (basic reachability) ────────────────────────────────────
 
 check_status   "Proxy /api/health → API"                "$UI_BASE/api/health"    "200"
 check_contains "Proxy returns valid envelope"           "$UI_BASE/api/health"    "status_code"
@@ -92,6 +111,84 @@ check_header   "app.js served as javascript"            "$UI_BASE/app.js"       
 
 check_header   "Proxy response has server header"       "$UI_BASE/api/health"    "server:"
 
+# ── trace correlation (Sprint 5, previously unverified via UI proxy) ──────────
+
+check_header   "Proxy response carries X-Trace-Id"      "$UI_BASE/api/health"    "x-trace-id:"
+
+# ── songs: preview + not-found paths (previously unverified via UI proxy) ─────
+
+check_status   "Preview: invalid URL → 422" \
+  "$UI_BASE/api/songs/preview" "422" "POST" '{"url":"not-a-youtube-url"}'
+
+check_status   "GET unknown song → 404" \
+  "$UI_BASE/api/songs/$NIL_UUID" "404"
+
+check_status   "Stream unknown song → 404" \
+  "$UI_BASE/api/songs/$NIL_UUID/stream" "404"
+
+check_status   "DELETE unknown song → 404" \
+  "$UI_BASE/api/songs/$NIL_UUID" "404" "DELETE"
+
+# ── metrics (proxied but unenveloped — previously unverified via UI proxy) ────
+
+check_status   "Proxy GET /api/metrics → API"           "$UI_BASE/api/metrics"   "200"
+check_header_get "Metrics served as text/plain"         "$UI_BASE/api/metrics"   "text/plain"
+
+# ── favorites: idempotency + not-found (previously unverified via UI proxy) ───
+
+check_status   "Favorite unknown song → 404" \
+  "$UI_BASE/api/favorites/$NIL_UUID" "404" "POST"
+
+check_status   "Unfavorite unknown song → 404" \
+  "$UI_BASE/api/favorites/$NIL_UUID" "404" "DELETE"
+
+# ── playlists: full CRUD lifecycle (previously unverified via UI proxy) ───────
+
+if has_jq; then
+  playlist_id=""
+  create_resp=$(curl -s -X POST -H "Content-Type: application/json" \
+    -d '{"name":"__smoke_test_playlist__"}' "$UI_BASE/api/playlists")
+  playlist_id=$(echo "$create_resp" | jq -r '.body.id // empty' 2>/dev/null)
+
+  if [[ -n "$playlist_id" ]]; then
+    pass "Create playlist via proxy"
+
+    check_status "GET created playlist → 200" \
+      "$UI_BASE/api/playlists/$playlist_id" "200"
+
+    check_status "Add unknown song to playlist → 404" \
+      "$UI_BASE/api/playlists/$playlist_id/songs/$NIL_UUID" "404" "POST"
+
+    check_status "Remove unknown song from playlist → 404" \
+      "$UI_BASE/api/playlists/$playlist_id/songs/$NIL_UUID" "404" "DELETE"
+
+    # FE-2 reorder: unknown song → 404 (membership check runs before the
+    # song_count/position bound check, so an unknown song never reaches
+    # the 422 branch even if position were also out of range)
+    check_status "Reorder on unknown membership → 404" \
+      "$UI_BASE/api/playlists/$playlist_id/songs/$NIL_UUID" "404" "PATCH" '{"position":0}'
+
+    # FE-2 reorder: negative position → 422 via Pydantic Field(ge=0) schema
+    # validation — fires before any DB/membership lookup, independent of
+    # the membership-vs-bound ordering the check above tests
+    check_status "Reorder with negative position → 422" \
+      "$UI_BASE/api/playlists/$playlist_id/songs/$NIL_UUID" "422" "PATCH" '{"position":-1}'
+
+    check_status "Cleanup: delete smoke test playlist → 204" \
+      "$UI_BASE/api/playlists/$playlist_id" "204" "DELETE"
+  else
+    fail "Create playlist via proxy — could not parse id from response"
+  fi
+else
+  echo "⚠️  jq not found — skipping playlist lifecycle checks (create/get/add/remove/reorder/cleanup)"
+fi
+
+check_status   "Reorder unknown playlist → 404" \
+  "$UI_BASE/api/playlists/$NIL_UUID/songs/$NIL_UUID" "404" "PATCH" '{"position":0}'
+
+check_status   "DELETE unknown playlist → 404" \
+  "$UI_BASE/api/playlists/$NIL_UUID" "404" "DELETE"
+
 # ── summary ───────────────────────────────────────────────────────────────────
 
 echo ""
@@ -105,3 +202,27 @@ else
   echo -e "${GREEN}All UI smoke tests passed ✅${NC}"
 fi
 echo ""
+
+# ── MANUAL BROWSER CHECKS (not automatable via curl) ─────────────────────────
+# Run these by hand against $UI_BASE in an actual browser:
+#   [x] Drag a song to a new position in a 3+ song playlist -> order updates, persists on refresh
+#   [x] Drag a song onto itself -> no-op, no network call fires
+#   [x] Kill API mid-drag (stop container) -> error toast shows, list resyncs to server state
+#   [x] Responsive breakpoints: 1280px/768px/480px tiers render correctly
+#   [x] Player: volume slider + mute/unmute remembers level
+#   [x] Player: loop off/one/all cycles correctly, shuffle keeps current song in place
+#   [x] Waveform renders in Now Playing panel, cached per session
+#   [x] Modal focus trap: Tab/Shift+Tab wraps inside open modal
+#   [x] Dropdown closes on Escape
+#
+# FE-4 (Accessibility Audit) — added Sprint 6:
+#   [x] Now Playing panel focus trap: Tab/Shift+Tab wraps inside open panel (close btn, transport, 2 sliders)
+#   [x] Escape priority: open dropdown + open modal both up -> Escape closes dropdown first, modal stays; Escape again closes modal
+#   [x] Escape priority: Now Playing panel open -> Escape closes panel, does not touch any modal/dropdown underneath
+#   [x] Status pill: screen reader announces "Status: pending/processing/failed" (test via VoiceOver/NVDA or browser a11y tree inspector)
+#   [x] Toast: new toast is announced by screen reader without moving focus (aria-live="polite" on #toast-root)
+#   [x] Dropdown trigger's aria-expanded flips true/false correctly across all 3 close paths: outside-click, Escape, re-toggle click
+#   [x] Playlist row keyboard reorder: focus a row (Tab), press ArrowUp/ArrowDown -> song moves, PATCH fires, focus stays on the moved row after re-render
+#   [x] Playlist row keyboard reorder at boundaries: ArrowUp on first row / ArrowDown on last row -> no-op, no network call
+#   [x] Full tab-order pass, every page: sidebar (desktop) / icon rail (tablet) / bottom tab bar (phone) -> main content -> player bar controls -> no focus trap outside modal/panel, no keyboard dead-ends
+#   [x] Tab order through a playlist with 3+ songs: each row focusable in visual order, remove button (✕) reachable after each row

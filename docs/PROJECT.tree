@@ -145,6 +145,9 @@
 ├── ui
 │   ├── api.js
 │   ├── app.js
+│   ├── assets
+│   │   ├── logo.png
+│   │   └── readme-banner.jpg
 │   ├── components.js
 │   ├── Dockerfile
 │   ├── index.html
@@ -153,4 +156,4 @@
 │   └── style.css
 └── uv.lock
 
-25 directories, 128 files
+26 directories, 130 files

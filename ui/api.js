@@ -110,3 +110,11 @@ export function removeSongFromPlaylist(playlistId, songId) {
 export function checkHealth() {
     return apiFetch('/health');
 }
+
+/** @param {string} playlistId @param {string} songId @param {number} position */
+export function reorderSongInPlaylist(playlistId, songId, position) {
+    return apiFetch(`/playlists/${playlistId}/songs/${songId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ position }),
+    });
+}
