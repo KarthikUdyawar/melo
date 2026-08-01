@@ -21,6 +21,7 @@ let queueIndex = -1;
 let shuffle = false; // session-only, tied to current queue
 let loopMode = readLoopMode(); // 'off' | 'one' | 'all', persisted
 let preMuteVolume = 1.0;
+let volumePersistTimer = null;
 
 audio.volume = readVolume();
 
@@ -347,8 +348,11 @@ export function seekTo(percent) {
 export function setVolume(v) {
     audio.volume = clamp(v, 0, 1);
     if (audio.volume > 0) preMuteVolume = audio.volume;
-    localStorage.setItem('melo:volume', String(audio.volume));
     updateVolumeUi();
+    clearTimeout(volumePersistTimer);
+    volumePersistTimer = setTimeout(() => {
+        localStorage.setItem('melo:volume', String(audio.volume));
+    }, 300);
 }
 
 export function toggleMute() {
@@ -416,14 +420,15 @@ function downsamplePeaks(channelData, buckets) {
  * Fetch + decode a song's audio once, cache peaks in-memory for the
  * session (cleared on reload, no persistence — FE-3 spec).
  * @param {string} songId
+ * @param {AbortSignal} [signal] aborts the in-flight fetch (panel close)
  * @returns {Promise<Float32Array>}
  */
-export function getPeaks(songId) {
+export function getPeaks(songId, signal) {
     const cached = peaksCache.get(songId);
     if (cached) return cached;
 
     const pending = (async () => {
-        const res = await fetch(`/api/songs/${songId}/stream`);
+        const res = await fetch(`/api/songs/${songId}/stream`, { signal });
         if (!res.ok) throw new Error('Failed to fetch audio for waveform');
         const arrayBuffer = await res.arrayBuffer();
         const audioBuffer = await getAudioCtx().decodeAudioData(arrayBuffer);

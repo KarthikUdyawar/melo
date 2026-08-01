@@ -31,6 +31,7 @@ const state = {
     npDuration: 0, // last known duration, used for live time label while dragging
     npPeaks: null, // cached peak array for the open panel — redrawn on each tick to color played/unplayed bars
     npCommitSeekHandler: null, // document-level mouseup/touchend ref, removed on panel close to avoid leaks
+    npAbortController: null, // aborts the in-flight waveform fetch on panel close or song switch
 };
 
 // ── Boot ──────────────────────────────────────────────────────────────────
@@ -555,8 +556,8 @@ async function reorderPlaylistSongOptimistic(playlistId, songId, newPosition) {
     const songs = state.currentSongList;
     const oldIndex = songs.findIndex(s => s.id === songId);
     if (oldIndex === -1 || oldIndex === newPosition) return;
-    // Optimistic local reorder — insert-after-target semantics, matches
-    // "drop onto row N" as "place after row N" rather than "before".
+    // Optimistic local reorder — the moved song lands at final index
+    // newPosition, matching the server's `position` contract.
     const reordered = songs.slice();
     const [moved] = reordered.splice(oldIndex, 1);
     reordered.splice(newPosition, 0, moved);
@@ -575,6 +576,7 @@ async function reorderPlaylistSongOptimistic(playlistId, songId, newPosition) {
 function openNowPlayingPanel() {
     const song = player.getCurrentSong();
     if (!song) return;
+    if (isNowPlayingOpen()) return;
 
     const root = document.getElementById('now-playing-root');
     root.innerHTML = buildNowPlayingHtml(song);
@@ -582,6 +584,7 @@ function openNowPlayingPanel() {
 
     state.nowPlayingSongId = null; // force waveform draw on first subscribe tick
     state.nowPlayingUnsub = player.subscribe(updateNowPlayingUi);
+    document.getElementById('np-close')?.focus();
 
     loadAndDrawWaveform(song.id);
 }
@@ -595,7 +598,12 @@ function closeNowPlayingPanel() {
         state.npCommitSeekHandler = null;
     }
     state.npPeaks = null; // avoid drawing the previous song's waveform on next open
+    if (state.npAbortController) {
+        state.npAbortController.abort();
+        state.npAbortController = null;
+    }
     document.getElementById('now-playing-root').innerHTML = '';
+    document.getElementById('player-info-trigger')?.focus();
 }
 
 function isNowPlayingOpen() {
@@ -604,7 +612,7 @@ function isNowPlayingOpen() {
 
 function buildNowPlayingHtml(song) {
     return `<div class="now-playing-overlay" id="now-playing-overlay">
-    <div class="now-playing">
+    <div class="now-playing" role="dialog" aria-modal="true" aria-label="Now playing">
       <button class="icon-btn now-playing__close" id="np-close" aria-label="Close">✕</button>
       <img class="now-playing__thumb" id="np-thumb" src="${escHtml(song.thumbnail_url ?? '')}" alt="" />
       <div class="now-playing__title" id="np-title">${escHtml(song.title ?? '')}</div>
@@ -727,9 +735,13 @@ async function loadAndDrawWaveform(songId) {
     const canvas = document.getElementById('np-canvas');
     if (!canvas) return;
 
+    state.npAbortController?.abort();
+    const controller = new AbortController();
+    state.npAbortController = controller;
+
     let peaks;
     try {
-        peaks = await player.getPeaks(songId);
+        peaks = await player.getPeaks(songId, controller.signal);
     } catch {
         return; // waveform is visual-only; silent fail, no toast noise
     }
@@ -755,8 +767,9 @@ function drawWaveform(canvas, peaks, progress = 0) {
     const playedColor = style.getPropertyValue('--accent').trim() || '#c8f04e';
     const unplayedColor = style.getPropertyValue('--bg-elevated').trim() || '#1f1f1f';
 
-    const barGap = 2;
-    const barWidth = width / peaks.length - barGap;
+    const slot = width / peaks.length;
+    const barGap = Math.min(2, slot / 2);
+    const barWidth = Math.max(1, slot - barGap);
     const mid = height / 2;
     const playedBars = Math.floor(peaks.length * progress);
 

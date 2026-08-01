@@ -585,7 +585,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, branch naming, commit conventi
 
 ## Out of Scope (v1)
 
-- Multi-user auth, lyrics, waveforms → never (personal tool)
+- Multi-user auth, lyrics → never (personal tool)
 - SLO/error-budget tracking, external SaaS log shipping → not planned
 - Waveform click-to-seek, bulk/multi-select playlist reorder → Sprint 7+ candidates
 

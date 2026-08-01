@@ -63,8 +63,7 @@
 - [x] Now Playing panel: same focus trap extended to it — new surface, wasn't in original ticket list (written pre-FE-3), added this session. See DECISIONS.md.
 - [x] `#toast-root`: `aria-live="polite"` added in `index.html`
 - [x] Status pill: `aria-label="Status: {status}"` added, dot marked `aria-hidden`
-- [x] Dropdown: `aria-haspopup`/`aria-expanded` on trigger, `role="menu"`/`menuitem"` on menu + items, kept in sync on open/close/outside-click/Escape
-- [ ] Manual tab-order pass across all pages incl. FE-0-FE-3 markup — still needs an actual browser, ask Karthik
+- [x] Dropdown: `aria-haspopup`/`aria-expanded` on trigger, kept in sync on open/close/outside-click/Escape. Menu/items are native buttons, no `role="menu"`/`"menuitem"` (post-sprint fix — see `DECISIONS.md`)- [ ] Manual tab-order pass across all pages incl. FE-0-FE-3 markup — still needs an actual browser, ask Karthik
 - [x] Playlist drag-reorder keyboard alt — Karthik's call: fix now. Rows focusable (`tabindex="0"`), Arrow Up/Down calls the same `reorderPlaylistSongOptimistic()` path drag uses, focus restored to the moved row after re-render. `aria-label` states position/total; sr-only hint states the key binding.
 
 ### FE-5 — UX Bug Fixes (ongoing, audit-driven)
@@ -122,6 +121,14 @@ Backend + frontend findings from an automated review pass, worked one-by-one aga
 - [x] `docs/DECISIONS.md`: fixed a self-contradiction — the playlist-keyboard-reorder row said "logged, not fixed this ticket" while the adjacent row and actual code (`handlePlaylistRowKeydown`/`reorderPlaylistSongOptimistic` in `app.js`) show it was fixed same-sprint. Corrected to match.
 - [x] `ui/components.js`: song dropdown used `role="menu"`/`role="menuitem"` with no matching keyboard model (no arrow-key nav, no roving focus/tabindex, no menu-specific Enter handling — items are plain buttons handled via existing click delegation). Mismatched ARIA role, screen readers announced menu semantics the widget didn't back up. Fixed by dropping both roles, kept native button behavior (Tab/Enter/Space/Escape already worked). `aria-haspopup`/`aria-expanded` on the trigger left as-is — valid for a button-triggered disclosure regardless of menu role.
 - Reviewed, already correct, no change needed: playlist-row aria-label total (already threaded through `songs.length`, not `state.currentSongList.length`), `.sr-only` (`clip-path` not deprecated `clip`), `#player-info-trigger` keydown (`stopPropagation` present), `.player-bar--empty` (already hides shuffle/loop/volume), `handleEnded` (already skips non-`done` queue entries via `findNextPlayableIndex`), `getPeaks` (already caches the in-flight promise, not just the resolved value), `.player-volume` (`display: flex` already scoped to `min-width: 768px`).
+- [x] `ui/app.js`: `reorderPlaylistSongOptimistic()` comment clarified — describes move-to-final-index semantics (splice out at `oldIndex`, insert at `newPosition` — lands after target moving down, before target moving up). No logic change.
+- [x] `README.md`: removed `waveforms` from the "Out of Scope (v1) — never" list — waveform display shipped in Sprint 6; only click-to-seek remains a Sprint 7+ candidate, already listed separately.
+- [x] `tests/smoke_test.sh` (~L491-492): add-to-playlist `api_post` calls now check return status and call the existing fail handler on failure, matching the song-creation checks — a silent add-song failure was previously masked until the later ordering assertion.
+- [x] `tests/smoke_test.sh` (~L529-532): PATCH-with-nil-UUID-playlist labels corrected from "unknown song" to "unknown playlist" — request/expected-404 behavior unchanged, wording only.
+- [x] `tests/smoke_ui.sh` (L183): jq-missing skip message now lists all skipped checks (create, get, cleanup, add-unknown-song, remove-unknown-song, both FE-2 reorder checks) instead of a generic message.
+- [x] `ui/app.js`: Now Playing panel — overlay marked `role="dialog"`/`aria-modal="true"`; `openNowPlayingPanel()` guards against re-opening while already open; focus moves to the panel's first focusable element on open (so `trapFocus` has somewhere to start) and returns to `#player-info-trigger` on close.
+- [x] `ui/app.js`: `drawWaveform()` — `barWidth` guarded against going negative when `peaks.length` exceeds canvas width (gap derived responsively from available width/peak count); bars stay visible on narrow canvases instead of collapsing/inverting.
+- [x] `ui/style.css`: `.player-volume` base rule now sets `display:flex; flex-direction:row` directly instead of relying on a separate `@media (min-width:768px)` override — removed the redundant display rule; `.player-ctrl-wide`'s phone-hide behavior untouched.
 
 ---
 

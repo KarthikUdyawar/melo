@@ -488,8 +488,10 @@ for ID in "$SONG_B_ID" "$SONG_C_ID"; do
     [[ "$ST" == "done" ]] || fail "Song $ID not done after 30s (status=$ST)"
 done
 
-api_post "/playlists/$PLAYLIST_ID/songs/$SONG_B_ID" '{}' > /dev/null
-api_post "/playlists/$PLAYLIST_ID/songs/$SONG_C_ID" '{}' > /dev/null
+api_post "/playlists/$PLAYLIST_ID/songs/$SONG_B_ID" '{}' > /dev/null \
+    || fail "POST /playlists/{id}/songs/{song B} failed"
+api_post "/playlists/$PLAYLIST_ID/songs/$SONG_C_ID" '{}' > /dev/null \
+    || fail "POST /playlists/{id}/songs/{song C} failed"
 # Playlist is now [SONG_ID, SONG_B_ID, SONG_C_ID] at positions 0,1,2
 
 REORDER_RAW=$(api_patch_raw "/playlists/$PLAYLIST_ID/songs/$SONG_C_ID" '{"position": 0}')
@@ -528,8 +530,8 @@ pass "PATCH reorder negative position → 422"
 
 RAW=$(api_patch_raw "/playlists/00000000-0000-0000-0000-000000000000/songs/$SONG_C_ID" '{"position": 0}')
 HTTP="${RAW##*|||}"
-[[ "$HTTP" == "404" ]] || fail "Reorder unknown song: expected 404, got $HTTP"
-pass "PATCH reorder unknown song → 404"
+[[ "$HTTP" == "404" ]] || fail "Reorder unknown playlist: expected 404, got $HTTP"
+pass "PATCH reorder unknown playlist → 404"
 
 # Real song, exists, but not a member of this playlist — exercises
 # _get_membership_or_404, distinct from the unknown-song-id case above.

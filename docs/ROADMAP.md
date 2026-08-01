@@ -1,7 +1,5 @@
 # Melo — Roadmap
 
-> Derived from `docs/sprints/Sprint-1.md` … `Sprint-5.md`. Status reflects sprint docs, not memory — sprint docs are source of truth.
-
 ---
 
 ## Shipped

@@ -116,22 +116,6 @@ def _lock_playlist_songs(playlist_id: UUID, db: DbDep) -> list[PlaylistSong]:
     )
 
 
-def _get_membership_or_404(playlist_id: UUID, song_id: UUID, db: DbDep) -> PlaylistSong:
-    entry = (
-        db.query(PlaylistSong)
-        .filter(
-            PlaylistSong.playlist_id == playlist_id, PlaylistSong.song_id == song_id
-        )
-        .first()
-    )
-    if not entry:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Song {song_id} is not in playlist {playlist_id}.",
-        )
-    return entry
-
-
 def _next_position(playlist_id: UUID, db: DbDep) -> int:
     result = (
         db.query(func.max(PlaylistSong.position))
@@ -205,7 +189,6 @@ def _reposition_song(
             db.flush()
 
     entry.position = new_position
-    db.commit()
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
@@ -401,6 +384,8 @@ def reorder_song_in_playlist(
     playlist_id: UUID, song_id: UUID, payload: PlaylistReorder, db: DbDep
 ) -> JSONResponse:
     """Move a song to `position`, shifting songs in between."""
+    from app.core.metrics import playlist_ops_total
+
     playlist = _get_playlist_or_404(playlist_id, db)
     _get_song_or_404(song_id, db)
 
@@ -419,10 +404,12 @@ def reorder_song_in_playlist(
         )
 
     _reposition_song(playlist_id, entry, payload.position, db)
+    db.commit()
 
     db.refresh(playlist)
+    playlist_ops_total.labels(action="reorder").inc()
     logger.info(
-        "playlist_song_reordered",
+        LogEvent.PLAYLIST_SONG_REORDERED,
         playlist_id=str(playlist_id),
         song_id=str(song_id),
         position=payload.position,

@@ -180,7 +180,7 @@ if has_jq; then
     fail "Create playlist via proxy — could not parse id from response"
   fi
 else
-  echo "⚠️  jq not found — skipping playlist CRUD lifecycle checks (create/get/cleanup)"
+  echo "⚠️  jq not found — skipping playlist lifecycle checks (create/get/add/remove/reorder/cleanup)"
 fi
 
 check_status   "Reorder unknown playlist → 404" \

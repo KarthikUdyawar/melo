@@ -150,6 +150,9 @@ class LogEvent(StrEnum):
     PLAYLIST_SONG_REMOVED = "playlist_song_removed"
     """Song removed from playlist."""
 
+    PLAYLIST_SONG_REORDERED = "playlist_song_reordered"
+    """Song re-ordering in playlist."""
+
     # ── Health ────────────────────────────────────────────────────────────────
     HEALTH_CHECKED = "health_checked"
     """Health check completed (all services OK)."""

@@ -528,15 +528,10 @@ select {
 }
 
 .player-volume {
-    flex-direction: column;
+    display: flex;
+    flex-direction: row;
     align-items: center;
     gap: var(--space-2);
-}
-
-@media (min-width: 768px) {
-    .player-volume {
-        display: flex;
-    }
 }
 
 .volume-slider {

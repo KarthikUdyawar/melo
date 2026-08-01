@@ -23,14 +23,6 @@ from sqlalchemy.orm import Session
 from app.models.playlist import Playlist, PlaylistSong
 from app.models.song import Song, SongStatus
 
-# import threading
-# import time
-
-# import pytest
-# from sqlalchemy.orm import sessionmaker
-
-# from app.api.playlists import _lock_playlist_songs, _reposition_song
-
 
 def _make_song(
     db_session: Session, youtube_id: str = "dQw4w9WgXcQ", title: str = "Test Song"
@@ -452,7 +444,6 @@ class TestReorderPlaylistSong:
         resp = client.patch(
             f"/playlists/{playlist.id}/songs/{song.id}", json={"position": 0}
         )
-        print(resp.status_code, resp.json())
         assert resp.status_code == 404
 
     def test_position_below_zero_returns_422(

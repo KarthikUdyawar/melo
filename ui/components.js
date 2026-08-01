@@ -73,7 +73,6 @@ export function renderSongCard(song, isActive, playlistNames = []) {
           ${playlistItems}
           <div class="dropdown__divider"></div>
           <button class="dropdown__item dropdown__item--danger"
-                  role="menuitem"
                   data-action="delete-song"
                   data-song-id="${song.id}">Delete</button>
         </div>

@@ -179,7 +179,7 @@ Dropdown anchored to the song card's `⋮` icon button (`.dropdown` / `.dropdown
 - Lists existing playlists (add song to playlist), then a `+ New playlist` entry, then a divider, then a destructive **Delete** item (`--danger` color)
 - Positioned `absolute`, right-aligned under the trigger, fades in 80ms
 - Rendered inline as part of `renderSongCard()` — not a separate component function
-- `aria-haspopup`/`aria-expanded` on the trigger, `role="menu"`/`"menuitem"` on the menu and items, kept in sync across open/close/outside-click/Escape (Sprint 6, FE-4)
+- `aria-haspopup`/`aria-expanded` on the trigger button, kept in sync across open/close/outside-click/Escape (Sprint 6, FE-4). Menu and items are plain native `<button>`s with no `role="menu"`/`"menuitem"` — those roles imply arrow-key navigation and roving focus the widget never implements (Tab/click/Escape handle it instead); see `DECISIONS.md`.
 
 ### Player Bar
 
@@ -473,7 +473,7 @@ background: linear-gradient(to right,
 - Manual focus trap on `.modal` and the Now Playing panel (shared `trapFocus()`)
 - `Escape` priority chain: Now Playing panel → open dropdown → modal (only the topmost surface closes per press)
 - `#toast-root` is `aria-live="polite"` — new toasts announced without moving focus
-- Dropdown triggers carry `aria-haspopup`/`aria-expanded`, menus/items carry `role="menu"`/`"menuitem"`
+- Dropdown triggers carry `aria-haspopup`/`aria-expanded`; menu/items are native `<button>`s with no ARIA menu role (no keyboard model to back it — see `DECISIONS.md`)
 - Playlist rows: keyboard reorder via Arrow Up/Down, with `aria-label` stating position/total and an `sr-only` hint for the binding
 - Known gap (Sprint 6, FE-4): a full manual tab-order pass across all pages/breakpoints is still outstanding — needs an actual browser, not automatable via the smoke test suite
 
