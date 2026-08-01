@@ -129,7 +129,7 @@ songs: ## List all songs
 	curl -s http://localhost:8000/songs | python3 -m json.tool
 
 reset-db: ## Destroy DB volumes and restart stack
-# 	$(COMPOSE) down -v
+	$(COMPOSE) down -v
 	$(COMPOSE) up --build -d
 	$(MAKE) wait-api
 

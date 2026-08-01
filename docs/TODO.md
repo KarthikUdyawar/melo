@@ -77,7 +77,7 @@
 - [x] Playlist grid card delete (✕) button rendered at bottom of card instead of top-right — added `position:relative`/`absolute`
 - [x] Player Bar showed nothing when no song loaded — added placeholder icon+text, toggled via existing `.player-bar--empty` state
 - [x] Player Bar: shuffle button moved to sit next to loop button (pure DOM reorder in `index.html`; Now Playing panel's shuffle/loop order deliberately left as-is)
-- [x] Custom favicon + sidebar logo mark wired in (`ui/assets/logo.png`, Karthik-generated) — **confirm whether optional sidebar `<img>` diff was applied, or only the `<link rel="icon">` favicon**
+- [x] Custom favicon + sidebar logo mark wired in (`ui/assets/logo.png`, Karthik-generated)
 
 Flagged during FE-0/FE-1 (not bugs, undocumented calls -- confirm or override):
 - [ ] `prev()` restarts current song if >3s played, only jumps to previous track if <3s in -- standard player convention, not in original PRD spec. Confirm keep or remove.
@@ -120,6 +120,7 @@ Backend + frontend findings from an automated review pass, worked one-by-one aga
 - [x] `CHANGELOG.md` 0.6.0: "sentinel-position swap" → "sentinel-position shift" (mechanism is a shift of intermediate rows, not a two-item swap — matches the "shift-not-swap" test already in the suite).
 - [x] `docs/PRD.md`: FE-2 reorder behavior/status table updated to describe the sentinel-based shift (both directions) and drop the stale `IntegrityError`-retry/`409` language; FE-5's `TODO.md`-empty claim changed to past tense; `smoke-ui.sh` → `tests/smoke_ui.sh`; FE-3 dependency table corrected from "player bar" to "Now Playing panel".
 - [x] `docs/DECISIONS.md`: fixed a self-contradiction — the playlist-keyboard-reorder row said "logged, not fixed this ticket" while the adjacent row and actual code (`handlePlaylistRowKeydown`/`reorderPlaylistSongOptimistic` in `app.js`) show it was fixed same-sprint. Corrected to match.
+- [x] `ui/components.js`: song dropdown used `role="menu"`/`role="menuitem"` with no matching keyboard model (no arrow-key nav, no roving focus/tabindex, no menu-specific Enter handling — items are plain buttons handled via existing click delegation). Mismatched ARIA role, screen readers announced menu semantics the widget didn't back up. Fixed by dropping both roles, kept native button behavior (Tab/Enter/Space/Escape already worked). `aria-haspopup`/`aria-expanded` on the trigger left as-is — valid for a button-triggered disclosure regardless of menu role.
 - Reviewed, already correct, no change needed: playlist-row aria-label total (already threaded through `songs.length`, not `state.currentSongList.length`), `.sr-only` (`clip-path` not deprecated `clip`), `#player-info-trigger` keydown (`stopPropagation` present), `.player-bar--empty` (already hides shuffle/loop/volume), `handleEnded` (already skips non-`done` queue entries via `findNextPlayableIndex`), `getPeaks` (already caches the in-flight promise, not just the resolved value), `.player-volume` (`display: flex` already scoped to `min-width: 768px`).
 
 ---

@@ -69,7 +69,7 @@ export function renderSongCard(song, isActive, playlistNames = []) {
                 aria-label="More options">
           ${moreIcon()}
         </button>
-        <div class="dropdown__menu" style="display:none" role="menu">
+        <div class="dropdown__menu" style="display:none">
           ${playlistItems}
           <div class="dropdown__divider"></div>
           <button class="dropdown__item dropdown__item--danger"
@@ -92,14 +92,12 @@ function renderRetryButton(songId) {
 function renderPlaylistMenuItems(names, songId) {
   const items = names.map(n =>
     `<button class="dropdown__item"
-             role="menuitem"
              data-action="add-to-playlist"
              data-playlist-name="${escHtml(n)}"
              data-song-id="${songId}">${escHtml(n)}</button>`
   ).join('');
   return `${items}
     <button class="dropdown__item"
-            role="menuitem"
             data-action="new-playlist-for-song"
             data-song-id="${songId}">+ New playlist</button>`;
 }

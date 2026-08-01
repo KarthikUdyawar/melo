@@ -446,7 +446,14 @@ def remove_song_from_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> Re
 
     _get_playlist_or_404(playlist_id, db)
     _get_song_or_404(song_id, db)
-    entry = _get_membership_or_404(playlist_id, song_id, db)
+    locked_rows = _lock_playlist_songs(playlist_id, db)
+
+    entry = next((r for r in locked_rows if r.song_id == song_id), None)
+    if entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Song {song_id} is not in playlist {playlist_id}.",
+        )
 
     db.delete(entry)
     db.flush()

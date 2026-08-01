@@ -53,7 +53,7 @@ Melo's UI is desktop-only (1280px min), has no volume/shuffle/loop/autoplay, no 
 
 **Grid:** replace fixed `grid-template-columns: 220px 1fr` with a CSS variable swapped per breakpoint via media query, so `app.js` doesn't need JS-driven layout logic — pure CSS.
 
-**No new JS framework** — hamburger/drawer toggle is a small state flag + class toggle in `app.js`, consistent with existing event-delegation pattern.
+**No new JS framework** — tablet navigation remains an always-visible icon rail; no hamburger/drawer toggle is added.
 
 ---
 
@@ -165,7 +165,8 @@ Coverage target: maintain ≥ 80% on backend (currently 91%) — FE-2's new endp
 | FE-0   | —          | Foundation — do first, everything else builds on the new layout                                                                    |
 | FE-1   | FE-0       | Player bar changes assume responsive shell exists                                                                                  |
 | FE-2   | FE-0       | Playlist Detail page changes assume responsive shell                                                                               |
-| FE-3   | FE-0, FE-1 | Waveform lives in the Now Playing panel, depends on the player state (play/pause, scrubber, volume, shuffle, loop) FE-1 builds out |  | FE-4 | FE-0–FE-3 | Audits the new markup, not just the old |
+| FE-3   | FE-0, FE-1 | Waveform lives in the Now Playing panel, depends on the player state (play/pause, scrubber, volume, shuffle, loop) FE-1 builds out |
+| FE-4   | FE-0–FE-3  | Audits the new markup, not just the old                                                                                            |
 | FE-5   | ongoing    | Runs alongside FE-0–FE-4, not a discrete phase                                                                                     |
 | FE-6   | FE-2       | Backend tests as soon as FE-2's endpoint exists                                                                                    |
 
@@ -184,7 +185,7 @@ Coverage target: maintain ≥ 80% on backend (currently 91%) — FE-2's new endp
 | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | Mobile support added, overturning Sprint 4's "desktop-only" call | Karthik's call this sprint — personal use now includes phone                                        |
 | Breakpoints 1280 / 768 / 480(-ish, "phone" tier ≤767)            | Standard tablet/phone split; desktop tier unchanged from existing CSS                               |
-| Sidebar → bottom tab bar on phone, icon rail/drawer on tablet    | Matches common mobile music-app patterns; avoids a hamburger-only phone nav                         |
+| Sidebar → bottom tab bar on phone, icon rail on tablet           | Matches common mobile music-app patterns; avoids a hamburger-only phone nav                         |
 | Reorder API: single-song `PATCH`, not a bulk ordered-list `POST` | Simpler diff against existing `position`-shift logic; Karthik's call, accepts N calls on multi-move |
 | Queue reshuffle keeps current song in place                      | Toggling shuffle mid-playback shouldn't interrupt what's currently playing                          |
 | Waveform computed client-side, cached in-memory only             | No new stored variant (matches existing trim/speed-at-stream philosophy); avoids disk/MinIO cost    |
