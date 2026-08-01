@@ -9,6 +9,10 @@
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://pre-commit.com)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
+<p align="center">
+  <img src="./ui/assets/readme-banner.jpg" alt="Melo" width="600">
+</p>
+
 ---
 
 ## Stack
@@ -233,10 +237,14 @@ Hash routing → #/ · #/favorites · #/playlists · #/playlists/:id
 
 **Keyboard shortcuts:**
 
-| Key     | Action                                            |
-| ------- | ------------------------------------------------- |
-| `Space` | Play / pause (ignored while focus is in an input) |
-| `Esc`   | Close modal                                       |
+| Key                     | Action                                                                    |
+| ----------------------- | ------------------------------------------------------------------------- |
+| `Space`                 | Play / pause (ignored while focus is in an input)                         |
+| `Esc`                   | Closes topmost open surface: Now Playing panel → dropdown → modal         |
+| `Enter`                 | Submit inline input (playlist name, Add Song URL step)                    |
+| `Tab` / `Shift+Tab`     | Cycles focus; trapped within an open modal or Now Playing panel           |
+| `ArrowUp` / `ArrowDown` | Reorders focused playlist row (Playlist Detail page), no-op at boundaries |
+| `Enter` / `Space`       | Opens Now Playing panel when player bar info area is focused              |
 
 **UI file layout:**
 
@@ -382,6 +390,7 @@ Observability targets are listed separately in [Observability](#observability) a
 | `GET`    | `/playlists/{id}`                 | ✅      | Get playlist detail with songs             |
 | `DELETE` | `/playlists/{id}`                 | ✅      | Delete a playlist                          |
 | `POST`   | `/playlists/{id}/songs/{song_id}` | ✅      | Add song to playlist (ordered)             |
+| `PATCH`  | `/playlists/{id}/songs/{song_id}` | ✅      | Reorder song within playlist               |
 | `DELETE` | `/playlists/{id}/songs/{song_id}` | ✅      | Remove song from playlist                  |
 | `GET`    | `/health`                         | ✅      | Health check (DB + Redis + MinIO)          |
 | `GET`    | `/metrics`                        | ✅      | Prometheus scrape endpoint                 |
@@ -454,8 +463,8 @@ Observability stack ports (Grafana, Prometheus, Loki, Tempo, Pyroscope, Flower, 
 melo/
 ├── admin/                   # Streamlit admin dashboard (separate app)
 │   ├── app.py               # entry + login gate + sidebar
-│   ├── auth.py               # session password check
-│   ├── pages/                # overview, songs, logs, metrics, alerts, db_health
+│   ├── auth.py              # session password check
+│   ├── pages/               # overview, songs, logs, metrics, alerts, db_health
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── app/
@@ -465,30 +474,31 @@ melo/
 │   │   ├── songs.py         # songs router incl. /preview + /stream
 │   │   ├── _song_utils.py   # shared serialize_song + _is_favorited
 │   │   └── responses.py     # envelope_response, paginated_response
-│   ├── core/                 # config, db, deps, logging, log_manager, log_events,
-│   │                         #   metrics, tracing, profiling, pollers, middleware,
-│   │                         #   exception_handlers
+│   ├── core/                # config, db, deps, logging, log_manager, log_events,
+│   │                        # metrics, tracing, profiling, pollers, middleware,
+│   │                        # exception_handlers
 │   ├── models/
 │   │   ├── song.py
 │   │   ├── favorite.py
 │   │   └── playlist.py
-│   ├── schemas/               # Pydantic schemas
-│   ├── services/               # downloader, processor, storage
-│   └── workers/                 # Celery app + tasks
+│   ├── schemas/             # Pydantic schemas
+│   ├── services/            # downloader, processor, storage
+│   └── workers/             # Celery app + tasks
 ├── ui/
-│   ├── index.html              # app shell + Google Fonts
-│   ├── style.css                # design tokens (CSS vars) + all styles
-│   ├── api.js                    # fetch wrappers (envelope unwrap)
-│   ├── player.js                  # <audio> element + player state
-│   ├── components.js               # renderSongCard, renderStatusPill, renderToast, …
-│   ├── app.js                       # hash router + page logic + event delegation
-│   ├── nginx.conf                    # SPA fallback + /api/ proxy
-│   └── Dockerfile                     # FROM nginx:alpine, COPY, done
-├── infra/                              # monitoring compose + all provisioning config
+│   ├── index.html           # app shell + Google Fonts
+│   ├── style.css            # design tokens (CSS vars) + all styles
+│   ├── api.js               # fetch wrappers (envelope unwrap)
+│   ├── player.js            # <audio> element + player state
+│   ├── components.js        # renderSongCard, renderStatusPill, renderToast, …
+│   ├── app.js               # hash router + page logic + event delegation
+│   ├── assets/              # logo.png (favicon/sidebar), readme-banner.jpg
+│   ├── nginx.conf           # SPA fallback + /api/ proxy
+│   └── Dockerfile           # FROM nginx:alpine, COPY, done
+├── infra/                   # monitoring compose + all provisioning config
 │   ├── docker-compose.monitoring.yml
 │   ├── monitoring.sh
 │   ├── prometheus/ · loki/ · promtail/ · tempo/ · pyroscope/
-│   └── grafana/provisioning/         # datasources, dashboards, alerting
+│   └── grafana/provisioning/  # datasources, dashboards, alerting
 ├── tests/
 │   ├── conftest.py
 │   ├── docker-compose.test.yml
@@ -576,8 +586,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, branch naming, commit conventi
 ## Out of Scope (v1)
 
 - Multi-user auth, lyrics, waveforms → never (personal tool)
-- Mobile layout → desktop-first, minimum 1280px
-- Drag-to-reorder playlists, waveform display → post-v1
 - SLO/error-budget tracking, external SaaS log shipping → not planned
+- Waveform click-to-seek, bulk/multi-select playlist reorder → Sprint 7+ candidates
 
 Full roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md). Open items: [`docs/TODO.md`](docs/TODO.md).

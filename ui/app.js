@@ -21,12 +21,22 @@ const state = {
     playlists: [], // cache for overflow menu
     routeToken: 0,
     loadedCount: 0, // Number of songs currently rendered in the library view.
+    currentSongList: [], // Song objects backing the currently rendered list —
+    // becomes the player queue when a card is clicked.
+    currentPlaylistId: null, // needed by drop handler (delegation has no closure)
+    dragSongId: null, // dragged song id, tracked outside dataTransfer
+    nowPlayingUnsub: null, // unsubscribe fn for the Now Playing panel's player.subscribe()
+    nowPlayingSongId: null, // last songId drawn on the waveform, avoids redundant redraw
+    npSeeking: false, // true while dragging the panel scrubber — mirrors player.js's isSeeking
+    npDuration: 0, // last known duration, used for live time label while dragging
+    npPeaks: null, // cached peak array for the open panel — redrawn on each tick to color played/unplayed bars
+    npCommitSeekHandler: null, // document-level mouseup/touchend ref, removed on panel close to avoid leaks
 };
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 
 async function bootstrap() {
-    player.bindScrubber();
+    player.bindPlayerControls();
     bindGlobalEvents();
     checkApiHealth();
 
@@ -66,6 +76,7 @@ function route() {
 }
 
 function highlightNavLink(hash) {
+    // Matches sidebar links AND the phone tab-bar links (both carry .nav-link).
     document.querySelectorAll('.nav-link').forEach(link => {
         const route = link.dataset.route;
         const active =
@@ -198,6 +209,7 @@ async function loadLibrarySongs(append, token = state.routeToken) {
     if (append) {
         list.insertAdjacentHTML('beforeend', cards);
         state.loadedCount += data.records.length;
+        state.currentSongList = state.currentSongList.concat(data.records);
     } else {
         list.innerHTML =
             data.records.length === 0
@@ -205,6 +217,7 @@ async function loadLibrarySongs(append, token = state.routeToken) {
                 : cards;
 
         state.loadedCount = data.records.length;
+        state.currentSongList = data.records;
     }
 
     // Only show "Load more" if the API returned a full page AND there's a bookmark.
@@ -278,6 +291,7 @@ async function pollLibrary() {
         .join('');
 
     state.loadedCount = data.records.length;
+    state.currentSongList = data.records;
 
     const stillPending = data.records.some(
         song =>
@@ -328,6 +342,7 @@ async function renderFavoritesPage() {
     const list = document.getElementById('song-list');
     if (!list) return;
 
+    state.currentSongList = data.records;
     const currentSongId = player.getCurrentSongId?.() ?? null;
 
     list.innerHTML =
@@ -429,18 +444,14 @@ async function refreshPlaylistGrid(token = state.routeToken) {
 
 async function renderPlaylistDetailPage(id) {
     const token = nextRouteToken();
-
     document.title = 'Melo — Playlist';
-
     const content = document.getElementById('page-content');
-
     content.innerHTML = `
       <a class="back-link" href="#/playlists">
         ← Playlists
       </a>
       <div id="playlist-detail-root"></div>
     `;
-
     await refreshPlaylistDetail(id, token);
 }
 
@@ -454,32 +465,323 @@ async function refreshPlaylistDetail(id, token = state.routeToken) {
        <a class="btn btn--ghost" href="#/playlists">Back</a></div>`;
         return;
     }
-
     if (token !== state.routeToken) return;
-
     document.title = `Melo — ${playlist.name}`;
     const root = document.getElementById('playlist-detail-root');
     if (!root) return;
-
-    const currentSongId = player.getCurrentSongId?.() ?? null;
-    const rows = (playlist.songs ?? []).map((s, i) => `
-    <div class="playlist-song-row">
-      <span class="playlist-song-row__pos">${i + 1}</span>
-      ${renderSongCard(s, s.id === currentSongId, [])}
-      <button class="icon-btn" data-action="remove-from-playlist"
-              data-playlist-id="${id}" data-song-id="${s.id}"
-              aria-label="Remove from playlist">✕</button>
-    </div>`).join('');
-
+    state.currentPlaylistId = id;
+    state.currentSongList = playlist.songs ?? [];
     root.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">${escHtml(playlist.name)}</h1>
     </div>
-    <div class="song-list" role="list">${rows || buildEmptyPlaylist()}</div>`;
+    <div class="song-list" id="playlist-song-list" role="list"></div>`;
+    renderPlaylistRows(id, state.currentSongList);
+}
+
+function renderPlaylistRows(playlistId, songs) {
+    const list = document.getElementById('playlist-song-list');
+    if (!list) return;
+    const currentSongId = player.getCurrentSongId?.() ?? null;
+    list.innerHTML = songs.length
+        ? songs
+            .map((s, i) => buildPlaylistRow(s, i, playlistId, s.id === currentSongId, songs.length))
+            .join('')
+        : buildEmptyPlaylist();
+}
+
+function buildPlaylistRow(song, position, playlistId, isActive, total) {
+    return `
+    <div class="playlist-song-row"
+         draggable="true"
+         tabindex="0"
+         aria-label="${escHtml(song.title ?? 'Song')}, position ${position + 1} of ${total}"
+         data-position="${position}"
+         data-song-id="${song.id}">
+      <span class="playlist-song-row__pos">${position + 1}</span>
+      ${renderSongCard(song, isActive, [])}
+      <span class="sr-only">Press Arrow Up or Arrow Down to reorder.</span>
+      <button class="icon-btn" data-action="remove-from-playlist"
+              data-playlist-id="${playlistId}" data-song-id="${song.id}"
+              aria-label="Remove from playlist">✕</button>
+    </div>`;
 }
 
 function buildEmptyPlaylist() {
     return `<div class="empty-state"><span class="empty-state__label">No songs in playlist.</span></div>`;
+}
+
+// ── Playlist Drag Reorder ─────────────────────────────────────────────────
+
+function handleDragStart(e) {
+    const row = e.target.closest('.playlist-song-row[draggable="true"]');
+    if (!row) return;
+    state.dragSongId = row.dataset.songId;
+    e.dataTransfer.effectAllowed = 'move';
+    row.classList.add('playlist-song-row--dragging');
+}
+
+function handleDragOver(e) {
+    const row = e.target.closest('.playlist-song-row');
+    if (!row || !state.dragSongId) return;
+    e.preventDefault(); // required to allow drop
+    row.classList.add('playlist-song-row--drag-over');
+}
+
+function handleDragLeave(e) {
+    e.target.closest('.playlist-song-row')?.classList.remove('playlist-song-row--drag-over');
+}
+
+function handleDrop(e) {
+    const row = e.target.closest('.playlist-song-row');
+    if (!row || !state.dragSongId) return;
+    e.preventDefault();
+    row.classList.remove('playlist-song-row--drag-over');
+    const targetSongId = row.dataset.songId;
+    const targetPosition = parseInt(row.dataset.position, 10);
+    if (targetSongId !== state.dragSongId) {
+        reorderPlaylistSongOptimistic(state.currentPlaylistId, state.dragSongId, targetPosition);
+    }
+    state.dragSongId = null;
+}
+
+function handleDragEnd() {
+    document.querySelectorAll('.playlist-song-row--dragging, .playlist-song-row--drag-over')
+        .forEach(el => el.classList.remove('playlist-song-row--dragging', 'playlist-song-row--drag-over'));
+    state.dragSongId = null;
+}
+
+async function reorderPlaylistSongOptimistic(playlistId, songId, newPosition) {
+    const songs = state.currentSongList;
+    const oldIndex = songs.findIndex(s => s.id === songId);
+    if (oldIndex === -1 || oldIndex === newPosition) return;
+    // Optimistic local reorder — insert-after-target semantics, matches
+    // "drop onto row N" as "place after row N" rather than "before".
+    const reordered = songs.slice();
+    const [moved] = reordered.splice(oldIndex, 1);
+    reordered.splice(newPosition, 0, moved);
+    state.currentSongList = reordered;
+    renderPlaylistRows(playlistId, reordered);
+    try {
+        await api.reorderSongInPlaylist(playlistId, songId, newPosition);
+    } catch (err) {
+        renderToast(err.message, 'error');
+        await refreshPlaylistDetail(playlistId); // resync from server on failure
+    }
+}
+
+// ── Now Playing Panel (FE-3) ──────────────────────────────────────────────
+
+function openNowPlayingPanel() {
+    const song = player.getCurrentSong();
+    if (!song) return;
+
+    const root = document.getElementById('now-playing-root');
+    root.innerHTML = buildNowPlayingHtml(song);
+    bindNowPlayingEvents();
+
+    state.nowPlayingSongId = null; // force waveform draw on first subscribe tick
+    state.nowPlayingUnsub = player.subscribe(updateNowPlayingUi);
+
+    loadAndDrawWaveform(song.id);
+}
+
+function closeNowPlayingPanel() {
+    state.nowPlayingUnsub?.();
+    state.nowPlayingUnsub = null;
+    if (state.npCommitSeekHandler) {
+        document.removeEventListener('mouseup', state.npCommitSeekHandler);
+        document.removeEventListener('touchend', state.npCommitSeekHandler);
+        state.npCommitSeekHandler = null;
+    }
+    state.npPeaks = null; // avoid drawing the previous song's waveform on next open
+    document.getElementById('now-playing-root').innerHTML = '';
+}
+
+function isNowPlayingOpen() {
+    return !!document.getElementById('now-playing-root')?.firstElementChild;
+}
+
+function buildNowPlayingHtml(song) {
+    return `<div class="now-playing-overlay" id="now-playing-overlay">
+    <div class="now-playing">
+      <button class="icon-btn now-playing__close" id="np-close" aria-label="Close">✕</button>
+      <img class="now-playing__thumb" id="np-thumb" src="${escHtml(song.thumbnail_url ?? '')}" alt="" />
+      <div class="now-playing__title" id="np-title">${escHtml(song.title ?? '')}</div>
+      <div class="now-playing__channel" id="np-channel">${escHtml(song.channel ?? '')}</div>
+      <canvas class="now-playing__canvas" id="np-canvas"></canvas>
+      <div class="now-playing__transport">
+        <button class="player-btn" id="np-shuffle" aria-label="Shuffle" aria-pressed="false">${shuffleSvg()}</button>
+        <button class="player-btn" id="np-prev" aria-label="Previous">${prevSvg()}</button>
+        <button class="player-btn" id="np-play-pause" aria-label="Play / Pause">
+          <svg id="np-icon-play" width="24" height="24" viewBox="0 0 20 20" fill="currentColor"><path d="M6 4l10 6-10 6V4z"/></svg>
+          <svg id="np-icon-pause" width="24" height="24" viewBox="0 0 20 20" fill="currentColor" style="display:none"><rect x="4" y="3" width="4" height="14" rx="1"/><rect x="12" y="3" width="4" height="14" rx="1"/></svg>
+        </button>
+        <button class="player-btn" id="np-next" aria-label="Next">${nextSvg()}</button>
+        <button class="player-btn loop-btn" id="np-loop" aria-label="Enable loop" data-mode="off">${loopSvg()}<span class="loop-badge" aria-hidden="true">1</span></button>
+      </div>
+      <input type="range" class="player-scrubber" id="np-scrubber" min="0" max="100" value="0" step="0.1" aria-label="Seek" disabled />
+      <span class="player-time" id="np-time">0:00 / 0:00</span>
+      <div class="player-volume" id="np-volume">
+        <button class="player-btn" id="np-mute" aria-label="Mute">${volumeSvg()}</button>
+        <input type="range" class="volume-slider" id="np-volume-slider" min="0" max="1" value="1" step="0.01" aria-label="Volume" />
+      </div>
+    </div>
+  </div>`;
+}
+
+function bindNowPlayingEvents() {
+    document.getElementById('np-close')?.addEventListener('click', closeNowPlayingPanel);
+    document.getElementById('now-playing-overlay')?.addEventListener('click', e => {
+        if (e.target.id === 'now-playing-overlay') closeNowPlayingPanel();
+    });
+    document.getElementById('np-play-pause')?.addEventListener('click', player.togglePlayPause);
+    document.getElementById('np-prev')?.addEventListener('click', player.prev);
+    document.getElementById('np-next')?.addEventListener('click', player.next);
+    document.getElementById('np-shuffle')?.addEventListener('click', player.toggleShuffle);
+    document.getElementById('np-loop')?.addEventListener('click', player.cycleLoopMode);
+    document.getElementById('np-mute')?.addEventListener('click', player.toggleMute);
+    document.getElementById('np-volume-slider')?.addEventListener('input', e => {
+        e.target.style.setProperty('--progress', `${e.target.value * 100}%`);
+        player.setVolume(parseFloat(e.target.value));
+    });
+    bindNowPlayingScrubber();
+}
+
+function bindNowPlayingScrubber() {
+    const scrubber = document.getElementById('np-scrubber');
+    if (!scrubber) return;
+    scrubber.removeAttribute('disabled');
+
+    const commitSeek = () => {
+        if (!state.npSeeking) return;
+        player.seekTo(parseFloat(scrubber.value));
+        state.npSeeking = false;
+    };
+
+    scrubber.addEventListener('mousedown', () => { state.npSeeking = true; });
+    scrubber.addEventListener('touchstart', () => { state.npSeeking = true; });
+
+    scrubber.addEventListener('input', () => {
+        if (!state.npDuration) return;
+        scrubber.style.setProperty('--progress', `${scrubber.value}%`);
+        const seekTime = (scrubber.value / 100) * state.npDuration;
+        const time = document.getElementById('np-time');
+        if (time) time.textContent = `${formatDuration(seekTime)} / ${formatDuration(state.npDuration)}`;
+    });
+
+    scrubber.addEventListener('change', commitSeek);
+    state.npCommitSeekHandler = commitSeek;
+    document.addEventListener('mouseup', commitSeek);
+    document.addEventListener('touchend', commitSeek);
+}
+
+/** Mirrors player.js state onto the panel's own DOM. Does NOT touch the
+ *  player-bar elements — player.js already owns those via its own listeners. */
+function updateNowPlayingUi(s) {
+    if (!isNowPlayingOpen()) return;
+
+    if (s.song && s.song.id !== state.nowPlayingSongId) {
+        document.getElementById('np-thumb').src = s.song.thumbnail_url ?? '';
+        document.getElementById('np-title').textContent = s.song.title ?? '';
+        document.getElementById('np-channel').textContent = s.song.channel ?? '';
+        loadAndDrawWaveform(s.song.id);
+    }
+
+    const playIcon = document.getElementById('np-icon-play');
+    const pauseIcon = document.getElementById('np-icon-pause');
+    if (playIcon) playIcon.style.display = s.paused ? '' : 'none';
+    if (pauseIcon) pauseIcon.style.display = s.paused ? 'none' : '';
+
+    state.npDuration = s.duration || 0;
+
+    const scrubber = document.getElementById('np-scrubber');
+    if (scrubber && s.duration && !state.npSeeking) {
+        const pct = (s.currentTime / s.duration) * 100;
+        scrubber.value = pct;
+        scrubber.style.setProperty('--progress', `${pct}%`);
+    }
+
+    const time = document.getElementById('np-time');
+    if (time && !state.npSeeking) time.textContent = `${formatDuration(s.currentTime)} / ${formatDuration(s.duration)}`;
+
+    const volSlider = document.getElementById('np-volume-slider');
+    if (volSlider) {
+        volSlider.value = s.volume;
+        volSlider.style.setProperty('--progress', `${s.volume * 100}%`);
+    }
+
+    if (state.npPeaks && s.duration) {
+        const canvas = document.getElementById('np-canvas');
+        if (canvas) drawWaveform(canvas, state.npPeaks, s.currentTime / s.duration);
+    }
+
+    document.getElementById('np-shuffle')?.setAttribute('aria-pressed', String(s.shuffle));
+    const loopBtn = document.getElementById('np-loop');
+    if (loopBtn) loopBtn.dataset.mode = s.loopMode;
+}
+
+async function loadAndDrawWaveform(songId) {
+    state.nowPlayingSongId = songId;
+    state.npPeaks = null;
+    const canvas = document.getElementById('np-canvas');
+    if (!canvas) return;
+
+    let peaks;
+    try {
+        peaks = await player.getPeaks(songId);
+    } catch {
+        return; // waveform is visual-only; silent fail, no toast noise
+    }
+
+    if (!isNowPlayingOpen() || state.nowPlayingSongId !== songId) return;
+
+    state.npPeaks = peaks;
+    drawWaveform(canvas, peaks, 0);
+}
+
+function drawWaveform(canvas, peaks, progress = 0) {
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, height);
+
+    const style = getComputedStyle(document.documentElement);
+    const playedColor = style.getPropertyValue('--accent').trim() || '#c8f04e';
+    const unplayedColor = style.getPropertyValue('--bg-elevated').trim() || '#1f1f1f';
+
+    const barGap = 2;
+    const barWidth = width / peaks.length - barGap;
+    const mid = height / 2;
+    const playedBars = Math.floor(peaks.length * progress);
+
+    peaks.forEach((peak, i) => {
+        const barHeight = Math.max(2, peak * height);
+        const x = i * (barWidth + barGap);
+        ctx.fillStyle = i < playedBars ? playedColor : unplayedColor;
+        ctx.fillRect(x, mid - barHeight / 2, barWidth, barHeight);
+    });
+}
+
+function shuffleSvg() {
+    return `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5h3.5L13 15h5"/><path d="M14.5 5H18v3.5"/><path d="M2 15h3.5L9 10"/><path d="M14.5 15H18v-3.5"/></svg>`;
+}
+function prevSvg() {
+    return `<svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor"><path d="M6 4h2v12H6zM16 4v12L7 10z"/></svg>`;
+}
+function nextSvg() {
+    return `<svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor"><path d="M14 4h-2v12h2zM4 4v12l9-6z"/></svg>`;
+}
+function loopSvg() {
+    return `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3l3 3-3 3"/><path d="M3 11V9a3 3 0 0 1 3-3h11"/><path d="M6 17l-3-3 3-3"/><path d="M17 9v2a3 3 0 0 1-3 3H3"/></svg>`;
+}
+function volumeSvg() {
+    return `<svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor"><path d="M3 8v4h3l4 4V4L6 8H3z"/></svg>`;
 }
 
 // ── Add Song Modal ────────────────────────────────────────────────────────
@@ -810,7 +1112,21 @@ async function handleNewPlaylistForSong(songId) {
 function bindGlobalEvents() {
     document.addEventListener('click', handleGlobalClick);
     document.addEventListener('keydown', handleKeydown);
-    document.getElementById('btn-add-song')?.addEventListener('click', openAddSongModal);
+    document.addEventListener('dragstart', handleDragStart);
+    document.addEventListener('dragover', handleDragOver);
+    document.addEventListener('dragleave', handleDragLeave);
+    document.addEventListener('drop', handleDrop);
+    document.addEventListener('dragend', handleDragEnd);
+    document
+        .querySelectorAll('.btn-add-song-trigger')
+        .forEach(btn => btn.addEventListener('click', openAddSongModal));
+    document.getElementById('player-info-trigger')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            e.stopPropagation();
+            openNowPlayingPanel();
+        }
+    });
 }
 
 function handleGlobalClick(e) {
@@ -818,7 +1134,10 @@ function handleGlobalClick(e) {
     const clickedDropdown = e.target.closest('[data-dropdown]');
     document.querySelectorAll('.dropdown__menu').forEach(menu => {
         const dropdown = menu.closest('[data-dropdown]');
-        if (dropdown !== clickedDropdown) menu.style.display = 'none';
+        if (dropdown !== clickedDropdown) {
+            menu.style.display = 'none';
+            dropdown?.querySelector('[data-action="open-menu"]')?.setAttribute('aria-expanded', 'false');
+        }
     });
 
     // Song card click → play (BEFORE action guard)
@@ -845,6 +1164,9 @@ function handleGlobalClick(e) {
         case 'open-add-song':
             openAddSongModal();
             break;
+        case 'open-now-playing':
+            openNowPlayingPanel();
+            break;
         case 'close-modal':
             closeModal();
             break;
@@ -855,7 +1177,9 @@ function handleGlobalClick(e) {
         }
         case 'open-menu': {
             const menu = el.closest('[data-dropdown]').querySelector('.dropdown__menu');
-            menu.style.display = menu.style.display === 'none' ? '' : 'none';
+            const opening = menu.style.display === 'none';
+            menu.style.display = opening ? '' : 'none';
+            el.setAttribute('aria-expanded', String(opening));
             e.stopPropagation();
             break;
         }
@@ -885,7 +1209,20 @@ function handleGlobalClick(e) {
 }
 
 function handleKeydown(e) {
-    if (e.key === 'Escape') closeModal();
+    if (e.key === 'Escape') {
+        if (isNowPlayingOpen()) { closeNowPlayingPanel(); return; }
+        if (closeOpenDropdown()) return;
+        closeModal();
+        return;
+    }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        handlePlaylistRowKeydown(e);
+        return;
+    }
+    if (e.key === 'Tab') {
+        const container = document.querySelector('.now-playing') || document.querySelector('.modal');
+        if (container) trapFocus(container, e);
+    }
     if (e.key === ' ' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
         e.preventDefault();
         player.togglePlayPause();
@@ -894,17 +1231,32 @@ function handleKeydown(e) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-async function playSongById(id) {
+function playSongById(id) {
+    // state.currentSongList always mirrors the page currently on screen —
+    // becomes the player's queue so prev/next/shuffle/loop have context.
+    const inQueue = state.currentSongList.some(s => s.id === id);
+
+    if (inQueue) {
+        player.setQueueAndPlay(state.currentSongList, id);
+    } else {
+        // List changed (poll/filter) between render and click — song fell
+        // out of the queue. Fetch it directly instead of silently no-oping.
+        loadSongDirectly(id);
+    }
+
+    // Full DOM re-render of all visible song cards to sync active state
+    document.querySelectorAll('.song-card').forEach(card => {
+        const isActive = card.dataset.songId === id;
+        card.classList.toggle('song-card--active', isActive);
+        const titleEl = card.querySelector('.song-card__title');
+        if (titleEl) titleEl.style.color = isActive ? 'var(--accent)' : '';
+    });
+}
+
+async function loadSongDirectly(id) {
     try {
         const song = await api.getSong(id);
         player.loadSong(song);
-        // Full DOM re-render of all visible song cards to sync active state
-        document.querySelectorAll('.song-card').forEach(card => {
-            const isActive = card.dataset.songId === id;
-            card.classList.toggle('song-card--active', isActive);
-            const titleEl = card.querySelector('.song-card__title');
-            if (titleEl) titleEl.style.color = isActive ? 'var(--accent)' : '';
-        });
     } catch (err) {
         renderToast(err.message, 'error');
     }
@@ -982,4 +1334,55 @@ function escHtml(str) {
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+}
+
+// ── Accessibility: focus trap + dropdown close ──────────────────────────
+
+function closeOpenDropdown() {
+    const openMenu = [...document.querySelectorAll('.dropdown__menu')]
+        .find(m => m.style.display !== 'none');
+    if (!openMenu) return false;
+    openMenu.style.display = 'none';
+    openMenu.closest('[data-dropdown]')?.querySelector('[data-action="open-menu"]')
+        ?.setAttribute('aria-expanded', 'false');
+    return true;
+}
+
+function trapFocus(container, e) {
+    if (e.key !== 'Tab') return;
+    const focusables = [...container.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )].filter(el => !el.disabled && el.offsetParent !== null);
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+    }
+}
+
+function handlePlaylistRowKeydown(e) {
+    const row = e.target.closest('.playlist-song-row');
+    if (!row || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+
+    e.preventDefault();
+
+    const songId = row.dataset.songId;
+    const currentPos = parseInt(row.dataset.position, 10);
+    const newPos = currentPos + (e.key === 'ArrowUp' ? -1 : 1);
+
+    if (newPos < 0 || newPos > state.currentSongList.length - 1) return;
+
+    reorderPlaylistSongOptimistic(state.currentPlaylistId, songId, newPos).then(() => {
+        // Row is replaced on re-render — refocus it so keyboard users don't lose their place.
+        requestAnimationFrame(() => {
+            document
+                .querySelector(`.playlist-song-row[data-song-id="${songId}"]`)
+                ?.focus();
+        });
+    });
 }

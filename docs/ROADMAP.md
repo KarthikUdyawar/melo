@@ -31,6 +31,17 @@ Full SPA (`ui/`) on vanilla HTML/JS/CSS + nginx — library/favorites/playlists 
 
 All runtime checks (Grafana dashboards load, Tempo trace spans visible, Pyroscope flame graph, log rotation → MinIO `.gz`, Telegram alert firing) manually confirmed.
 
+### Sprint 6 — Frontend Polish ✅ done
+- FE-0 Responsive layout (desktop/tablet/phone breakpoints, bottom tab bar + icon rail nav) ✅
+- FE-1 Player features (volume, shuffle, loop, autoplay-next, queue) ✅
+- FE-2 Drag-reorder playlists — `PATCH /playlists/{id}/songs/{song_id}` + native HTML5 DnD ✅
+- FE-3 Waveform display — new Now Playing panel, client-side decode + peaks cache ✅
+- FE-4 Accessibility audit — Escape chain, focus trap, aria-live, dropdown roles, keyboard playlist reorder ✅
+- FE-5 UX bug fixes — audit-driven, ongoing batch logged in `TODO.md` ✅ (2 items still flagged for Karthik's confirm/override, not blocking)
+- FE-6 Tests — backend TDD for reorder endpoint + smoke suites ✅ (manual frontend smoke checklist still outstanding, non-automatable)
+
+Reverses Sprint 4's "desktop-only, no mobile" call and the "drag-reorder/waveform post-v1" items below — see Decision Log in `PRD.md`.
+
 ---
 
 ## Now
@@ -40,14 +51,21 @@ Housekeeping only — see `TODO.md`:
 - `make alerts` / `make log-rotate` — implement or drop from docs
 - `make admin` Makefile syntax bug
 
+Plus Sprint 6 loose ends (see `TODO.md` FE-4/FE-5/FE-6):
+- Manual tab-order pass across all pages/breakpoints (needs a browser)
+- Manual frontend smoke checklist (responsive, player controls, drag-drop, waveform, focus trap)
+- Karthik confirm/override: `prev()` >3s-restart convention, phone song-card stacking layout
+
 ---
 
-## Next — Sprint 6 (scope not yet defined)
+## Next — Sprint 7 (scope not yet defined)
 
-No backlog committed yet. Candidate directions surfaced across docs but not scheduled:
+No backlog committed yet. Candidates already known but deferred from Sprint 6:
 
+- Waveform click-to-seek (display-only shipped in Sprint 6)
+- Bulk/multi-select playlist reorder (Sprint 6 shipped single-song reorder only)
+- Fix drag-preview showing only thumbnail, not full row (cosmetic, `draggable="false"` on `.song-card__thumb`)
 - Alertmanager → Telegram going live (real creds, no longer a stub)
-- Any post-v1 items explicitly deferred in `README.md` / sprint docs (see below)
 
 ---
 
@@ -56,8 +74,6 @@ No backlog committed yet. Candidate directions surfaced across docs but not sche
 Carried forward from sprint docs — not roadmapped, listed so they aren't rediscovered as "missing":
 
 - Multi-user auth (main app or admin)
-- Mobile / responsive layout (desktop-first, 1280px min)
-- Drag-to-reorder playlists, waveform display
 - AI recommendations
 - Caching processed audio variants
 - `GET /favorites` cursor pagination
@@ -77,4 +93,5 @@ Carried forward from sprint docs — not roadmapped, listed so they aren't redis
 | 3      | Speed, Library, Metadata UX      | ✅ done       |
 | 4      | Vanilla JS UI                    | ✅ done       |
 | 5      | Observability & Monitoring       | ✅ done       |
-| 6      | TBD                              | ⬜ not scoped |
+| 6      | Frontend Polish                  | ✅ done       |
+| 7      | TBD                              | ⬜ not scoped |

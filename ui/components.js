@@ -9,8 +9,8 @@
 export function renderStatusPill(status) {
   if (status === 'done') return '';
   const pulse = status === 'processing' ? ' status-dot--pulse' : '';
-  return `<span class="status-pill status-pill--${status}">
-    <span class="status-dot${pulse}"></span>${status}
+  return `<span class="status-pill status-pill--${status}" aria-label="Status: ${status}">
+    <span class="status-dot${pulse}" aria-hidden="true"></span>${status}
   </span>`;
 }
 
@@ -64,6 +64,8 @@ export function renderSongCard(song, isActive, playlistNames = []) {
         <button class="icon-btn"
                 data-action="open-menu"
                 data-song-id="${song.id}"
+                aria-haspopup="true"
+                aria-expanded="false"
                 aria-label="More options">
           ${moreIcon()}
         </button>
@@ -71,6 +73,7 @@ export function renderSongCard(song, isActive, playlistNames = []) {
           ${playlistItems}
           <div class="dropdown__divider"></div>
           <button class="dropdown__item dropdown__item--danger"
+                  role="menuitem"
                   data-action="delete-song"
                   data-song-id="${song.id}">Delete</button>
         </div>

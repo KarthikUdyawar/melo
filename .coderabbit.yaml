@@ -551,8 +551,7 @@ reviews:
     - "!.pytest_cache/**"
     - "!**/.mypy_cache/**"
 
-code_generation:
-  unit_tests:
+code_generation: {}
 
 chat:
   auto_reply: true

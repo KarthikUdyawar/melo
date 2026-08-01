@@ -12,6 +12,40 @@ Nothing yet.
 
 ---
 
+## [0.6.0] — Sprint 6 — Frontend Polish
+
+### Added
+- Responsive layout: desktop (≥1280px, unchanged), tablet (768–1279px, 56px icon-rail sidebar), phone (≤767px, bottom tab bar + floating Add Song FAB) — CSS-only breakpoint switching, no JS layout logic
+- Player features: volume slider + mute toggle (`localStorage['melo:volume']`), 3-state loop button off/one/all (`localStorage['melo:loop']`), session-only shuffle (Fisher–Yates, keeps current song in place), player queue built from the on-screen song list, autoplay-next on `audio.onended`
+- `PATCH /playlists/{id}/songs/{song_id}` — reorder a song to a given 0-indexed position, shifts intermediate songs' positions (not a swap); `200`/`404`/`422`, no `409` (sentinel-position shift runs inside one transaction)- Native HTML5 drag-and-drop playlist reordering on Playlist Detail rows, optimistic UI update + re-fetch-on-failure resync
+- Now Playing panel: new full-screen surface (thumbnail, title, channel, waveform, transport controls), opened from the player bar's thumbnail/title
+- Client-side waveform: `AudioContext.decodeAudioData()` → ~200 peak buckets → `<canvas>`, in-memory peaks cache (`Map<songId, peaks>`) in `player.js`, played/unplayed bar coloring redrawn per `timeupdate` tick
+- Accessibility: `Escape` closes topmost surface only (Now Playing panel → dropdown → modal); manual focus trap (`trapFocus()`) shared between `.modal` and the Now Playing panel; `aria-live="polite"` on `#toast-root`; `aria-label` on status pills; `aria-haspopup`/`aria-expanded`/`role="menu"` on the overflow dropdown; keyboard playlist reorder via `ArrowUp`/`ArrowDown` reusing the same optimistic-reorder path as drag
+- Custom favicon + sidebar logo mark (`ui/assets/logo.png`)
+- New backend tests for the reorder endpoint (unit: position-shift correctness; integration: `422`/`404`/full-reorder-reflected); `smoke_test.sh` S17 (reorder end-to-end) and expanded `smoke_ui.sh` coverage
+
+### Fixed
+- Playlist Detail song card not stretching full row width (`.playlist-song-row .song-card { flex: 1; min-width: 0; }`)
+- Scrubber/volume sliders had no progress-fill color — added `--progress` CSS custom property, set from JS on every tick
+- Now Playing panel scrubber seek silently uncommitted on some browsers — unified into a single `commitSeek()` guarded by `state.npSeeking`
+- Loop-mode "1" badge only rendered on the player bar, not the Now Playing panel — switched from an ID selector to a shared `.loop-btn[data-mode="one"]` class
+- Now Playing panel volume icon misaligned above its slider (missing `display:flex`)
+- Playlist grid card delete button rendered at the bottom of the card instead of top-right
+- Player bar showed nothing when no song was loaded — added a placeholder icon+text state
+
+### Changed
+- Reverses Sprint 4's "desktop-only, 1280px minimum" decision — mobile support now in scope
+- Player bar shuffle button moved to sit next to the loop button (Now Playing panel's control order left unchanged)
+
+### Known limitations
+- Waveform is display-only this sprint — click-to-seek on the waveform itself is out of scope (the separate scrubber handles seeking)
+- Bulk/multi-select playlist reorder not supported — one song moved at a time
+- Playlist drag-preview shows only the dragged song's thumbnail, not the full row (cosmetic; reorder logic unaffected) — deferred to Sprint 7
+- Manual tab-order pass and manual frontend smoke checklist (responsive breakpoints, player controls, drag-drop, waveform, focus trap) still outstanding — require an actual browser
+- No automated frontend tests — consistent with Sprint 4's decision (no component framework, no test surface)
+
+---
+
 ## [0.5.0] — Sprint 5 — Observability & Monitoring
 
 ### Added
@@ -139,7 +173,8 @@ Nothing yet.
 - structlog structured logging + request middleware
 - Makefile with core targets
 
-[Unreleased]: https://github.com/KarthikUdyawar/melo/compare/0.5.0...HEAD
+[Unreleased]: https://github.com/KarthikUdyawar/melo/compare/0.6.0...HEAD
+[0.6.0]: https://github.com/KarthikUdyawar/melo/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/KarthikUdyawar/melo/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/KarthikUdyawar/melo/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/KarthikUdyawar/melo/compare/0.2.0...0.3.0

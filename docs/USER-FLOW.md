@@ -2,6 +2,9 @@
 
 > How a user moves through the app from first open to organized library.
 
+> **Sprint 6 note:** nav, player, and playlist-detail flows below were extended for responsive layout (phone/tablet/desktop), extra player controls (volume/shuffle/loop/queue), the Now Playing panel, and drag-reorder. Sections marked "(Sprint 6)" are new since the original doc; unmarked sections are unchanged from Sprint 4.
+
+
 ---
 
 ## App Entry
@@ -105,7 +108,7 @@ flowchart TD
 flowchart TD
     A([User clicks song card]) --> B{Song status}
     B --pending/processing/failed--> C[No action — card not interactive\ndata-playable=false]
-    B --done--> D["player.loadSong(song)"]
+    B --done--> D["player.setQueueAndPlay(pageSongList, songId)"]
     D --> E["audio.src = /api/songs/id/stream\naudio.play()"]
     E --> F[Player bar: thumbnail + title + channel]
     F --> G[Scrubber starts moving]
@@ -113,6 +116,8 @@ flowchart TD
 ```
 
 > The **Retry** button on failed songs is a separate always-visible control next to the status pill, not something surfaced by clicking the card.
+
+> **(Sprint 6)** Clicking a card sets the player's **queue** to whatever song list is currently rendered on screen (Library/Favorites/Playlist Detail — whichever is visible), positioned at the clicked song. This queue is what Prev/Next/Shuffle/Loop operate on — it is not refetched from the API, it's just the list already on screen.
 
 ### 3a. Player Controls
 
@@ -129,6 +134,67 @@ flowchart LR
 ```
 
 > Space only toggles play/pause when focus isn't on an `<input>` or `<select>`.
+
+> **(Sprint 6)** Scrubber fill is colored `--accent` up to the playhead via a `--progress` CSS var set on every tick — purely visual, doesn't change the seek behavior above.
+
+### 3b. Prev / Next / Shuffle / Loop (Sprint 6)
+
+```mermaid
+flowchart TD
+    A([Next clicked]) --> B["Find next queue entry\nwith status=done"]
+    B --> C{Found?}
+    C --no--> D[No-op — does not wrap]
+    C --yes--> E[Play that entry]
+
+    F([Prev clicked]) --> G{"currentTime > 3s?"}
+    G --yes--> H[Restart current song\ncurrentTime = 0]
+    G --no--> I["Find previous queue entry\nwith status=done"]
+    I --> J{Found?}
+    J --no--> H
+    J --yes--> K[Play that entry]
+
+    L([Shuffle toggled]) --> M["Fisher–Yates reshuffle queue\nkeeping current song in place"]
+    M --> N[Session-only — resets on reload, not persisted]
+
+    O([Loop button clicked]) --> P["Cycle: off → one → all → off"]
+    P --> Q["Persist to localStorage['melo:loop']"]
+
+    R([Song ends — audio.onended]) --> S{loopMode}
+    S --one--> T[Replay same song]
+    S --"off/all, more in queue"--> U[Advance to next queue entry]
+    S --"all, at end of queue"--> V[Wrap to queue start]
+    S --"off, at end of queue"--> W[Stop — player bar stays visible]
+```
+
+> Next/Prev/Shuffle/Loop all skip queue entries whose `status !== 'done'` (e.g. still `pending`/`processing` next to a playable song in the list).
+
+### 3c. Volume (Sprint 6)
+
+```mermaid
+flowchart TD
+    A([User drags volume slider]) --> B["audio.volume = value"]
+    B --> C["Persist to localStorage['melo:volume']"]
+
+    D([User clicks mute icon]) --> E{Currently muted?}
+    E --no--> F[Remember current volume as pre-mute level\nSet volume to 0]
+    E --yes--> G[Restore pre-mute level]
+```
+
+### 3d. Now Playing Panel (Sprint 6)
+
+```mermaid
+flowchart TD
+    A(["User taps player bar thumbnail/title\n(click, or Enter/Space if focused)"]) --> B[Full-screen panel opens]
+    B --> C["Fetch + decode audio via AudioContext\n(first play only — cached per session)"]
+    C --> D[Downsample to ~200 peaks, draw waveform]
+    D --> E[Panel mirrors player bar state live\nvia player.js subscribe]
+    E --> F{User action in panel}
+    F --Play/Pause/Prev/Next/Shuffle/Loop--> G[Same behavior as player bar\nsee 3a-3c above]
+    F --Drag/click panel scrubber--> H[Seeks — independent drag-state\nfrom the player bar's own scrubber]
+    F --Close X or Escape--> I[Panel closes\nplayback continues in background via player bar]
+```
+
+> Waveform bars recolor `--accent` (played) vs `--bg-elevated` (unplayed) live as the song progresses. Clicking directly on the waveform does **not** seek — only the separate scrubber control below it does.
 
 ---
 
@@ -196,6 +262,26 @@ flowchart TD
     F --clicks remove--> H["DELETE /playlists/:id/songs/:song_id"]
     H --> I[Re-fetch and re-render playlist detail]
 ```
+
+### 7a. Drag Reorder (Sprint 6)
+
+```mermaid
+flowchart TD
+    A([User drags a row]) --> B[Drops onto target row]
+    B --> C["Insert dragged song AFTER target row's index"]
+    C --> D["Optimistic local reorder — list updates immediately"]
+    D --> E["PATCH /playlists/:id/songs/:song_id\n{ position }"]
+    E --> F{Result}
+    F --success--> G[Stays as reordered]
+    F --error--> H["Toast: error\nRe-fetch playlist to resync from server"]
+
+    I(["Keyboard: row focused,\nArrowUp/ArrowDown pressed"]) --> J{At list boundary?}
+    J --yes--> K[No-op — no network call]
+    J --no--> C
+    C --> L[Focus follows the moved row after re-render]
+```
+
+> Drop-onto-row means "insert after", not "insert before" — dropping song A onto row 3 places A immediately after whatever is at position 3.
 
 ---
 
@@ -265,7 +351,7 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    subgraph Sidebar ["Sidebar (always visible)"]
+    subgraph Nav ["Nav — varies by breakpoint (Sprint 6)"]
         L[Library]
         FAV[Favorites]
         PL[Playlists]
@@ -280,6 +366,7 @@ flowchart LR
 
     subgraph Persistent
         Player["Player Bar\n(never unmounts)"]
+        NP["Now Playing Panel\n(opened on demand from Player Bar)"]
     end
 
     L --> LibPage
@@ -290,14 +377,20 @@ flowchart LR
     LibPage -.plays.-> Player
     FavPage -.plays.-> Player
     PlDetail -.plays.-> Player
+    Player -.tap thumbnail/title.-> NP
 ```
+
+> **(Sprint 6)** Nav rendering differs by breakpoint: full sidebar with labels at >=1280px, icon-only 56px rail at 768–1279px, bottom tab bar (same 3 routes) at <=767px — plus a floating Add Song button on phone since the sidebar's Add Song button isn't reachable there. The three routes and their behavior are identical across all three; only the nav chrome differs.
 
 ---
 
 ## Keyboard Shortcuts
 
-| Key     | Action                                                                                              |
-| ------- | --------------------------------------------------------------------------------------------------- |
-| `Space` | Play / pause current song (ignored while focus is in an `<input>`/`<select>`)                       |
-| `Esc`   | Close modal. **Does not** close the song-card dropdown menu — that only closes on an outside click. |
-| `Enter` | Submit inline input (playlist name field, Add Song URL step)                                        |
+| Key                     | Action                                                                                                         |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `Space`                 | Play / pause current song (ignored while focus is in an `<input>`/`<select>`)                                  |
+| `Esc`                   | Closes the topmost open surface only, in priority order: Now Playing panel → open dropdown menu → modal        |
+| `Enter`                 | Submit inline input (playlist name field, Add Song URL step)                                                   |
+| `Tab` / `Shift+Tab`     | Cycles focus; trapped within an open modal or the Now Playing panel while either is open                       |
+| `ArrowUp` / `ArrowDown` | **(Sprint 6)** Reorders the focused playlist row up/down (Playlist Detail page only), no-op at list boundaries |
+| `Enter` / `Space`       | **(Sprint 6)** Opens the Now Playing panel when the player bar's info area (`#player-info-trigger`) is focused |
