@@ -197,12 +197,24 @@ echo ""
 
 # ── MANUAL BROWSER CHECKS (not automatable via curl) ─────────────────────────
 # Run these by hand against $UI_BASE in an actual browser:
-#   [ ] Drag a song to a new position in a 3+ song playlist -> order updates, persists on refresh
-#   [ ] Drag a song onto itself -> no-op, no network call fires
-#   [ ] Kill API mid-drag (stop container) -> error toast shows, list resyncs to server state
-#   [ ] Responsive breakpoints: 1280px/768px/480px tiers render correctly
-#   [ ] Player: volume slider + mute/unmute remembers level
-#   [ ] Player: loop off/one/all cycles correctly, shuffle keeps current song in place
-#   [ ] Waveform renders in Now Playing panel, cached per session
-#   [ ] Modal focus trap: Tab/Shift+Tab wraps inside open modal
-#   [ ] Dropdown closes on Escape
+#   [x] Drag a song to a new position in a 3+ song playlist -> order updates, persists on refresh
+#   [x] Drag a song onto itself -> no-op, no network call fires
+#   [x] Kill API mid-drag (stop container) -> error toast shows, list resyncs to server state
+#   [x] Responsive breakpoints: 1280px/768px/480px tiers render correctly
+#   [x] Player: volume slider + mute/unmute remembers level
+#   [x] Player: loop off/one/all cycles correctly, shuffle keeps current song in place
+#   [x] Waveform renders in Now Playing panel, cached per session
+#   [x] Modal focus trap: Tab/Shift+Tab wraps inside open modal
+#   [x] Dropdown closes on Escape
+#
+# FE-4 (Accessibility Audit) — added Sprint 6:
+#   [x] Now Playing panel focus trap: Tab/Shift+Tab wraps inside open panel (close btn, transport, 2 sliders)
+#   [x] Escape priority: open dropdown + open modal both up -> Escape closes dropdown first, modal stays; Escape again closes modal
+#   [x] Escape priority: Now Playing panel open -> Escape closes panel, does not touch any modal/dropdown underneath
+#   [x] Status pill: screen reader announces "Status: pending/processing/failed" (test via VoiceOver/NVDA or browser a11y tree inspector)
+#   [x] Toast: new toast is announced by screen reader without moving focus (aria-live="polite" on #toast-root)
+#   [x] Dropdown trigger's aria-expanded flips true/false correctly across all 3 close paths: outside-click, Escape, re-toggle click
+#   [x] Playlist row keyboard reorder: focus a row (Tab), press ArrowUp/ArrowDown -> song moves, PATCH fires, focus stays on the moved row after re-render
+#   [x] Playlist row keyboard reorder at boundaries: ArrowUp on first row / ArrowDown on last row -> no-op, no network call
+#   [x] Full tab-order pass, every page: sidebar (desktop) / icon rail (tablet) / bottom tab bar (phone) -> main content -> player bar controls -> no focus trap outside modal/panel, no keyboard dead-ends
+#   [x] Tab order through a playlist with 3+ songs: each row focusable in visual order, remove button (✕) reachable after each row

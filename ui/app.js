@@ -29,6 +29,7 @@ const state = {
     nowPlayingSongId: null, // last songId drawn on the waveform, avoids redundant redraw
     npSeeking: false, // true while dragging the panel scrubber — mirrors player.js's isSeeking
     npDuration: 0, // last known duration, used for live time label while dragging
+    npPeaks: null, // cached peak array for the open panel — redrawn on each tick to color played/unplayed bars
 };
 
 // ── Boot ──────────────────────────────────────────────────────────────────
@@ -634,9 +635,10 @@ function bindNowPlayingEvents() {
     document.getElementById('np-shuffle')?.addEventListener('click', player.toggleShuffle);
     document.getElementById('np-loop')?.addEventListener('click', player.cycleLoopMode);
     document.getElementById('np-mute')?.addEventListener('click', player.toggleMute);
-    document.getElementById('np-volume-slider')?.addEventListener('input', e =>
-        player.setVolume(parseFloat(e.target.value))
-    );
+    document.getElementById('np-volume-slider')?.addEventListener('input', e => {
+        e.target.style.setProperty('--progress', `${e.target.value * 100}%`);
+        player.setVolume(parseFloat(e.target.value));
+    });
     bindNowPlayingScrubber();
 }
 
@@ -645,23 +647,26 @@ function bindNowPlayingScrubber() {
     if (!scrubber) return;
     scrubber.removeAttribute('disabled');
 
+    const commitSeek = () => {
+        if (!state.npSeeking) return;
+        player.seekTo(parseFloat(scrubber.value));
+        state.npSeeking = false;
+    };
+
     scrubber.addEventListener('mousedown', () => { state.npSeeking = true; });
     scrubber.addEventListener('touchstart', () => { state.npSeeking = true; });
 
     scrubber.addEventListener('input', () => {
         if (!state.npDuration) return;
+        scrubber.style.setProperty('--progress', `${scrubber.value}%`);
         const seekTime = (scrubber.value / 100) * state.npDuration;
         const time = document.getElementById('np-time');
         if (time) time.textContent = `${formatDuration(seekTime)} / ${formatDuration(state.npDuration)}`;
     });
 
-    scrubber.addEventListener('change', () => {
-        player.seekTo(parseFloat(scrubber.value));
-        state.npSeeking = false;
-    });
-
-    scrubber.addEventListener('mouseup', () => { state.npSeeking = false; });
-    scrubber.addEventListener('touchend', () => { state.npSeeking = false; });
+    scrubber.addEventListener('change', commitSeek);
+    scrubber.addEventListener('mouseup', commitSeek);
+    scrubber.addEventListener('touchend', commitSeek);
 }
 
 /** Mirrors player.js state onto the panel's own DOM. Does NOT touch the
@@ -684,13 +689,25 @@ function updateNowPlayingUi(s) {
     state.npDuration = s.duration || 0;
 
     const scrubber = document.getElementById('np-scrubber');
-    if (scrubber && s.duration && !state.npSeeking) scrubber.value = (s.currentTime / s.duration) * 100;
+    if (scrubber && s.duration && !state.npSeeking) {
+        const pct = (s.currentTime / s.duration) * 100;
+        scrubber.value = pct;
+        scrubber.style.setProperty('--progress', `${pct}%`);
+    }
 
     const time = document.getElementById('np-time');
     if (time && !state.npSeeking) time.textContent = `${formatDuration(s.currentTime)} / ${formatDuration(s.duration)}`;
 
     const volSlider = document.getElementById('np-volume-slider');
-    if (volSlider) volSlider.value = s.volume;
+    if (volSlider) {
+        volSlider.value = s.volume;
+        volSlider.style.setProperty('--progress', `${s.volume * 100}%`);
+    }
+
+    if (state.npPeaks && s.duration) {
+        const canvas = document.getElementById('np-canvas');
+        if (canvas) drawWaveform(canvas, state.npPeaks, s.currentTime / s.duration);
+    }
 
     document.getElementById('np-shuffle')?.setAttribute('aria-pressed', String(s.shuffle));
     const loopBtn = document.getElementById('np-loop');
@@ -711,10 +728,11 @@ async function loadAndDrawWaveform(songId) {
 
     if (!isNowPlayingOpen() || state.nowPlayingSongId !== songId) return;
 
-    drawWaveform(canvas, peaks);
+    state.npPeaks = peaks;
+    drawWaveform(canvas, peaks, 0);
 }
 
-function drawWaveform(canvas, peaks) {
+function drawWaveform(canvas, peaks, progress = 0) {
     const dpr = window.devicePixelRatio || 1;
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
@@ -725,16 +743,19 @@ function drawWaveform(canvas, peaks) {
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
 
-    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-    ctx.fillStyle = accent || '#c8f04e';
+    const style = getComputedStyle(document.documentElement);
+    const playedColor = style.getPropertyValue('--accent').trim() || '#c8f04e';
+    const unplayedColor = style.getPropertyValue('--bg-elevated').trim() || '#1f1f1f';
 
     const barGap = 2;
     const barWidth = width / peaks.length - barGap;
     const mid = height / 2;
+    const playedBars = Math.floor(peaks.length * progress);
 
     peaks.forEach((peak, i) => {
         const barHeight = Math.max(2, peak * height);
         const x = i * (barWidth + barGap);
+        ctx.fillStyle = i < playedBars ? playedColor : unplayedColor;
         ctx.fillRect(x, mid - barHeight / 2, barWidth, barHeight);
     });
 }

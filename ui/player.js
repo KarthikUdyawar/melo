@@ -78,14 +78,19 @@ function updateScrubber() {
     if (isSeeking) return;
     const scrubber = elScrubber();
     if (!scrubber || !audio.duration || isNaN(audio.duration)) return;
-    scrubber.value = (audio.currentTime / audio.duration) * 100;
+    const pct = (audio.currentTime / audio.duration) * 100;
+    scrubber.value = pct;
+    scrubber.style.setProperty('--progress', `${pct}%`);
     elTime().textContent = `${formatTime(audio.currentTime)} / ${formatTime(audio.duration)}`;
     emit();
 }
 
 function updateVolumeUi() {
     const slider = elVolumeSlider();
-    if (slider) slider.value = audio.volume;
+    if (slider) {
+        slider.value = audio.volume;
+        slider.style.setProperty('--progress', `${audio.volume * 100}%`);
+    }
 
     const muted = audio.volume === 0;
     if (elIconVol()) elIconVol().style.display = muted ? 'none' : '';
@@ -148,7 +153,10 @@ function handleEnded() {
 
     updatePlayIcon();
     const scrubber = elScrubber();
-    if (scrubber) scrubber.value = 0;
+    if (scrubber) {
+        scrubber.value = 0;
+        scrubber.style.setProperty('--progress', '0%');
+    }
     elTime().textContent = `0:00 / ${formatTime(audio.duration)}`;
 }
 
@@ -174,7 +182,10 @@ export function loadSong(song) {
     elChannel().textContent = song.channel ?? '';
 
     const scrubber = elScrubber();
-    if (scrubber) scrubber.value = 0;
+    if (scrubber) {
+        scrubber.value = 0;
+        scrubber.style.setProperty('--progress', '0%');
+    }
     elTime().textContent = `0:00 / ${formatTime(song.effective_duration ?? song.duration ?? 0)}`;
     emit();
 }
@@ -430,6 +441,7 @@ function bindScrubber() {
 
     scrubber.addEventListener('input', () => {
         if (!audio.duration || isNaN(audio.duration)) return;
+        scrubber.style.setProperty('--progress', `${scrubber.value}%`);
         const seekTo = (scrubber.value / 100) * audio.duration;
         elTime().textContent = `${formatTime(seekTo)} / ${formatTime(audio.duration)}`;
     });
@@ -441,4 +453,5 @@ function bindScrubber() {
     });
 
     scrubber.addEventListener('mouseup', () => { isSeeking = false; });
+    scrubber.addEventListener('touchend', () => { isSeeking = false; });
 }

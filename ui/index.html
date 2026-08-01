@@ -5,6 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Melo</title>
+    <link rel="icon" type="image/png" href="assets/logo.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700&family=DM+Mono:wght@400;500&display=swap"
@@ -16,8 +17,8 @@
 
     <aside class="sidebar">
         <div class="sidebar__logo">
+            <img class="sidebar__logo-mark" src="assets/logo.png" alt="Melo" />
             <span class="sidebar__logo-full">melo</span>
-            <span class="sidebar__logo-icon" aria-hidden="true">M</span>
         </div>
         <nav class="sidebar__nav">
             <a href="#/" class="nav-link" data-route="/">
@@ -64,23 +65,22 @@
     </main>
 
     <div class="player-bar player-bar--empty" id="player-bar">
-        <div class="player-bar__info" id="player-info-trigger" data-action="open-now-playing" role="button" tabindex="0" aria-label="Open now playing">
+        <div class="player-bar__placeholder" id="player-bar-placeholder">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M7 15V5l10-2v10" />
+                <circle cx="5" cy="15" r="2" />
+                <circle cx="15" cy="13" r="2" />
+            </svg>
+            <span>No song playing — pick one from your library</span>
+        </div>
+        <div class="player-bar__info" id="player-info-trigger" data-action="open-now-playing" role="button" tabindex="0"
+            aria-label="Open now playing">
             <img class="player-bar__thumb" id="player-thumb" alt="" width="40" height="40" />
             <div class="player-bar__meta">
                 <span class="player-bar__title" id="player-title"></span>
                 <span class="player-bar__channel" id="player-channel"></span>
             </div>
         </div>
-
-        <button class="player-btn player-ctrl-wide" id="btn-shuffle" aria-label="Shuffle" aria-pressed="false">
-            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"
-                stroke-linecap="round" stroke-linejoin="round">
-                <path d="M2 5h3.5L13 15h5" />
-                <path d="M14.5 5H18v3.5" />
-                <path d="M2 15h3.5L9 10" />
-                <path d="M14.5 15H18v-3.5" />
-            </svg>
-        </button>
 
         <div class="player-bar__controls">
             <button class="player-btn player-ctrl-wide" id="btn-prev" aria-label="Previous">
@@ -107,6 +107,16 @@
                 aria-label="Seek" />
             <span class="player-time" id="player-time">0:00 / 0:00</span>
         </div>
+
+        <button class="player-btn player-ctrl-wide" id="btn-shuffle" aria-label="Shuffle" aria-pressed="false">
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 5h3.5L13 15h5" />
+                <path d="M14.5 5H18v3.5" />
+                <path d="M2 15h3.5L9 10" />
+                <path d="M14.5 15H18v-3.5" />
+            </svg>
+        </button>
 
         <button class="player-btn player-ctrl-wide loop-btn" id="btn-loop" aria-label="Enable loop" data-mode="off">
             <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"

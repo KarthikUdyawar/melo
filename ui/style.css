@@ -146,14 +146,20 @@ select {
     color: var(--accent);
     letter-spacing: -0.02em;
     margin-bottom: var(--space-4);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.sidebar__logo-mark {
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
 }
 
 .sidebar__logo-full {
     display: none;
-}
-
-.sidebar__logo-icon {
-    display: inline;
 }
 
 @media (min-width: 1280px) {
@@ -350,6 +356,19 @@ select {
     visibility: hidden;
 }
 
+.player-bar__placeholder {
+    display: none;
+    align-items: center;
+    gap: var(--space-3);
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    width: 100%;
+}
+
+.player-bar--empty .player-bar__placeholder {
+    display: flex;
+}
+
 .player-bar__info {
     display: flex;
     align-items: center;
@@ -434,10 +453,12 @@ select {
     -webkit-appearance: none;
     appearance: none;
     height: 3px;
-    background: var(--bg-elevated);
     border-radius: 2px;
     outline: none;
     cursor: pointer;
+    background: linear-gradient(to right,
+            var(--accent) var(--progress, 0%),
+            var(--bg-elevated) var(--progress, 0%));
 }
 
 .player-scrubber::-webkit-slider-thumb {
@@ -508,6 +529,8 @@ select {
 }
 
 .player-volume {
+    display: flex;
+    flex-direction: column;
     align-items: center;
     gap: var(--space-2);
 }
@@ -517,10 +540,12 @@ select {
     -webkit-appearance: none;
     appearance: none;
     height: 3px;
-    background: var(--bg-elevated);
     border-radius: 2px;
     outline: none;
     cursor: pointer;
+    background: linear-gradient(to right,
+            var(--accent) var(--progress, 100%),
+            var(--bg-elevated) var(--progress, 100%));
 }
 
 .volume-slider::-webkit-slider-thumb {
@@ -998,6 +1023,7 @@ select {
     padding: var(--space-4);
     cursor: pointer;
     transition: background 80ms ease, border-color 80ms ease;
+    position: relative;
 }
 
 .playlist-card:hover {
@@ -1016,6 +1042,13 @@ select {
 .playlist-card__meta {
     font-size: var(--text-xs);
     color: var(--text-secondary);
+    padding-right: var(--space-6);
+}
+
+.playlist-card .icon-btn--danger {
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-3);
 }
 
 /* ─── Inline Name Input ──────────────────────────────────────────────── */
@@ -1136,6 +1169,11 @@ select {
     display: flex;
     align-items: center;
     gap: var(--space-3);
+}
+
+.playlist-song-row .song-card {
+    flex: 1;
+    min-width: 0;
 }
 
 .playlist-song-row__pos {
