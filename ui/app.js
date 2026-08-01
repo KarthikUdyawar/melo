@@ -30,6 +30,7 @@ const state = {
     npSeeking: false, // true while dragging the panel scrubber — mirrors player.js's isSeeking
     npDuration: 0, // last known duration, used for live time label while dragging
     npPeaks: null, // cached peak array for the open panel — redrawn on each tick to color played/unplayed bars
+    npCommitSeekHandler: null, // document-level mouseup/touchend ref, removed on panel close to avoid leaks
 };
 
 // ── Boot ──────────────────────────────────────────────────────────────────
@@ -484,13 +485,12 @@ function renderPlaylistRows(playlistId, songs) {
     const currentSongId = player.getCurrentSongId?.() ?? null;
     list.innerHTML = songs.length
         ? songs
-            .map((s, i) => buildPlaylistRow(s, i, playlistId, s.id === currentSongId))
+            .map((s, i) => buildPlaylistRow(s, i, playlistId, s.id === currentSongId, songs.length))
             .join('')
         : buildEmptyPlaylist();
 }
 
-function buildPlaylistRow(song, position, playlistId, isActive) {
-    const total = state.currentSongList.length;
+function buildPlaylistRow(song, position, playlistId, isActive, total) {
     return `
     <div class="playlist-song-row"
          draggable="true"
@@ -589,6 +589,12 @@ function openNowPlayingPanel() {
 function closeNowPlayingPanel() {
     state.nowPlayingUnsub?.();
     state.nowPlayingUnsub = null;
+    if (state.npCommitSeekHandler) {
+        document.removeEventListener('mouseup', state.npCommitSeekHandler);
+        document.removeEventListener('touchend', state.npCommitSeekHandler);
+        state.npCommitSeekHandler = null;
+    }
+    state.npPeaks = null; // avoid drawing the previous song's waveform on next open
     document.getElementById('now-playing-root').innerHTML = '';
 }
 
@@ -665,8 +671,9 @@ function bindNowPlayingScrubber() {
     });
 
     scrubber.addEventListener('change', commitSeek);
-    scrubber.addEventListener('mouseup', commitSeek);
-    scrubber.addEventListener('touchend', commitSeek);
+    state.npCommitSeekHandler = commitSeek;
+    document.addEventListener('mouseup', commitSeek);
+    document.addEventListener('touchend', commitSeek);
 }
 
 /** Mirrors player.js state onto the panel's own DOM. Does NOT touch the
@@ -716,6 +723,7 @@ function updateNowPlayingUi(s) {
 
 async function loadAndDrawWaveform(songId) {
     state.nowPlayingSongId = songId;
+    state.npPeaks = null;
     const canvas = document.getElementById('np-canvas');
     if (!canvas) return;
 
@@ -1113,7 +1121,11 @@ function bindGlobalEvents() {
         .querySelectorAll('.btn-add-song-trigger')
         .forEach(btn => btn.addEventListener('click', openAddSongModal));
     document.getElementById('player-info-trigger')?.addEventListener('keydown', e => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openNowPlayingPanel(); }
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            e.stopPropagation();
+            openNowPlayingPanel();
+        }
     });
 }
 
@@ -1222,7 +1234,15 @@ function handleKeydown(e) {
 function playSongById(id) {
     // state.currentSongList always mirrors the page currently on screen —
     // becomes the player's queue so prev/next/shuffle/loop have context.
-    player.setQueueAndPlay(state.currentSongList, id);
+    const inQueue = state.currentSongList.some(s => s.id === id);
+
+    if (inQueue) {
+        player.setQueueAndPlay(state.currentSongList, id);
+    } else {
+        // List changed (poll/filter) between render and click — song fell
+        // out of the queue. Fetch it directly instead of silently no-oping.
+        loadSongDirectly(id);
+    }
 
     // Full DOM re-render of all visible song cards to sync active state
     document.querySelectorAll('.song-card').forEach(card => {
@@ -1231,6 +1251,15 @@ function playSongById(id) {
         const titleEl = card.querySelector('.song-card__title');
         if (titleEl) titleEl.style.color = isActive ? 'var(--accent)' : '';
     });
+}
+
+async function loadSongDirectly(id) {
+    try {
+        const song = await api.getSong(id);
+        player.loadSong(song);
+    } catch (err) {
+        renderToast(err.message, 'error');
+    }
 }
 
 async function handleRemoveFromPlaylist(playlistId, songId) {

@@ -101,9 +101,22 @@ def _get_song_or_404(song_id: UUID, db: DbDep) -> Song:
     return song
 
 
-def _get_membership_or_404(
-    playlist_id: UUID, song_id: UUID, db: DbDep
-) -> PlaylistSong:
+def _lock_playlist_songs(playlist_id: UUID, db: DbDep) -> list[PlaylistSong]:
+    """Lock all PlaylistSong rows for playlist_id, serializes concurrent reorders.
+
+    SQLite ignores FOR UPDATE (no row locks) — fine, unit tests don't test
+    concurrency there. Postgres blocks a second reorder until first commits.
+    """
+    return (
+        db.query(PlaylistSong)
+        .filter(PlaylistSong.playlist_id == playlist_id)
+        .order_by(PlaylistSong.position.asc())
+        .with_for_update()
+        .all()
+    )
+
+
+def _get_membership_or_404(playlist_id: UUID, song_id: UUID, db: DbDep) -> PlaylistSong:
     entry = (
         db.query(PlaylistSong)
         .filter(
@@ -126,6 +139,25 @@ def _next_position(playlist_id: UUID, db: DbDep) -> int:
         .scalar()
     )
     return 0 if result is None else result + 1
+
+
+def _compact_positions(playlist_id: UUID, db: DbDep) -> None:
+    """Reassign dense zero-based positions after a removal, preserving order.
+
+    Safe to update in ascending-position order: for sorted rows, the target
+    index i is always <= the row's current position, so no in-flight
+    collision with the (playlist_id, position) unique constraint occurs.
+    """
+    rows = (
+        db.query(PlaylistSong)
+        .filter(PlaylistSong.playlist_id == playlist_id)
+        .order_by(PlaylistSong.position.asc())
+        .all()
+    )
+    for i, row in enumerate(rows):
+        if row.position != i:
+            row.position = i
+            db.flush()
 
 
 def _reposition_song(
@@ -372,13 +404,14 @@ def reorder_song_in_playlist(
     playlist = _get_playlist_or_404(playlist_id, db)
     _get_song_or_404(song_id, db)
 
-    entry = _get_membership_or_404(playlist_id, song_id, db)
-
-    song_count = (
-        db.query(func.count(PlaylistSong.id))
-        .filter(PlaylistSong.playlist_id == playlist_id)
-        .scalar()
-    )
+    locked_rows = _lock_playlist_songs(playlist_id, db)
+    entry = next((r for r in locked_rows if r.song_id == song_id), None)
+    if entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Song {song_id} is not in playlist {playlist_id}.",
+        )
+    song_count = len(locked_rows)
     if payload.position >= song_count:
         raise HTTPException(
             status_code=422,
@@ -404,7 +437,11 @@ def reorder_song_in_playlist(
     responses={404: {"description": "Playlist, song, or membership not found"}},
 )
 def remove_song_from_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> Response:
-    """Hard-delete the PlaylistSong join row. 404 if not found."""
+    """Hard-delete the PlaylistSong join row and compact remaining positions.
+
+    404 if not found. Compaction keeps `position` dense/gap-free so later
+    PATCH reorders (which treat `position` as a list index) stay correct.
+    """
     from app.core.metrics import playlist_ops_total
 
     _get_playlist_or_404(playlist_id, db)
@@ -412,6 +449,8 @@ def remove_song_from_playlist(playlist_id: UUID, song_id: UUID, db: DbDep) -> Re
     entry = _get_membership_or_404(playlist_id, song_id, db)
 
     db.delete(entry)
+    db.flush()
+    _compact_positions(playlist_id, db)
     db.commit()
     db.expire_all()
 

@@ -23,6 +23,14 @@ from sqlalchemy.orm import Session
 from app.models.playlist import Playlist, PlaylistSong
 from app.models.song import Song, SongStatus
 
+# import threading
+# import time
+
+# import pytest
+# from sqlalchemy.orm import sessionmaker
+
+# from app.api.playlists import _lock_playlist_songs, _reposition_song
+
 
 def _make_song(
     db_session: Session, youtube_id: str = "dQw4w9WgXcQ", title: str = "Test Song"
@@ -491,6 +499,41 @@ class TestReorderPlaylistSong:
         titles = [s["title"] for s in resp.json()["body"]["songs"]]
         assert titles == ["A", "C", "D", "B"]
 
+    def test_reorder_after_delete_compacts_positions(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """[A, B, C] -> delete B -> move A to index 1 -> [C, A].
+
+        Regression test: deleting a song must compact the remaining
+        positions to stay dense/gap-free, since PATCH treats `position`
+        as a zero-based list index.
+        """
+        playlist = _make_playlist(db_session)
+        s_a = _make_song(db_session, youtube_id="aaaaaaaaaaa", title="A")
+        s_b = _make_song(db_session, youtube_id="bbbbbbbbbbb", title="B")
+        s_c = _make_song(db_session, youtube_id="ccccccccccc", title="C")
+        for s in (s_a, s_b, s_c):
+            client.post(f"/playlists/{playlist.id}/songs/{s.id}")
+
+        del_resp = client.delete(f"/playlists/{playlist.id}/songs/{s_b.id}")
+        assert del_resp.status_code == 204
+
+        entries = (
+            db_session.query(PlaylistSong)
+            .filter(PlaylistSong.playlist_id == playlist.id)
+            .order_by(PlaylistSong.position)
+            .all()
+        )
+        assert [e.position for e in entries] == [0, 1]
+
+        resp = client.patch(
+            f"/playlists/{playlist.id}/songs/{s_a.id}", json={"position": 1}
+        )
+
+        assert resp.status_code == 200
+        titles = [s["title"] for s in resp.json()["body"]["songs"]]
+        assert titles == ["C", "A"]
+
     def test_reorder_reflected_in_subsequent_get(
         self, client: TestClient, db_session: Session
     ) -> None:
@@ -507,3 +550,57 @@ class TestReorderPlaylistSong:
             for s in client.get(f"/playlists/{playlist.id}").json()["body"]["songs"]
         ]
         assert titles == ["B", "A"]
+
+    # def test_concurrent_reorders_serialize_not_interleave(
+    #     self, client: TestClient, db_session: Session
+    # ) -> None:
+    #     """Two threads reorder same playlist concurrently.
+
+    #     Second thread's row-lock query must block until first commits —
+    #     proves FOR UPDATE actually serializes, not just "no test caught it".
+    #     Skipped on SQLite (row locks are no-ops there).
+    #     """
+    #     bind = db_session.get_bind()
+    #     if bind.dialect.name != "postgresql":
+    #         pytest.skip("row locking only meaningful on postgres")
+
+    #     playlist = _make_playlist(db_session)
+    #     s1 = _make_song(db_session, youtube_id="aaaaaaaaaaa", title="A")
+    #     s2 = _make_song(db_session, youtube_id="bbbbbbbbbbb", title="B")
+    #     s3 = _make_song(db_session, youtube_id="ccccccccccc", title="C")
+    #     for s in (s1, s2, s3):
+    #         client.post(f"/playlists/{playlist.id}/songs/{s.id}")
+
+    #     Session = sessionmaker(bind=bind)
+    #     entered_lock = threading.Event()
+    #     release_lock = threading.Event()
+    #     second_started_at = {}
+    #     second_acquired_at = {}
+
+    #     def holder() -> None:
+    #         sess = Session()
+    #         rows = _lock_playlist_songs(playlist.id, sess)
+    #         entered_lock.set()
+    #         release_lock.wait(timeout=5)
+    #         entry = next(r for r in rows if r.song_id == s1.id)
+    #         _reposition_song(playlist.id, entry, 2, sess)
+    #         sess.close()
+
+    #     def waiter() -> None:
+    #         entered_lock.wait(timeout=5)
+    #         sess = Session()
+    #         second_started_at["t"] = time.monotonic()
+    #         _lock_playlist_songs(playlist.id, sess)
+    #         second_acquired_at["t"] = time.monotonic()
+    #         sess.close()
+
+    #     t1 = threading.Thread(target=holder)
+    #     t2 = threading.Thread(target=waiter)
+    #     t1.start()
+    #     t2.start()
+    #     time.sleep(0.2)
+    #     release_lock.set()
+    #     t1.join(timeout=5)
+    #     t2.join(timeout=5)
+
+    #     assert second_acquired_at["t"] - second_started_at["t"] >= 0.15

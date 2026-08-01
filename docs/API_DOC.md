@@ -421,7 +421,7 @@ Upper bound (`< song_count`) checked in the route handler, not the schema — de
 | `404`  | Playlist, song, or membership not found            |
 | `422`  | `position` out of range (`< 0` or `>= song_count`) |
 
-No `409` — reorder uses a sentinel-position swap inside one transaction (no concurrent-write race window), unlike `add_song_to_playlist`'s optimistic-insert retry. See `DECISIONS.md`.
+No `409` — reorder locks all `PlaylistSong` rows for the playlist (`SELECT ... FOR UPDATE`) before reading membership/count, then runs the sentinel-position shift in that same transaction. On Postgres a second concurrent reorder on the same playlist blocks until the first commits (serialized, not racing); SQLite ignores row locks entirely (no concurrent-write test coverage there). Unlike `add_song_to_playlist`'s optimistic-insert retry. See `DECISIONS.md`.
 
 ---
 

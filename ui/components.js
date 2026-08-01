@@ -36,8 +36,6 @@ export function renderSongCard(song, isActive, playlistNames = []) {
   return `
   <div class="song-card${activeClass}"
        data-song-id="${song.id}"
-       aria-haspopup="true"
-       aria-expanded="false"
        data-playable="${isPlayable}"
        role="listitem">
     <img class="song-card__thumb"
@@ -66,6 +64,8 @@ export function renderSongCard(song, isActive, playlistNames = []) {
         <button class="icon-btn"
                 data-action="open-menu"
                 data-song-id="${song.id}"
+                aria-haspopup="true"
+                aria-expanded="false"
                 aria-label="More options">
           ${moreIcon()}
         </button>

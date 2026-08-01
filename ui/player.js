@@ -14,6 +14,8 @@ let isSeeking = false;
 
 /** @type {object[]} ordered list of song objects the player is traversing */
 let queue = [];
+/** Unshuffled order of the current queue — restored when shuffle is toggled off. */
+let originalQueue = [];
 let queueIndex = -1;
 
 let shuffle = false; // session-only, tied to current queue
@@ -139,16 +141,20 @@ function handleEnded() {
         return;
     }
 
-    if (queueIndex < queue.length - 1) {
-        queueIndex += 1;
+    const nextIdx = findNextPlayableIndex(queueIndex + 1, 1);
+    if (nextIdx !== -1) {
+        queueIndex = nextIdx;
         playCurrentQueueEntry();
         return;
     }
 
     if (loopMode === 'all' && queue.length > 0) {
-        queueIndex = 0;
-        playCurrentQueueEntry();
-        return;
+        const firstIdx = findNextPlayableIndex(0, 1);
+        if (firstIdx !== -1) {
+            queueIndex = firstIdx;
+            playCurrentQueueEntry();
+            return;
+        }
     }
 
     updatePlayIcon();
@@ -207,6 +213,7 @@ function playCurrentQueueEntry() {
  */
 export function setQueueAndPlay(songList, songId) {
     queue = songList.slice();
+    originalQueue = songList.slice();
     queueIndex = queue.findIndex(s => s.id === songId);
     if (queueIndex === -1) return;
 
@@ -230,10 +237,22 @@ function shuffleQueueKeepingCurrent() {
 
 export function toggleShuffle() {
     shuffle = !shuffle;
-    if (shuffle && queue.length > 0) shuffleQueueKeepingCurrent();
+    if (shuffle) {
+        if (queue.length > 0) shuffleQueueKeepingCurrent();
+    } else {
+        restoreOriginalOrder();
+    }
     updateShuffleUi();
     return shuffle;
 }
+
+/** Restores queue to original (pre-shuffle) order, keeping the current song in place. */
+function restoreOriginalOrder() {
+    const currentId = queue[queueIndex]?.id;
+    queue = originalQueue.slice();
+    if (currentId) queueIndex = queue.findIndex(s => s.id === currentId);
+}
+
 
 export function isShuffleOn() {
     return shuffle;
@@ -399,17 +418,23 @@ function downsamplePeaks(channelData, buckets) {
  * @param {string} songId
  * @returns {Promise<Float32Array>}
  */
-export async function getPeaks(songId) {
-    if (peaksCache.has(songId)) return peaksCache.get(songId);
+export function getPeaks(songId) {
+    const cached = peaksCache.get(songId);
+    if (cached) return cached;
 
-    const res = await fetch(`/api/songs/${songId}/stream`);
-    if (!res.ok) throw new Error('Failed to fetch audio for waveform');
-    const arrayBuffer = await res.arrayBuffer();
-    const audioBuffer = await getAudioCtx().decodeAudioData(arrayBuffer);
-    const peaks = downsamplePeaks(audioBuffer.getChannelData(0), PEAK_BUCKETS);
+    const pending = (async () => {
+        const res = await fetch(`/api/songs/${songId}/stream`);
+        if (!res.ok) throw new Error('Failed to fetch audio for waveform');
+        const arrayBuffer = await res.arrayBuffer();
+        const audioBuffer = await getAudioCtx().decodeAudioData(arrayBuffer);
+        return downsamplePeaks(audioBuffer.getChannelData(0), PEAK_BUCKETS);
+    })().catch(err => {
+        peaksCache.delete(songId); // allow a later retry
+        throw err;
+    });
 
-    peaksCache.set(songId, peaks);
-    return peaks;
+    peaksCache.set(songId, pending);
+    return pending;
 }
 
 

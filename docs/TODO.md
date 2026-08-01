@@ -101,6 +101,29 @@ Flagged during FE-2 (not bugs, undocumented calls -- confirm or override):
 
 ---
 
+## Post-Sprint 6 — CodeRabbit Review Fixes
+
+Backend + frontend findings from an automated review pass, worked one-by-one against actual code (not assumed from the finding text alone).
+
+- [x] `app/api/playlists.py`: `DELETE .../songs/{song_id}` left `position` gaps after removal — later `PATCH` reorders (which treat `position` as a list index) could land on the wrong song. Added `_compact_positions()`, called after delete/before commit. Regression test: `test_reorder_after_delete_compacts_positions`.
+- [x] `ui/player.js`: `toggleShuffle()` mutated `queue` in place with no stored original order — disabling shuffle left the queue permanently scrambled. Added `originalQueue`, restored on disable (current song kept in place, same pattern as enable).
+- [x] `ui/app.js`: `playSongById()` silently no-op'd if `id` fell out of `state.currentSongList` (race with poll/filter refresh between render and click). Now falls back to `loadSongDirectly()` (fetches + `player.loadSong()`, toast on failure).
+- [x] `ui/app.js`: Now Playing panel's document-level `mouseup`/`touchend` scrubber-commit listeners were never removed on close — accumulated on every reopen. Tracked via `state.npCommitSeekHandler`, removed in `closeNowPlayingPanel()`.
+- [x] `ui/app.js`: Reopening the Now Playing panel could flash the *previous* song's waveform for one frame — `player.subscribe()`'s synchronous initial callback ran before `loadAndDrawWaveform()` cleared `state.npPeaks`. Now cleared in `closeNowPlayingPanel()` too, so the next open starts from `null`.
+- [x] `ui/style.css`: dead `.sidebar__logo-icon` rule (class doesn't exist in `index.html`) removed — was accidentally suppressing nothing, but flagged as hiding the logo mark at desktop, which would have contradicted `DESIGN.md`'s "shown at all sidebar-visible breakpoints" spec had it matched anything.
++- [x] `tests/smoke_ui.sh` FE-2 section (~line 165): comment was ambiguous about which case (unknown-membership 404 vs out-of-range 422) is under test. Fixed — split into two comments, each scoped to its own check.
++- [x] `app/api/playlists.py` reorder endpoint: `API_DOC.md`'s "no concurrent-write race window" claim was false — no row lock was taken before reading membership/count. Added `_lock_playlist_songs()` (`SELECT ... FOR UPDATE`) ahead of the membership/count read, same transaction as the shift. `API_DOC.md` updated to describe actual locking/contention behavior instead of claiming no race window.
+- Concurrency integration test attempted, then removed: the `db_session` fixture's savepoint-rollback pattern means separate connections can't see each other's uncommitted rows, so a real cross-connection lock-contention test isn't constructible against it. Flagged as backlog if real coverage is wanted later (needs a commit-visible fixture, e.g. the `_truncate_all()` pattern).
+- [x] `tests/smoke_test.sh` S8: 502 handling now checks whether the song hit the dedup path (`DEDUP_HIT`, from S7's `ELAPSED <= 5` signal) before attributing the failure to DB/MinIO volume drift. Non-dedup 502s now point at presigning/streaming/FFmpeg instead. Destructive `make down-v` recovery step now explicitly warns it wipes data and suggests `make backup` first.
+- [x] `tests/smoke_test.sh` S17: "unknown membership" reorder check was actually testing an unknown *song* (`00000000-...` doesn't exist, hits `_get_song_or_404`, not the membership check). Added a real song (song D) that exists but isn't a playlist member, to actually exercise `_get_membership_or_404`; deleted immediately after.
+- [x] `ui/components.js`: `aria-haspopup`/`aria-expanded` were on the `.song-card` (`role="listitem"`) wrapper instead of the `[data-action="open-menu"]` trigger button. Moved to the button. Verified `app.js`'s three `aria-expanded` sync sites (toggle click, outside-click, `closeOpenDropdown()`) already targeted the button correctly — no knock-on fix needed there.
+- [x] `CHANGELOG.md` 0.6.0: "sentinel-position swap" → "sentinel-position shift" (mechanism is a shift of intermediate rows, not a two-item swap — matches the "shift-not-swap" test already in the suite).
+- [x] `docs/PRD.md`: FE-2 reorder behavior/status table updated to describe the sentinel-based shift (both directions) and drop the stale `IntegrityError`-retry/`409` language; FE-5's `TODO.md`-empty claim changed to past tense; `smoke-ui.sh` → `tests/smoke_ui.sh`; FE-3 dependency table corrected from "player bar" to "Now Playing panel".
+- [x] `docs/DECISIONS.md`: fixed a self-contradiction — the playlist-keyboard-reorder row said "logged, not fixed this ticket" while the adjacent row and actual code (`handlePlaylistRowKeydown`/`reorderPlaylistSongOptimistic` in `app.js`) show it was fixed same-sprint. Corrected to match.
+- Reviewed, already correct, no change needed: playlist-row aria-label total (already threaded through `songs.length`, not `state.currentSongList.length`), `.sr-only` (`clip-path` not deprecated `clip`), `#player-info-trigger` keydown (`stopPropagation` present), `.player-bar--empty` (already hides shuffle/loop/volume), `handleEnded` (already skips non-`done` queue entries via `findNextPlayableIndex`), `getPeaks` (already caches the in-flight promise, not just the resolved value), `.player-volume` (`display: flex` already scoped to `min-width: 768px`).
+
+---
+
 ## Sprint 7+
 
 Not scoped yet. Candidates already known but deferred:

@@ -230,7 +230,9 @@ done
 [[ "$STATUS" == "done" ]] || fail "Song not done after ${TIMEOUT}s (status=$STATUS)"
 pass "Song done in ${ELAPSED}s"
 
+DEDUP_HIT=false
 if [[ "$ELAPSED" -le 5 ]]; then
+    DEDUP_HIT=true
     warn "Done in ${ELAPSED}s — this likely hit the dedup path (PIPELINE.md), not a fresh download"
 fi
 
@@ -248,10 +250,21 @@ BYTES="${REST##*|||}"
 
 if [[ "$STREAM_HTTP" == "502" ]]; then
     FILE_URL=$(api_get "/songs/$SONG_ID" | jq -r '.body.file_url // "null"')
-    fail "Stream 502 — likely a dangling file_url ($FILE_URL) from a deduped \
-song whose MinIO object no longer exists (DB/MinIO volume drift). \
-Run: make down-v && make up (wipes both volumes together), then re-run this script. \
-This is stale environment state, not an app regression — see file header note."
+    if [[ "$DEDUP_HIT" == "true" ]]; then
+        fail "Stream 502 — this song hit the dedup path (done in ${ELAPSED}s), so a \
+dangling file_url ($FILE_URL) from DB/MinIO volume drift is the likely cause \
+(dedup reuses an existing object; a fresh download can't trigger this). \
+SUGGESTED RECOVERY (DESTRUCTIVE — wipes all local data): \
+confirm you have no unbacked-up songs/playlists you need, then run \
+'make down-v && make up' (wipes both volumes together) and re-run this script. \
+Back up first with 'make backup' if unsure. See file header note."
+    else
+        fail "Stream 502 — song was NOT a dedup hit (done in ${ELAPSED}s, fresh \
+download), so this is not the volume-drift scenario. Likely a presigned-URL, \
+MinIO fetch, or trim/speed FFmpeg failure on file_url=$FILE_URL. Check API logs \
+(make logs-api) and worker logs (make logs-worker) for the actual error before \
+touching any volumes."
+    fi
 fi
 
 [[ "$STREAM_HTTP" == "200" ]] || fail "Stream: expected 200, got $STREAM_HTTP"
@@ -515,8 +528,27 @@ pass "PATCH reorder negative position → 422"
 
 RAW=$(api_patch_raw "/playlists/00000000-0000-0000-0000-000000000000/songs/$SONG_C_ID" '{"position": 0}')
 HTTP="${RAW##*|||}"
-[[ "$HTTP" == "404" ]] || fail "Reorder unknown playlist: expected 404, got $HTTP"
-pass "PATCH reorder unknown playlist → 404"
+[[ "$HTTP" == "404" ]] || fail "Reorder unknown song: expected 404, got $HTTP"
+pass "PATCH reorder unknown song → 404"
+
+# Real song, exists, but not a member of this playlist — exercises
+# _get_membership_or_404, distinct from the unknown-song-id case above.
+SONG_D_RESP=$(api_post "/songs" "{\"url\": \"$YT_URL\", \"start\": 15, \"end\": 45}") \
+    || fail "POST /songs (song D, for membership-404 test) failed"
+SONG_D_ID=$(echo "$SONG_D_RESP" | jq -r '.body.id')
+T=0; ST="pending"
+while [[ "$ST" != "done" && $T -lt 30 ]]; do
+    sleep 2; T=$((T + 2))
+    ST=$(api_get "/songs/$SONG_D_ID" | jq -r '.body.status')
+done
+[[ "$ST" == "done" ]] || fail "Song D not done after 30s (status=$ST)"
+
+RAW=$(api_patch_raw "/playlists/$PLAYLIST_ID/songs/$SONG_D_ID" '{"position": 0}')
+HTTP="${RAW##*|||}"
+[[ "$HTTP" == "404" ]] || fail "Reorder real song not in playlist: expected 404, got $HTTP"
+pass "PATCH reorder real song, not a member → 404 (membership check)"
+
+api_delete_raw "/songs/$SONG_D_ID" > /dev/null
 
 RAW=$(api_patch_raw "/playlists/$PLAYLIST_ID/songs/00000000-0000-0000-0000-000000000000" '{"position": 0}')
 HTTP="${RAW##*|||}"

@@ -90,14 +90,13 @@ queue      ordered list of song ids the player is currently traversing + current
 { "position": 2 }
 ```
 
-**Behavior:** moves the song to the given 0-indexed position within that playlist; every other song's `position` shifts accordingly (shift-down between old and new position). Reuses the existing retry-on-`IntegrityError` pattern from `add_song_to_playlist` against `uq_playlist_position`.
+**Behavior:** moves the song to the given 0-indexed position within that playlist. Implemented via a temp sentinel position (`-1`) inside one transaction: the target row is parked at the sentinel, the songs strictly between its old and new position shift by one (down if moving earlier, up if moving later), then the row is placed at the new position. No `IntegrityError` retry loop — the shift has no concurrent-write race window within the transaction (see `DECISIONS.md`).
 
 | Status | Meaning                                            |
 | ------ | -------------------------------------------------- |
 | `200`  | Reordered — returns updated playlist detail        |
 | `404`  | Playlist, song, or membership not found            |
 | `422`  | `position` out of range (`< 0` or `>= song_count`) |
-| `409`  | Position conflict after retries                    |
 
 No model changes — reuses `PlaylistSong.position`.
 
@@ -138,7 +137,7 @@ Existing principles (`DESIGN.md`: focus-visible rings, aria-label on icon button
 
 ## FE-5 — UX Bug Fixes
 
-Audit-driven. No fixed list at sprint start — bugs found during FE-0…FE-4 work (or reported separately) get logged in `TODO.md` under a Sprint 6 section as found, then fixed in this ticket. `TODO.md` currently empty; this sprint is what fills it.
+Audit-driven. No fixed list at sprint start — bugs found during FE-0…FE-4 work (or reported separately) get logged in `TODO.md` under a Sprint 6 section as found, then fixed in this ticket. `TODO.md` was empty at sprint start; this sprint is what fills it.
 
 ---
 
@@ -153,7 +152,7 @@ Audit-driven. No fixed list at sprint start — bugs found during FE-0…FE-4 wo
 | Reorder returns `404` for missing playlist/song/membership           | Integration |
 | Full reorder → `GET /playlists/{id}` reflects new order              | Integration |
 
-Frontend (player queue/shuffle/loop, waveform peaks, drag-drop, responsive breakpoints, focus trap): **manual smoke only** — Sprint 4's "no frontend tests, no framework = no component test surface" decision still holds. `smoke-ui.sh` gets new manual-check entries, not automated assertions.
+Frontend (player queue/shuffle/loop, waveform peaks, drag-drop, responsive breakpoints, focus trap): **manual smoke only** — Sprint 4's "no frontend tests, no framework = no component test surface" decision still holds. `tests/smoke_ui.sh` gets new manual-check entries, not automated assertions.
 
 Coverage target: maintain ≥ 80% on backend (currently 91%) — FE-2's new endpoint is the only backend surface this sprint touches.
 
@@ -161,15 +160,14 @@ Coverage target: maintain ≥ 80% on backend (currently 91%) — FE-2's new endp
 
 ## Ticket Breakdown & Order
 
-| Ticket | Depends on | Notes                                                           |
-| ------ | ---------- | --------------------------------------------------------------- |
-| FE-0   | —          | Foundation — do first, everything else builds on the new layout |
-| FE-1   | FE-0       | Player bar changes assume responsive shell exists               |
-| FE-2   | FE-0       | Playlist Detail page changes assume responsive shell            |
-| FE-3   | FE-0, FE-1 | Waveform lives in the player bar FE-1 builds out                |
-| FE-4   | FE-0–FE-3  | Audits the new markup, not just the old                         |
-| FE-5   | ongoing    | Runs alongside FE-0–FE-4, not a discrete phase                  |
-| FE-6   | FE-2       | Backend tests as soon as FE-2's endpoint exists                 |
+| Ticket | Depends on | Notes                                                                                                                              |
+| ------ | ---------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| FE-0   | —          | Foundation — do first, everything else builds on the new layout                                                                    |
+| FE-1   | FE-0       | Player bar changes assume responsive shell exists                                                                                  |
+| FE-2   | FE-0       | Playlist Detail page changes assume responsive shell                                                                               |
+| FE-3   | FE-0, FE-1 | Waveform lives in the Now Playing panel, depends on the player state (play/pause, scrubber, volume, shuffle, loop) FE-1 builds out |  | FE-4 | FE-0–FE-3 | Audits the new markup, not just the old |
+| FE-5   | ongoing    | Runs alongside FE-0–FE-4, not a discrete phase                                                                                     |
+| FE-6   | FE-2       | Backend tests as soon as FE-2's endpoint exists                                                                                    |
 
 ---
 

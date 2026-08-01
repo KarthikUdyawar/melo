@@ -166,10 +166,6 @@ select {
     .sidebar__logo-full {
         display: inline;
     }
-
-    .sidebar__logo-icon {
-        display: none;
-    }
 }
 
 .sidebar__nav {
@@ -352,7 +348,10 @@ select {
 }
 
 .player-bar--empty .player-bar__info,
-.player-bar--empty .player-bar__controls {
+.player-bar--empty .player-bar__controls,
+.player-bar--empty #btn-shuffle,
+.player-bar--empty #btn-loop,
+.player-bar--empty .player-volume {
     visibility: hidden;
 }
 
@@ -529,10 +528,15 @@ select {
 }
 
 .player-volume {
-    display: flex;
     flex-direction: column;
     align-items: center;
     gap: var(--space-2);
+}
+
+@media (min-width: 768px) {
+    .player-volume {
+        display: flex;
+    }
 }
 
 .volume-slider {
@@ -1347,6 +1351,6 @@ select {
     width: 1px;
     height: 1px;
     overflow: hidden;
-    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
     white-space: nowrap;
 }

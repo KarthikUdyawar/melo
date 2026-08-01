@@ -162,9 +162,17 @@ if has_jq; then
     check_status "Remove unknown song from playlist → 404" \
       "$UI_BASE/api/playlists/$playlist_id/songs/$NIL_UUID" "404" "DELETE"
 
-    # FE-2 reorder — 422 out-of-range on an empty playlist (song_count=0, any position invalid)
+    # FE-2 reorder: unknown song → 404 (membership check runs before the
+    # song_count/position bound check, so an unknown song never reaches
+    # the 422 branch even if position were also out of range)
     check_status "Reorder on unknown membership → 404" \
       "$UI_BASE/api/playlists/$playlist_id/songs/$NIL_UUID" "404" "PATCH" '{"position":0}'
+
+    # FE-2 reorder: negative position → 422 via Pydantic Field(ge=0) schema
+    # validation — fires before any DB/membership lookup, independent of
+    # the membership-vs-bound ordering the check above tests
+    check_status "Reorder with negative position → 422" \
+      "$UI_BASE/api/playlists/$playlist_id/songs/$NIL_UUID" "422" "PATCH" '{"position":-1}'
 
     check_status "Cleanup: delete smoke test playlist → 204" \
       "$UI_BASE/api/playlists/$playlist_id" "204" "DELETE"
