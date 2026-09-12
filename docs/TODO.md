@@ -4,6 +4,21 @@
 
 ---
 
+## Hotfix — yt-dlp 403 (in progress)
+
+- [ ] Confirm bumped yt-dlp (2026.8.19) actually fixes YouTube 403 — rebuild containers, resubmit real URL, check worker log for "No supported JavaScript runtime" warning
+- [ ] If still 403: add `deno` JS runtime to worker Dockerfile (reverses Sprint 3's Node removal) — see `DECISIONS.md`
+
+---
+
+## Done
+- [x] `.env.test` recreated (was missing — caused SQLite/Postgres leak across combined `make test` runs)
+- [x] yt-dlp bumped `>=2026.03.17` → `==2026.8.19`
+- [x] `pyproject.toml` deps switched to exact pins (`==`) repo-wide (side effect of `uv lock` re-resolution; kept deliberately)
+
+
+---
+
 ## Sprint 6 — Frontend Polish
 
 ### Blocking — resolved
