@@ -68,7 +68,7 @@
 │   ├── MODELS.md
 │   ├── PIPELINE.md
 │   ├── PRD.md
-│   ├── PRROJECT.tree
+│   ├── PROJECT.tree
 │   ├── ROADMAP.md
 │   ├── SERVICES.md
 │   ├── STORAGE.md
@@ -156,4 +156,4 @@
 │   └── style.css
 └── uv.lock
 
-26 directories, 130 files
+27 directories, 130 files

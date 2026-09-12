@@ -1,85 +1,42 @@
-# Handoff — Melo: Post-Sprint 6 CodeRabbit review pass closed out
+# Handoff — yt-dlp 403 / test-env / MinIO hotfix session
 
 ## Context
 
-Continuation of `docs/handoff.md` (sessions 2–3 — row-lock fix, smoke_test.sh
-S8/S17 fixes, smoke_ui.sh comment split, components.js aria-expanded fix, doc
-corrections, then: playlists.py commit-boundary/dead-helper/reorder-metrics
-fixes, player.js volume-debounce + getPeaks abort wiring, components.js stray
-role="menuitem" cleanup, PRROJECT.tree→PROJECT.tree rename, DESIGN.md/TODO.md/
-CHANGELOG.md dropdown-role doc alignment, ROADMAP.md header sprint-count fix,
-index.html sidebar aria-label fix). This session: Karthik applied the
-remaining CodeRabbit findings himself; work here was documentation-only —
-`docs/TODO.md` and `docs/DECISIONS.md` updated to record what he fixed.
-Standing conventions: `/caveman ultra`, `/ponytail`, `/clean-code`, `/tdd`.
+Repo: `KarthikUdyawar/melo`. Branch: `hotfix/yt-dlp-403-js-runtime`. Solo project. Sprint 6 (Frontend Polish) is done and closed out (see `ROADMAP.md`/`DECISIONS.md`); this was an unsprinted hotfix session triggered by a live production failure.
 
-## What changed this session (Karthik-applied, doc-recorded here)
+Conventions in effect: **caveman ultra**, **clean-code**, **tdd**, **ponytail**. Terse responses, minimal diffs, git-diff format on request. Full decision log for this session already lives in `docs/DECISIONS.md`'s "Hotfix — yt-dlp 403 / Test Env" section — not duplicated here, only referenced.
 
-Diffs shown in-conversation; apply against real repo — Claude has no direct
-repo access, works from pasted file contents only.
+## What happened, in order
 
-1. `ui/app.js` — `reorderPlaylistSongOptimistic()` comment clarified
-   (move-to-final-index semantics: after target moving down, before target
-   moving up). No logic change.
-2. `ui/player.js` / `ui/app.js` — `getPeaks(songId, signal)` takes an
-   `AbortSignal`; Now Playing panel owns an `AbortController` per open/song
-   switch, aborts on close or song change. (Confirmed already wired in a
-   prior session's diff too — no further action needed, just noting it's
-   done.)
-3. `.coderabbit.yaml` — empty `code_generation: {}` mapping removed, defaults
-   apply. (Also already applied in a prior session — no further action.)
-4. `README.md` — `waveforms` dropped from the "Out of Scope (v1) — never"
-   list (stale since Sprint 6 shipped waveform display; click-to-seek stays
-   a tracked Sprint 7+ candidate).
-5. `tests/smoke_test.sh` — add-to-playlist `api_post` calls now check status
-   + call the fail handler (matches song-creation checks); nil-UUID PATCH
-   labels fixed from "unknown song" to "unknown playlist" (404 behavior
-   unchanged, wording only).
-6. `tests/smoke_ui.sh` (L183) — jq-missing skip message now enumerates every
-   skipped check (create/get/cleanup/add-unknown-song/remove-unknown-song/
-   both FE-2 reorder checks).
-7. `ui/app.js` — Now Playing panel: `role="dialog"`/`aria-modal="true"` on
-   the overlay, reopen-guard in `openNowPlayingPanel()`, focus moves to the
-   panel's first focusable element on open, returns to
-   `#player-info-trigger` on close.
-8. `ui/app.js` — `drawWaveform()` clamps `barWidth` to avoid going negative
-   when `peaks.length` exceeds canvas width (gap derived responsively);
-   fixes narrow-canvas (phone) waveform rendering.
-9. `ui/style.css` — `.player-volume` base rule now sets
-   `display:flex; flex-direction:row` directly; redundant
-   `@media (min-width:768px)` display override removed.
-   `.player-ctrl-wide`'s phone-hide behavior untouched.
+1. **Original symptom**: worker log showed `[youtube] No supported JavaScript runtime could be found...` followed by `HTTP Error 403: Forbidden` on download. YouTube now routes more clients through JS-signature solving (confirmed via search — yt-dlp changelog, Feb 2026). Melo's pinned-format-no-JS-runtime workaround (Sprint 1/3) is fragile against this.
+2. **yt-dlp bumped** `>=2026.03.17` → `==2026.8.19` in `pyproject.toml`; `uv lock` re-resolved the whole dependency graph (not just yt-dlp), rewriting every pin to exact (`==`). Karthik chose to **keep** the exact pins rather than revert.
+3. **Test suite broke as a side effect of timing, not the bump**: `make test` → 49 failed, 120 errors, all SQLite-vs-Postgres confusion (`no such table`, `detached connection fairy`). Root-caused to `.env.test` being **missing from the repo entirely** — `dotenv_values()` silently returns `{}` on a missing file, so `app/core/config.py`'s `force_env_file_priority` validator did nothing, and `tests/unit/conftest.py`'s SQLite env leaked into integration tests run in the same `pytest` process.
+4. **`.env.test` recreated** matching `tests/docker-compose.test.yml`'s fixed ports (Postgres 15432, Redis 16379, MinIO 19000/19001). `make test` → **434 passed**, confirmed.
+5. **New failure surfaced in GitHub Actions CI**: `pull access denied for minio/minio, repository does not exist`. Root-caused via web search: MinIO pulled all images from Docker Hub/Quay in Oct 2025 (security-CVE dispute) and fully archived the community repo as unmaintained in Feb 2026 — even previously-working pinned tags now 404 on fresh pulls.
+6. **Migrated both compose files** (`docker-compose.yml` + `tests/docker-compose.test.yml`) from `minio/minio:RELEASE.2024-05-01T01-11-10Z` to `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772` (Karthik found/confirmed this exact tag pulls; the 2024 tag isn't mirrored on quay). Verified via `make test-integration` — **193/193 passed**.
+7. **`docs/TODO.md` and `docs/DECISIONS.md` updated** with all of the above (already applied by Karthik — confirmed matching in this session, no further diff needed).
 
-`docs/TODO.md` and `docs/DECISIONS.md` updated in this session to reflect all
-of the above under the existing "Post-Sprint 6 — CodeRabbit Review Fixes"
-section.
+## Still open — next session should start here
 
-## Still open (unchanged from prior handoffs)
+- **The original yt-dlp 403 fix is still unconfirmed.** Everything since step 2 was fixing things the bump *exposed or was blocked by* (test env, MinIO registry) — nobody has yet rebuilt the containers and resubmitted a real failing YouTube URL to see if `yt-dlp==2026.8.19` alone resolves the 403.
+  - Next step: `make rebuild` → `make up` → resubmit a real URL → `docker compose logs -f worker`, watch for the "No supported JavaScript runtime" warning and whether 403 still fires.
+  - Per the original diagnosis, the JS-runtime warning is a YouTube-side requirement, not a stale-version bug — **expect the bump alone to not be sufficient**. If so, next step is adding a `deno` runtime to the worker Dockerfile, which reverses Sprint 3's "Node.js removed from Dockerfile" decision (needs its own `DECISIONS.md` entry once confirmed working).
+- **GitHub Actions CI not yet re-run** against the quay.io MinIO fix — local `make test-integration` passed, but the actual CI runner (the one that produced the original `pull access denied` error) hasn't been confirmed green yet. Push the branch and check the Action.
 
-From `docs/TODO.md` / `docs/ROADMAP.md`:
+## Files touched this session
 
-- Manual tab-order pass across all pages/breakpoints — needs an actual
-  browser.
-- Manual frontend smoke checklist (responsive, player controls, drag-drop,
-  waveform, focus trap) — same, browser-only.
-- Two confirm/override flags still open for Karthik:
-  - `prev()` >3s-restart convention — confirm keep or remove.
-  - Phone song-card stacking layout — not yet visually confirmed on device.
-- Drag-preview shows only thumbnail, not full row (cosmetic, deferred to
-  Sprint 7).
-- Concurrency test for the playlist reorder row-lock — needs a
-  commit-visible test fixture; current savepoint-rollback integration
-  fixture can't observe cross-connection locking.
-- `docs/ROADMAP.md` header note says "Sprint-1.md … Sprint-6.md" now
-  (fixed this batch) but it's unconfirmed whether `docs/sprints/Sprint-6.md`
-  actually exists on disk — Claude never saw that file's contents, only
-  summaries in ROADMAP/PRD/DECISIONS. Worth a quick check next session.
+- `pyproject.toml` — yt-dlp bump + full exact-pin rewrite
+- `uv.lock` — regenerated (~1800 line diff)
+- `.env.test` — created (was missing)
+- `docker-compose.yml` — MinIO image → quay.io mirror
+- `tests/docker-compose.test.yml` — MinIO image → quay.io mirror
+- `docs/TODO.md` — hotfix section added, already applied
+- `docs/DECISIONS.md` — new "Hotfix — yt-dlp 403 / Test Env" section added, already applied
 
-## Suggested skills for next session
+## For the next session
 
-- `/clean-code`, `/tdd` if picking up the concurrency-test backlog item.
-- `handoff` again at the end of whatever's next.
-
-No CodeRabbit findings outstanding as of this session — Post-Sprint 6 review
-batch is fully closed. Remaining backlog is Karthik's manual/product
-decisions, not code issues.
+- First priority: real-URL retest against rebuilt containers (see "Still open" above) — this determines whether the deno Dockerfile change is needed.
+- Second priority: confirm GitHub Actions CI is green on this branch.
+- If deno work is needed, read `/mnt/skills/user/ponytail/SKILL.md` first — keep the Dockerfile change minimal (single static binary, no full Node reinstatement).
+- Recommended skills for continuation: `caveman` (ultra), `clean-code`, `tdd`, `ponytail` — all standing preferences already in memory.
+- Cosmetic, not urgent: local `make test` still spams harmless `Failed to export traces to tempo:4317` DNS-refused noise after test teardown (OTLP exporter threads still trying to flush as pytest exits). Tests pass regardless; add `OTLP_ENDPOINT=` blank to `.env.test` if it bothers Karthik.

@@ -112,7 +112,7 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:RELEASE.2024-05-01T01-11-10Z
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
     env_file: .env.staging
     command: server /data --console-address ":9001"
     ports:
