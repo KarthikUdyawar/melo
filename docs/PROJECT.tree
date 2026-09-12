@@ -63,6 +63,7 @@
 │   ├── ARCHITECTURE.md
 │   ├── DECISIONS.md
 │   ├── DESIGN.md
+│   ├── FRONTEND_SETUP.md
 │   ├── handoff.md
 │   ├── INFRA.md
 │   ├── MODELS.md
@@ -151,9 +152,59 @@
 │   ├── components.js
 │   ├── Dockerfile
 │   ├── index.html
+│   ├── jest.config.ts
+│   ├── jest.setup.ts
+│   ├── next.config.mjs
 │   ├── nginx.conf
+│   ├── package.json
 │   ├── player.js
-│   └── style.css
+│   ├── pnpm-lock.yaml
+│   ├── postcss.config.cjs
+│   ├── src
+│   │   ├── app
+│   │   │   ├── favorites
+│   │   │   │   └── page.tsx
+│   │   │   ├── globals.css
+│   │   │   ├── layout.tsx
+│   │   │   ├── page.tsx
+│   │   │   └── playlists
+│   │   │       ├── [id]
+│   │   │       │   └── page.tsx
+│   │   │       └── page.tsx
+│   │   ├── components
+│   │   │   ├── ConfirmDialog.test.tsx
+│   │   │   ├── ConfirmDialog.tsx
+│   │   │   ├── Modal.test.tsx
+│   │   │   ├── Modal.tsx
+│   │   │   ├── Nav.tsx
+│   │   │   ├── PlaylistCard.test.tsx
+│   │   │   ├── PlaylistCard.tsx
+│   │   │   ├── SongCardMenu.tsx
+│   │   │   ├── SongCard.test.tsx
+│   │   │   ├── SongCard.tsx
+│   │   │   ├── StatusPill.test.tsx
+│   │   │   ├── StatusPill.tsx
+│   │   │   ├── Toast.test.tsx
+│   │   │   └── Toast.tsx
+│   │   ├── lib
+│   │   │   ├── api.test.ts
+│   │   │   ├── api.ts
+│   │   │   ├── focus-trap.test.ts
+│   │   │   ├── focus-trap.ts
+│   │   │   ├── format.test.ts
+│   │   │   ├── format.ts
+│   │   │   ├── pagination.test.ts
+│   │   │   ├── pagination.ts
+│   │   │   ├── playlist-path.test.ts
+│   │   │   ├── playlist-path.ts
+│   │   │   └── types.ts
+│   │   └── test
+│   │       ├── handlers.ts
+│   │       ├── msw-polyfills.ts
+│   │       └── server.ts
+│   ├── style.css
+│   ├── tailwind.config.ts
+│   └── tsconfig.json
 └── uv.lock
 
-27 directories, 130 files
+35 directories, 173 files

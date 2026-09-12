@@ -56,14 +56,30 @@ Plus Sprint 6 loose ends (see `TODO.md` FE-4/FE-5/FE-6):
 
 ---
 
-## Next — Sprint 7 (scope not yet defined)
+## Now — Sprint 7: Frontend Rewrite (Next.js/TS/Tailwind), scoped
 
-No backlog committed yet. Candidates already known but deferred from Sprint 6:
+- FE7-0 Scaffold (Next 14 App Router, TS, pnpm, ESLint, Tailwind, Jest/RTL/msw)
+- FE7-1 Design tokens → Tailwind theme + minimal `globals.css`
+- FE7-2 Port all components 1:1
+- FE7-3 Typed API client
+- FE7-4 `PlayerProvider` — queue/shuffle/loop/volume/waveform parity
+- FE7-5 Real routes, client-resolved `/playlists/[id]`
+- FE7-6 Player Bar + Now Playing panel
+- FE7-7 Drag-reorder + keyboard alt
+- FE7-8 Add Song modal
+- FE7-9 Jest/RTL/msw tests, ≥80% coverage (new FE test surface)
+- FE7-10 HTTPS — self-signed cert baked into nginx image
+- FE7-11 Docker multi-stage build (pnpm build → static export → nginx)
 
-- Waveform click-to-seek (display-only shipped in Sprint 6)
-- Bulk/multi-select playlist reorder (Sprint 6 shipped single-song reorder only)
-- Fix drag-preview showing only thumbnail, not full row (cosmetic, `draggable="false"` on `.song-card__thumb`)
+## Next — Sprint 8+ (scope not yet defined)
+
+Candidates deferred from Sprint 6, still pending:
+
+- Waveform click-to-seek
+- Bulk/multi-select playlist reorder
+- Fix drag-preview showing only thumbnail
 - Alertmanager → Telegram going live (real creds, no longer a stub)
+- Revisit static-export dynamic-route workaround vs. `next start` (see `DECISIONS.md` Sprint 7, "Still open")
 
 ---
 

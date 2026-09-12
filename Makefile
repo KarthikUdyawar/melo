@@ -65,7 +65,7 @@ up: ## Build + start all services detached
 
 	echo ""
 	echo -e "$(GREEN)✅ Melo stack is up$(NC)"
-	echo "   UI:           http://localhost:3000"
+	echo "   UI:           https://localhost:4443"
 	echo "   API:          http://localhost:8000"
 	echo "   API docs:     http://localhost:8000/docs"
 	echo "   MinIO:        http://localhost:9001"

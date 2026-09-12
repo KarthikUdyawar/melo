@@ -4,6 +4,87 @@
 
 ---
 
+## Sprint 7 — Frontend Rewrite (Next.js/TS/Tailwind)
+
+- [x] Brainstorm/decisions locked: real routes, msw, self-signed HTTPS
+- [ ] FE7-0 Scaffold
+- [ ] FE7-1 Tailwind tokens
+- [x] FE7-2 Port components — StatusPill, SongCard, SongCardMenu, PlaylistCard,
+      ToastProvider/useToast, generic Modal shell, ConfirmDialog (moved here from
+      its original FE7-2 PRD row — AddSongModal stays FE7-8's scope). Helpers:
+      formatDuration, trapFocus (both TDD'd). 43/43 tests passing.
+- [x] FE7-3 `lib/api.ts` + msw test setup — `types.ts` (Song/Playlist/Envelope/ApiError), `api.ts` (all endpoint wrappers, envelope unwrap ported from `apiFetch()`), `test/server.ts` + `test/handlers.ts` + `test/msw-polyfills.ts`, full test suite green
+- [ ] FE7-4 `PlayerProvider`
+- [ ] FE7-5 Real routes + `/playlists/[id]` client-resolved shell + nginx rewrite —
+      **in progress, currently broken.** Library/Favorites/Playlists/PlaylistDetail
+      pages + Nav (sidebar/tab-bar) written, wired to lib/api.ts and FE7-2 components.
+      `pnpm build` fails: `/playlists/[id]/page.tsx` combines `"use client"` with
+      `generateStaticParams()` — Next disallows this combination. Not yet fixed.
+      Player-bar wiring in `layout.tsx` is a static empty-state placeholder only
+      (real hookup is FE7-4/FE7-6). Add Song buttons in Nav are stubs (FE7-8).
+      No page-level tests yet — flagged for FE7-9.
+- [ ] FE7-6 Player Bar + Now Playing panel
+- [ ] FE7-7 Drag-reorder + keyboard alt
+- [ ] FE7-8 Add Song modal
+- [ ] FE7-9 Coverage ≥80%
+- [ ] FE7-10 Self-signed cert + nginx 80→443 redirect
+- [ ] FE7-11 Multi-stage Dockerfile
+
+### FE7-0/FE7-3 — real `pnpm install`/`pnpm test`/`pnpm build`/Docker build run, all fixed ✅
+
+- [x] `pnpm build` ESLint failure — `.eslintrc.json` referenced `@typescript-eslint/no-unused-vars` with no matching plugin installed. Dropped the rule; `next/core-web-vitals` covers unused-vars already.
+- [x] `pnpm build` TS failure — `jest.config.ts` had a typo'd `setupFilesAfterEach: []` key not in Jest's type. Removed (dead line, `setupFilesAfterEnv` already correct).
+- [x] `pnpm build` failure — `postcss.config.js` used CommonJS `module.exports` but `package.json` has `"type": "module"`, so Node parsed it as ESM and crashed. Renamed `postcss.config.js` → `postcss.config.cjs`, no content change.
+- [x] Static export produced no `/` page (`out/` had no `index.html`) — expected, FE7-2/FE7-5 haven't run yet, no `src/app/page.tsx` existed. Added a placeholder `src/app/page.tsx` to unblock verifying the Docker/nginx pipeline end-to-end; **real page still pending FE7-2/FE7-5**.
+- [x] `docker-compose.yml`'s `ui` port mapping updated `3000:80` → `4000:80`/`4443:443` (Karthik's call — many other local Docker apps already on 80/443/3000). `nginx.conf`'s HTTP→HTTPS redirect updated to target `:4443` explicitly (`return 301 https://$host:4443$request_uri`), since the container-internal 80→443 redirect doesn't know about the host's remapped port.
+- [x] `pnpm test` chain, six sequential fixes to get `src/lib/api.test.ts` green (msw@2 + Jest + pnpm's nested store layout — none obvious from a diff alone, each only surfaced by actually running the suite):
+  1. `ts-node` missing — `jest.config.ts` needs it to parse a TS config file. Added as devDep.
+  2. `msw/node` unresolvable — Jest's default jsdom test environment doesn't pick the right package.json `exports` condition for msw@2's conditional exports. Added `testEnvironmentOptions: { customExportConditions: [""] }`.
+  3. `Request`/`fetch`/`Headers`/`Response`/`ReadableStream`/`TransformStream`/`WritableStream` all undefined in jsdom — `msw-polyfills.ts`'s comment claimed undici polyfills were wired in but the import/assign was never actually done. Added real `require()`-based polyfilling (not `import`, since ES imports hoist above other statements and undici reads `TextEncoder`/`ReadableStream` off `global` at its own module-init time — order matters here, caught by two rounds of "X is not defined" after the naive `import` version).
+  4. `rettime`/`until-async`/other msw transitive deps ship pure ESM (`.mjs`/bare `export`), and Jest's default `transformIgnorePatterns` skips all of `node_modules`. `next/jest`'s wrapper also **prepends its own blanket `/node_modules/` ignore pattern and merges via OR-match**, silently defeating any custom exception passed alongside `config` — worked around by overriding `transformIgnorePatterns` on the *post-merge* result instead (`export default async () => { ...; finalConfig.transformIgnorePatterns = [...]; return finalConfig; }`), not on the pre-merge input.
+  5. `BroadcastChannel` undefined in jsdom (needed by msw's WebSocket support, unused in our tests but still imported internally) — polyfilled via Node's `worker_threads`.
+  - All fixes live in `ui/jest.config.ts` and `ui/src/test/msw-polyfills.ts`. `docs/FRONTEND_SETUP.md`'s "Common Gotchas" table should get an entry for #2–#5 next time it's touched — not done this session, flagged here.
+
+### FE7-2 — component port, this session ✅
+
+- [x] `pnpm test` 34/34 → 43/43 as FE7-5 page tests... — actually no page-level
+      tests added, count grew from ConfirmDialog + playlist-path + pagination units only
+- [x] `pnpm lint` clean except one `@next/next/no-img-element` warning on `Nav.tsx`'s
+      sidebar logo `<img>` — same accepted tradeoff as `SongCard`'s thumbnail
+      (static export's `images.unoptimized`, see below)
+- [x] `SongCard`'s `<img>` → `next/image` `<Image unoptimized>` swap, to silence
+      the same lint warning there. Kept `unoptimized` explicit on the element
+      (not just relying on the global `next.config.mjs` setting) so it stays
+      correct if this component is ever reused outside the static-export build.
+- [x] `jest.config.ts`'s anonymous-default-export lint warning fixed — named the
+      async config function (`jestConfig`) instead of exporting an inline arrow.
+- [x] `focus-trap.ts` TS build error (`'last' is possibly 'undefined'`) — added
+      non-null assertions; safe, the length check above guarantees both indices exist,
+      TS just can't narrow array-index access on its own.
+- [x] `msw-polyfills.ts` TS build error — `next build`'s typecheck (per `tsconfig.json`'s
+      `include: ["**/*.ts", ...]`) was pulling this Jest-only file into the production
+      typecheck, where its `require()`-based global polyfills collided with `lib.dom`'s
+      own declarations. Fixed by excluding `src/test/**/*` in `tsconfig.json` — Jest
+      doesn't consult this include/exclude list (uses `next/jest`'s own transform), so
+      this doesn't affect `pnpm test`.
+- [x] Stray `@typescript-eslint/no-var-requires` disable-comment removed from
+      `msw-polyfills.ts` — errored because the referenced rule was never registered
+      (`next/core-web-vitals` doesn't pull in `@typescript-eslint`'s plugin at all,
+      same root cause as the earlier `no-unused-vars` drop). Rule was never enforced
+      here, so nothing needed suppressing.
+- [x] `pnpm lint` was briefly scanning `out/`'s compiled bundle output and flagging
+      React internals inside minified vendor JS. Added `.eslintignore` (`out/`, `.next/`,
+      `node_modules/`).
+
+### Not yet started, flagged during FE7-3/FE7-10
+
+- [ ] `docker-compose.yml`'s `ui` service port mapping still says `3000:80` — needs updating to `80:80`/`443:443` now that FE7-10's nginx listens on 443. Not done yet, `INFRA.md`'s port table also needs the matching update.
+- **Superseded**: ports are `4000:80`/`4443:443`, not `80:80`/`443:443` (LAN box has other services on standard ports). `INFRA.md`'s port table still needs this update — not done.
+- [ ] Local dev API proxy: `pnpm dev` can't reach `/api/*` standalone (no nginx in front of it). Optional `next.config.mjs` dev-only rewrite proposed in `FRONTEND_SETUP.md`, not implemented — confirm wanted before adding.
+- [x] FE7-0/FE7-1/FE7-2/FE7-11 scaffold files — **confirmed installed/running for real this session**: `pnpm install`, `pnpm test`, `pnpm build`, and full `docker compose build ui` all pass. All fixes above.
+- [ ] `src/app/page.tsx` is currently a one-line placeholder (`melo — placeholder`), not the real Library page — FE7-2 (components) + FE7-5 (routes) still need to build the actual page content.
+- [ ] `Makefile`'s `up` target still echoes stale `http://localhost:3000` for the UI URL — should say `https://localhost:4443`. Not done, small/standalone.
+
 ## Hotfix — yt-dlp 403 (in progress)
 
 - [ ] Confirm bumped yt-dlp (2026.8.19) actually fixes YouTube 403 — rebuild containers, resubmit real URL, check worker log for "No supported JavaScript runtime" warning
