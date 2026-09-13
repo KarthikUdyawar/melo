@@ -6,7 +6,7 @@ test("Escape calls onClose", () => {
   render(
     <Modal onClose={onClose}>
       <button>inside</button>
-    </Modal>
+    </Modal>,
   );
   fireEvent.keyDown(document, { key: "Escape" });
   expect(onClose).toHaveBeenCalledTimes(1);
@@ -17,7 +17,7 @@ test("click on overlay (not content) calls onClose", () => {
   const { container } = render(
     <Modal onClose={onClose}>
       <button>inside</button>
-    </Modal>
+    </Modal>,
   );
   fireEvent.click(container.querySelector(".modal-overlay")!);
   expect(onClose).toHaveBeenCalledTimes(1);
@@ -28,7 +28,7 @@ test("click inside content does not close", () => {
   render(
     <Modal onClose={onClose}>
       <button>inside</button>
-    </Modal>
+    </Modal>,
   );
   fireEvent.click(screen.getByText("inside"));
   expect(onClose).not.toHaveBeenCalled();

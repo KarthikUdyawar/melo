@@ -1,10 +1,13 @@
 "use client";
 
+// ui/src/app/page.tsx
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "@/lib/api";
 import type { Song, Playlist } from "@/lib/types";
 import { SongCard } from "@/components/SongCard";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { usePlayer } from "@/components/PlayerProvider";
 import { useToast } from "@/components/Toast";
 import { hasMorePages } from "@/lib/pagination";
 
@@ -14,6 +17,7 @@ const LIMIT = 50;
  *  any song is pending/processing, cursor pagination via bookmark. */
 export default function LibraryPage() {
   const { show } = useToast();
+  const { currentSong, setQueueAndPlay } = usePlayer();
   const [songs, setSongs] = useState<Song[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [search, setSearch] = useState("");
@@ -24,32 +28,47 @@ export default function LibraryPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    api.listPlaylists().then((d) => setPlaylists(d.records)).catch(() => {});
+    api
+      .listPlaylists()
+      .then((d) => setPlaylists(d.records))
+      .catch(() => {});
   }, []);
 
   const buildParams = useCallback(
     (after?: string) => {
-      const [sort_by, order] = sort.split("|");
-      const params: Record<string, string> = { sort_by, order, limit: String(LIMIT) };
+      const [sort_by, order] = sort.split("|") as [string, string];
+      const params: Record<string, string> = {
+        sort_by,
+        order,
+        limit: String(LIMIT),
+      };
       if (search) params.search = search;
       if (status) params.status = status;
       if (after) params.after = after;
       return params;
     },
-    [search, status, sort]
+    [search, status, sort],
   );
 
   const load = useCallback(
     async (append: boolean) => {
       try {
-        const data = await api.listSongs(buildParams(append ? bookmark ?? undefined : undefined));
-        setSongs((prev) => (append ? [...prev, ...data.records] : data.records));
-        setBookmark(hasMorePages(data.bookmark, data.records.length, LIMIT) ? data.bookmark : null);
+        const data = await api.listSongs(
+          buildParams(append ? (bookmark ?? undefined) : undefined),
+        );
+        setSongs((prev) =>
+          append ? [...prev, ...data.records] : data.records,
+        );
+        setBookmark(
+          hasMorePages(data.bookmark, data.records.length, LIMIT)
+            ? data.bookmark
+            : null,
+        );
       } catch (err) {
         show((err as Error).message, "error");
       }
     },
-    [buildParams, bookmark, show]
+    [buildParams, bookmark, show],
   );
 
   useEffect(() => {
@@ -58,7 +77,9 @@ export default function LibraryPage() {
   }, [search, status, sort]);
 
   useEffect(() => {
-    const hasPending = songs.some((s) => s.status === "pending" || s.status === "processing");
+    const hasPending = songs.some(
+      (s) => s.status === "pending" || s.status === "processing",
+    );
     if (hasPending && !pollRef.current) {
       pollRef.current = setInterval(async () => {
         try {
@@ -83,7 +104,9 @@ export default function LibraryPage() {
   const onToggleFavorite = async (song: Song) => {
     patchSong(song.id, { is_favorite: !song.is_favorite });
     try {
-      song.is_favorite ? await api.removeFavorite(song.id) : await api.addFavorite(song.id);
+      song.is_favorite
+        ? await api.removeFavorite(song.id)
+        : await api.addFavorite(song.id);
     } catch (err) {
       patchSong(song.id, { is_favorite: song.is_favorite });
       show((err as Error).message, "error");
@@ -156,14 +179,22 @@ export default function LibraryPage() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <select className="filter-input" value={status} onChange={(e) => setStatus(e.target.value)}>
+        <select
+          className="filter-input"
+          value={status}
+          onChange={(e) => setStatus(e.target.value)}
+        >
           <option value="">All status</option>
           <option value="done">Done</option>
           <option value="pending">Pending</option>
           <option value="processing">Processing</option>
           <option value="failed">Failed</option>
         </select>
-        <select className="filter-input" value={sort} onChange={(e) => setSort(e.target.value)}>
+        <select
+          className="filter-input"
+          value={sort}
+          onChange={(e) => setSort(e.target.value)}
+        >
           <option value="created_at|desc">Newest</option>
           <option value="created_at|asc">Oldest</option>
           <option value="title|asc">Title A–Z</option>
@@ -181,11 +212,9 @@ export default function LibraryPage() {
             <SongCard
               key={song.id}
               song={song}
-              isActive={false}
+              isActive={currentSong?.id === song.id}
               playlistNames={playlists.map((p) => p.name)}
-              onPlay={() => {
-                /* TODO FE7-4: wire to PlayerProvider */
-              }}
+              onPlay={() => setQueueAndPlay(songs, song.id)}
               onToggleFavorite={() => onToggleFavorite(song)}
               onAddToPlaylist={(name) => onAddToPlaylist(song, name)}
               onNewPlaylist={() => onNewPlaylist(song)}

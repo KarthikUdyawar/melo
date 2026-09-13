@@ -1,17 +1,23 @@
 "use client";
 
+// ui/src/app/favorites/page.tsx
 import { useEffect, useState } from "react";
 import * as api from "@/lib/api";
 import type { Song } from "@/lib/types";
 import { SongCard } from "@/components/SongCard";
+import { usePlayer } from "@/components/PlayerProvider";
 import { useToast } from "@/components/Toast";
 
 export default function FavoritesPage() {
   const { show } = useToast();
+  const { currentSong, setQueueAndPlay } = usePlayer();
   const [songs, setSongs] = useState<Song[]>([]);
 
   useEffect(() => {
-    api.listFavorites().then((d) => setSongs(d.records)).catch((err) => show(err.message, "error"));
+    api
+      .listFavorites()
+      .then((d) => setSongs(d.records))
+      .catch((err) => show(err.message, "error"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -39,9 +45,9 @@ export default function FavoritesPage() {
             <SongCard
               key={song.id}
               song={song}
-              isActive={false}
+              isActive={currentSong?.id === song.id}
               playlistNames={[]}
-              onPlay={() => {}}
+              onPlay={() => setQueueAndPlay(songs, song.id)}
               onToggleFavorite={() => onToggleFavorite(song)}
               onAddToPlaylist={() => {}}
               onNewPlaylist={() => {}}

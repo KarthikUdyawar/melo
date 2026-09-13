@@ -1,7 +1,12 @@
 "use client";
 
+// ui/src/components/Nav.tsx
+
+import { useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { AddSongModal } from "./AddSongModal";
 
 const ROUTES = [
   { href: "/", label: "Library" },
@@ -23,6 +28,7 @@ function isActive(pathname: string, href: string): boolean {
  */
 export function Nav() {
   const pathname = usePathname();
+  const [addOpen, setAddOpen] = useState(false);
 
   const links = ROUTES.map((r) => (
     <Link
@@ -38,17 +44,25 @@ export function Nav() {
     <>
       <aside className="sidebar">
         <div className="sidebar__logo">
-          <img className="sidebar__logo-mark" src="/assets/logo.png" alt="Melo" />
+          <Image
+            className="sidebar__logo-mark"
+            src="/assets/logo.png"
+            alt="Melo"
+            width={28}
+            height={28}
+            unoptimized
+          />
           <span className="sidebar__logo-full">melo</span>
         </div>
         <nav className="sidebar__nav">{links}</nav>
         <button
           className="btn btn--accent sidebar__add btn-add-song-trigger"
           aria-label="Add song"
-          title="Coming in FE7-8"
-          aria-disabled="true"
+          onClick={() => setAddOpen(true)}
         >
-          <span className="sidebar__add-icon" aria-hidden="true">+</span>
+          <span className="sidebar__add-icon" aria-hidden="true">
+            +
+          </span>
           <span className="sidebar__add-label">Add Song</span>
         </button>
       </aside>
@@ -56,8 +70,7 @@ export function Nav() {
       <button
         className="fab-add btn-add-song-trigger"
         aria-label="Add song"
-        title="Coming in FE7-8"
-        aria-disabled="true"
+        onClick={() => setAddOpen(true)}
       >
         +
       </button>
@@ -73,6 +86,8 @@ export function Nav() {
           </Link>
         ))}
       </nav>
+
+      {addOpen && <AddSongModal onClose={() => setAddOpen(false)} />}
     </>
   );
 }

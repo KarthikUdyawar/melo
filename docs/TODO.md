@@ -14,21 +14,166 @@
       its original FE7-2 PRD row — AddSongModal stays FE7-8's scope). Helpers:
       formatDuration, trapFocus (both TDD'd). 43/43 tests passing.
 - [x] FE7-3 `lib/api.ts` + msw test setup — `types.ts` (Song/Playlist/Envelope/ApiError), `api.ts` (all endpoint wrappers, envelope unwrap ported from `apiFetch()`), `test/server.ts` + `test/handlers.ts` + `test/msw-polyfills.ts`, full test suite green
-- [ ] FE7-4 `PlayerProvider`
-- [ ] FE7-5 Real routes + `/playlists/[id]` client-resolved shell + nginx rewrite —
-      **in progress, currently broken.** Library/Favorites/Playlists/PlaylistDetail
-      pages + Nav (sidebar/tab-bar) written, wired to lib/api.ts and FE7-2 components.
-      `pnpm build` fails: `/playlists/[id]/page.tsx` combines `"use client"` with
-      `generateStaticParams()` — Next disallows this combination. Not yet fixed.
-      Player-bar wiring in `layout.tsx` is a static empty-state placeholder only
-      (real hookup is FE7-4/FE7-6). Add Song buttons in Nav are stubs (FE7-8).
-      No page-level tests yet — flagged for FE7-9.
-- [ ] FE7-6 Player Bar + Now Playing panel
-- [ ] FE7-7 Drag-reorder + keyboard alt
-- [ ] FE7-8 Add Song modal
-- [ ] FE7-9 Coverage ≥80%
-- [ ] FE7-10 Self-signed cert + nginx 80→443 redirect
-- [ ] FE7-11 Multi-stage Dockerfile
+- [x] FE7-4 `PlayerProvider` — pure logic ported + TDD'd first (per PRD's
+      "logic-only tests" decision): `loop-mode.ts` (cycle), `queue.ts`
+      (findNextPlayableIndex, no wrap), `shuffle.ts` (Fisher–Yates keeps
+      current + restore original order), `waveform.ts` (peak downsample
+      math), `player-reducer.ts` (pure reducer combining all of the above:
+      SET_QUEUE/TOGGLE_SHUFFLE/CYCLE_LOOP/NEXT/PREV/ENDED). 12 new tests,
+      71/71 total. `PlayerProvider.tsx`/`usePlayer()` wraps the reducer
+      + a real `<audio>` element + volume/loop localStorage persistence —
+      untested at that layer (DOM/audio side effects), same gap PRD
+      already scopes out for waveform decode. Queue/song type is `Song`
+      (full display fields), not a narrow id+status shape — needed since
+      FE7-6's PlayerBar/NowPlayingPanel render title/thumbnail/channel,
+      not just track queue position. Not yet wired into `layout.tsx` —
+      that's FE7-6's job per PRD's dependency table (FE7-6 depends on
+      FE7-4 *and* FE7-5).
+- [x] FE7-5 Real routes + `/playlists/[id]` client-resolved shell + nginx rewrite —
+      Library/Favorites/Playlists/PlaylistDetail pages + Nav (sidebar/tab-bar)
+      written, wired to lib/api.ts and FE7-2 components. `pnpm build` green:
+      split `/playlists/[id]/page.tsx` into a Server Component shell (only
+      `generateStaticParams()`) + `PlaylistDetailClient.tsx` ("use client",
+      does the pathname-parse/fetch/render). Two follow-on TS strictness fixes
+      (`noUncheckedIndexedAccess`/array-destructure-undefined class, same root
+      cause as FE7-2's `focus-trap.ts` fix): `page.tsx`'s `sort.split("|")`
+      cast to `[string, string]`; `playlist-path.ts`'s `match[1]` non-null
+      asserted after the `"_"` placeholder check. Player-bar wiring in
+      `layout.tsx` is still a static empty-state placeholder (FE7-4/FE7-6).
+      Add Song buttons in Nav still stubs (FE7-8). No page-level tests yet —
+      flagged for FE7-9.
+- [x] FE7-6 Player Bar + Now Playing panel — **done in full, confirmed via
+      `pnpm lint`/`test`/`build` (71/71, clean build).** `PlayerBar.tsx`
+      ported from index.html markup + player.js's scrubber/volume bind,
+      wired into `layout.tsx` (replaces the static placeholder, wrapped in
+      new `PlayerProvider`). `PlayerProvider` extended with `currentTime`/
+      `duration`/`seek` (needed for the scrubber, not added in FE7-4's
+      initial pass). Library/Favorites/PlaylistDetail `onPlay` handlers
+      wired to `setQueueAndPlay`; `isActive` now reflects real
+      `currentSong.id` instead of hardcoded `false` on all three pages.
+      `PlayerBar.tsx`'s thumbnail uses a plain `<img>` (eslint-disabled),
+      not `next/image` — deliberately left as-is (Karthik's call), same
+      tradeoff `Nav.tsx` had pre-fix.
+      **Now Playing panel (this session):** new `NowPlayingPanel.tsx`,
+      opened by clicking/Enter/Space on `#player-info-trigger` inside
+      `PlayerBar`. Waveform fetch+decode+cache moved to a new
+      `lib/waveform-cache.ts` (module-scope `Map`, same session-lifetime
+      rule the old `player.js` singleton had), reusing `downsamplePeaks()`
+      from FE7-4. Canvas redraws played/unplayed bars every tick
+      (`barWidth` clamped non-negative, same Post-Sprint-6 fix ported).
+      Own scrubber drag-state (`npSeeking`/`dragPct`, component-local
+      `useState`), independent of `PlayerBar`'s scrubber. `role="dialog"`/
+      `aria-modal`, focus moves to the close button on open, manual focus
+      trap via `trapFocus()` (FE7-2) on `Tab`, reopen-guarded by `npOpen`
+      state living in `PlayerBar`. **Flagged, not done:** Esc priority
+      chain (panel→dropdown→modal) only closes the panel — no dropdown or
+      `AddSongModal` exist in this stack yet (FE7-7/FE7-8), nothing to
+      chain against; revisit when they land. Focus-return-to-trigger on
+      close relies on the browser's default (focus goes back to whatever
+      had it pre-open) rather than an explicit `.focus()` call — flagged,
+      not yet confirmed as sufficient across browsers.
+- [x] FE7-7 Drag-reorder + keyboard alt — confirmed via `pnpm lint`/`test`/
+      `build` (79/79, clean build). New `lib/reorder.ts`'s `moveItem()`
+      (pure splice-out/splice-in, TDD'd first — 8 tests) ported verbatim
+      from `app.js`'s `reorderPlaylistSongOptimistic()` index math.
+      `PlaylistDetailClient.tsx` wires native HTML5 DnD (`draggable`,
+      `dragstart`/`dragover`/`drop`) + `ArrowUp`/`ArrowDown` keyboard alt
+      on each `.playlist-song-row`, both calling one `reorder()` helper —
+      optimistic local update via `moveItem()`, `PATCH` in the background,
+      re-fetch-to-resync on failure. Row stays a plain `<div>` (no
+      `role="button"`), same reasoning as vanilla (wraps other
+      interactives — song card, remove button). Focus restored to the
+      moved row after a keyboard reorder via a `rowRefs` map + a
+      `focusSongId` ref read in a `useEffect` keyed on `playlist` state.
+      Untested at the DnD/component layer per PRD's locked "logic-only
+      tests" decision — `reorder.ts`'s math is the tested surface, same
+      treatment `queue.ts`/`shuffle.ts` got in FE7-4.
+- [x] FE7-8 Add Song modal — confirmed via real `pnpm lint`/`test`/`build`
+      (86/86, clean build, 0 lint errors). Step-machine extracted to
+      `lib/add-song-flow.ts` (TDD'd first, 7 tests), `AddSongModal.tsx`
+      wired to `previewSong`/`submitSong`, 422/502 surfaces inline error +
+      retry per PRD. `Nav.tsx`'s sidebar + FAB triggers now open it, no
+      longer stubs.
+- [x] FE7-9 Coverage ≥80% — confirmed via real `pnpm lint`/`test:coverage`/
+      `build`. Final: 92% stmts / 80% branches / 86% funcs / 93% lines,
+      120/120 tests. `jest.config.ts`'s `collectCoverageFrom` excludes
+      `PlayerProvider.tsx`/`PlayerBar.tsx`/`NowPlayingPanel.tsx`/
+      `waveform-cache.ts`/`PlaylistDetailClient.tsx`/`layout.tsx`/
+      `playlists/[id]/page.tsx` — DOM/audio/canvas/build-time-only
+      surfaces the PRD already scoped out of testing (FE7-4/6/7's
+      "logic-only tests" decision), not gap-filled by omission. New
+      test files: `Nav.test.tsx`, `AddSongModal.test.tsx`,
+      `SongCardMenu.test.tsx`, `page.test.tsx`, `favorites/page.test.tsx`,
+      `playlists/page.test.tsx`, plus branch-fill additions to
+      `shuffle.test.ts`/`player-reducer.test.ts`/`focus-trap.test.ts`/
+      `api.test.ts`. `jest.setup.ts` stubs `HTMLMediaElement.pause/play`
+      to silence jsdom's harmless "not implemented" console noise on
+      `PlayerProvider` unmount.
+- [x] FE7-10 Self-signed cert + nginx 80→443 redirect — confirmed via real
+      `docker compose build ui && docker compose up ui`. Cert generated at
+      image-build time (`openssl req -x509`, `CN=melo.local`), baked into
+      nginx:alpine runtime stage, `chown`'d for the non-root `nginx` user.
+      `nginx.conf`: 80 → `301 https://$host:4443`, 443 serves TLS + `/api/`
+      proxy + `/playlists/[id]` rewrite. Only startup output was 2 expected
+      cosmetic warnings (read-only conf.d envsubst skip, "user" directive
+      no-op under non-root) — no errors, 4 workers started clean.
+- [x] Prettier added (`prettier` + `eslint-config-prettier`) — `.prettierrc.json`
+      (semi, double-quote, trailing-comma-all), `.prettierignore` mirrors
+      `.eslintignore`. Ran repo-wide `pnpm format` once (73 files). Confirmed via
+      real `pnpm lint && pnpm test && pnpm build` after — 120/120, clean build,
+      no behavior change.
+- [x] FE7-11 Multi-stage Dockerfile — `node:20-alpine` build stage
+      (`pnpm install --frozen-lockfile` + `pnpm build`) → `nginx:alpine`
+      runtime stage, `COPY --from=build /app/out`. Same topology as
+      Sprint 4–6 (`INFRA.md`), no new container, no Node runtime in prod.
+
+- [x] Post-ship UI bugfix pass (first real run of the FE7 build) — all
+      resolved, confirmed via `make fe-format && make fe-lint &&
+      make fe-test-cov && make fe-build` green (128/128 tests) plus
+      manual browser re-check after each fix:
+      1. Logo 404 — `ui/assets/logo.png` copied to `ui/public/assets/`
+         (static export only bundles `public/`).
+      2. Player bar + Now Playing panel rendered unstyled/stacked — FE7-6
+         shipped component markup with no matching `globals.css` rules;
+         added `.player-bar__*`, `.now-playing*`, `.player-btn`,
+         `.player-time`, `.loop-badge`.
+      3. Emoji icons (▶/▮▮ looked near-identical, 🔊/🔇 flagged as
+         unwanted) — new `components/icons.tsx`, inline SVG set, wired
+         into both `PlayerBar.tsx` and `NowPlayingPanel.tsx`. New
+         `icons.test.tsx` (render-smoke, 8 cases) added to keep coverage
+         from dropping on the new file.
+      4. Shuffle/loop had no visible on/off state — `[aria-pressed="true"]`
+         / `[data-mode="one"/"all"]` attribute-selector CSS added, no new
+         JS state needed (attrs already existed for a11y).
+      5. Shuffle mid-playback reset the song to 0:00 — `PlayerProvider`'s
+         song-load effect fired on `state.queue`'s array reference, not
+         "did the actual song change." Added `loadedSongIdRef` guard keyed
+         on song id.
+      6. Waveform looked like a flat rectangle, not a natural wave —
+         `downsamplePeaks()` switched from max(\|x\|) to `sqrt(RMS)` per
+         bucket (max-abs saturates near 1.0 on loud masters).
+         `waveform.test.ts` expected values recalculated to match.
+      7. Player bar too tall / scrubber thumb too small relative to track
+         — `--player-bar-height` 72px→48px, track styled via
+         `::-webkit-slider-runnable-track`/`::-moz-range-track` (6px),
+         thumb via `::-webkit-slider-thumb`/`::-moz-range-thumb` (18px) —
+         original rules targeted the `<input>` box itself, which browsers
+         ignore for range-input track/thumb rendering.
+      8. Loop-mode "1" badge missing in the footer player bar (present in
+         Now Playing panel only) — `NowPlayingPanel`'s loop button had the
+         badge `<span>` from the start, `PlayerBar`'s never got it added.
+      9. Volume slider looked like native unstyled blue, scrubber looked
+         themed lime — volume `<input>` had no `className` in either
+         component; added `className="volume-slider"` to both.
+      10. Now Playing panel close (✕) button rendered centered near the
+          panel content instead of top-right of the full page — two bugs
+          stacked: (a) `.now-playing` had a stray `position: relative`
+          that should've stayed on `.now-playing-overlay` only, and
+          (b) once fixed, the button still lost a specificity tie against
+          `.icon-btn`'s `position: relative` (both single-class, same
+          specificity, source order decided it) — fixed by scoping the
+          selector to `.now-playing .now-playing__close` (descendant,
+          higher specificity) rather than relying on source order.
 
 ### FE7-0/FE7-3 — real `pnpm install`/`pnpm test`/`pnpm build`/Docker build run, all fixed ✅
 
@@ -82,8 +227,15 @@
 - **Superseded**: ports are `4000:80`/`4443:443`, not `80:80`/`443:443` (LAN box has other services on standard ports). `INFRA.md`'s port table still needs this update — not done.
 - [ ] Local dev API proxy: `pnpm dev` can't reach `/api/*` standalone (no nginx in front of it). Optional `next.config.mjs` dev-only rewrite proposed in `FRONTEND_SETUP.md`, not implemented — confirm wanted before adding.
 - [x] FE7-0/FE7-1/FE7-2/FE7-11 scaffold files — **confirmed installed/running for real this session**: `pnpm install`, `pnpm test`, `pnpm build`, and full `docker compose build ui` all pass. All fixes above.
+- [x] `SongCard`'s thumbnail: `<Image src="">` when `thumbnail_url` is `null` printed a console.error ("Image is missing required src property") on every pending/processing song in tests. Fixed: render a plain placeholder `<div>` when there's no thumbnail, `next/image` only mounts with a real url.
+- [x] `Nav.tsx`'s sidebar logo `<img>` → `next/image unoptimized`, same treatment as `SongCard`'s thumbnail — clears the last `@next/next/no-img-element` lint warning, `pnpm lint` now 0 problems.
 - [ ] `src/app/page.tsx` is currently a one-line placeholder (`melo — placeholder`), not the real Library page — FE7-2 (components) + FE7-5 (routes) still need to build the actual page content.
-- [ ] `Makefile`'s `up` target still echoes stale `http://localhost:3000` for the UI URL — should say `https://localhost:4443`. Not done, small/standalone.
+- [x] `Makefile` frontend targets added: `fe-install`, `fe-dev`, `fe-lint`,
+      `fe-format`, `fe-format-check`, `fe-test`, `fe-test-watch`,
+      `fe-test-cov`, `fe-build` — thin `cd ui && pnpm <script>` wrappers,
+      `fe-` prefix to avoid colliding with existing backend `lint`/`fmt`/
+      `test`/`test-cov`. Confirmed via real `make fe-lint && make fe-test
+      && make fe-build` — 120/120, clean build, 0 lint errors.
 
 ## Hotfix — yt-dlp 403 (in progress)
 

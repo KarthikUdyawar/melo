@@ -1,5 +1,6 @@
 "use client";
 
+// ui/src/app/playlists/page.tsx
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as api from "@/lib/api";
@@ -17,7 +18,10 @@ export default function PlaylistsPage() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const refresh = () =>
-    api.listPlaylists().then((d) => setPlaylists(d.records)).catch((err) => show(err.message, "error"));
+    api
+      .listPlaylists()
+      .then((d) => setPlaylists(d.records))
+      .catch((err) => show(err.message, "error"));
 
   useEffect(() => {
     refresh();
@@ -55,7 +59,10 @@ export default function PlaylistsPage() {
     <>
       <div className="page-header">
         <h1 className="page-title">Playlists</h1>
-        <button className="btn btn--ghost" onClick={() => setShowNewInput(true)}>
+        <button
+          className="btn btn--ghost"
+          onClick={() => setShowNewInput(true)}
+        >
           + New Playlist
         </button>
       </div>
@@ -73,8 +80,15 @@ export default function PlaylistsPage() {
             }}
             autoFocus
           />
-          <button className="btn btn--accent" onClick={onCreate}>Create</button>
-          <button className="btn btn--ghost" onClick={() => setShowNewInput(false)}>Cancel</button>
+          <button className="btn btn--accent" onClick={onCreate}>
+            Create
+          </button>
+          <button
+            className="btn btn--ghost"
+            onClick={() => setShowNewInput(false)}
+          >
+            Cancel
+          </button>
         </div>
       )}
       {playlists.length === 0 ? (

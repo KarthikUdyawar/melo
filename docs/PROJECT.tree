@@ -163,22 +163,33 @@
 │   ├── src
 │   │   ├── app
 │   │   │   ├── favorites
+│   │   │   │   ├── page.test.tsx
 │   │   │   │   └── page.tsx
 │   │   │   ├── globals.css
 │   │   │   ├── layout.tsx
+│   │   │   ├── page.test.tsx
 │   │   │   ├── page.tsx
 │   │   │   └── playlists
 │   │   │       ├── [id]
-│   │   │       │   └── page.tsx
+│   │   │       │   ├── page.tsx
+│   │   │       │   └── PlaylistDetailClient.tsx
+│   │   │       ├── page.test.tsx
 │   │   │       └── page.tsx
 │   │   ├── components
+│   │   │   ├── AddSongModal.test.tsx
+│   │   │   ├── AddSongModal.tsx
 │   │   │   ├── ConfirmDialog.test.tsx
 │   │   │   ├── ConfirmDialog.tsx
 │   │   │   ├── Modal.test.tsx
 │   │   │   ├── Modal.tsx
+│   │   │   ├── Nav.test.tsx
 │   │   │   ├── Nav.tsx
+│   │   │   ├── NowPlayingPanel.tsx
+│   │   │   ├── PlayerBar.tsx
+│   │   │   ├── PlayerProvider.tsx
 │   │   │   ├── PlaylistCard.test.tsx
 │   │   │   ├── PlaylistCard.tsx
+│   │   │   ├── SongCardMenu.test.tsx
 │   │   │   ├── SongCardMenu.tsx
 │   │   │   ├── SongCard.test.tsx
 │   │   │   ├── SongCard.tsx
@@ -187,17 +198,32 @@
 │   │   │   ├── Toast.test.tsx
 │   │   │   └── Toast.tsx
 │   │   ├── lib
+│   │   │   ├── add-song-flow.test.ts
+│   │   │   ├── add-song-flow.ts
 │   │   │   ├── api.test.ts
 │   │   │   ├── api.ts
 │   │   │   ├── focus-trap.test.ts
 │   │   │   ├── focus-trap.ts
 │   │   │   ├── format.test.ts
 │   │   │   ├── format.ts
+│   │   │   ├── loop-mode.test.ts
+│   │   │   ├── loop-mode.ts
 │   │   │   ├── pagination.test.ts
 │   │   │   ├── pagination.ts
+│   │   │   ├── player-reducer.test.ts
+│   │   │   ├── player-reducer.ts
 │   │   │   ├── playlist-path.test.ts
 │   │   │   ├── playlist-path.ts
-│   │   │   └── types.ts
+│   │   │   ├── queue.test.ts
+│   │   │   ├── queue.ts
+│   │   │   ├── reorder.test.ts
+│   │   │   ├── reorder.ts
+│   │   │   ├── shuffle.test.ts
+│   │   │   ├── shuffle.ts
+│   │   │   ├── types.ts
+│   │   │   ├── waveform-cache.ts
+│   │   │   ├── waveform.test.ts
+│   │   │   └── waveform.ts
 │   │   └── test
 │   │       ├── handlers.ts
 │   │       ├── msw-polyfills.ts
@@ -207,4 +233,4 @@
 │   └── tsconfig.json
 └── uv.lock
 
-35 directories, 173 files
+35 directories, 199 files

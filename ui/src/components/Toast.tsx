@@ -1,5 +1,6 @@
 "use client";
 
+// ui/src/components/Toast.tsx
 import { createContext, useCallback, useContext, useState } from "react";
 
 type ToastType = "success" | "error";
@@ -9,7 +10,9 @@ interface ToastItem {
   type: ToastType;
 }
 
-const ToastContext = createContext<{ show: (message: string, type?: ToastType) => void } | null>(null);
+const ToastContext = createContext<{
+  show: (message: string, type?: ToastType) => void;
+} | null>(null);
 
 let nextId = 0;
 
@@ -33,7 +36,10 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       {children}
       <div id="toast-root" aria-live="polite" aria-atomic="false">
         {toasts.map((t) => (
-          <div key={t.id} className={`toast${t.type === "error" ? " toast--error" : ""}`}>
+          <div
+            key={t.id}
+            className={`toast${t.type === "error" ? " toast--error" : ""}`}
+          >
             {t.message}
           </div>
         ))}

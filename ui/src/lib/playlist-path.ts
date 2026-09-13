@@ -1,3 +1,4 @@
+// ui/src/lib/playlist-path.ts
 /**
  * Extracts the real playlist id from the URL path. The build only emits
  * a placeholder shell at /playlists/_/ (static export can't know real
@@ -9,5 +10,5 @@
 export function parsePlaylistId(pathname: string): string | null {
   const match = pathname.match(/^\/playlists\/([^/]+)\/?$/);
   if (!match) return null;
-  return match[1] === "_" ? null : match[1];
+  return match[1] === "_" ? null : match[1]!;
 }

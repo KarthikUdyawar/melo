@@ -1,3 +1,4 @@
+// ui/jest.config.ts
 import type { Config } from "jest";
 import nextJest from "next/jest.js";
 
@@ -12,7 +13,28 @@ const config: Config = {
   coverageThreshold: {
     global: { branches: 80, functions: 80, lines: 80, statements: 80 },
   },
-  collectCoverageFrom: ["src/**/*.{ts,tsx}", "!src/**/*.d.ts"],
+  collectCoverageFrom: [
+    "src/**/*.{ts,tsx}",
+    "!src/**/*.d.ts",
+    // DOM/audio/canvas/native-DnD surfaces PRD already scoped out of
+    // the test surface (locked "logic-only tests" decision, FE7-4/
+    // FE7-6/FE7-7) — pure logic extracted from each is tested
+    // separately (player-reducer.ts, shuffle.ts, waveform.ts,
+    // reorder.ts). Counting these in coverage would force DOM tests
+    // the PRD explicitly decided against, not close a real gap.
+    "!src/components/PlayerProvider.tsx",
+    "!src/components/PlayerBar.tsx",
+    "!src/components/NowPlayingPanel.tsx",
+    "!src/lib/waveform-cache.ts",
+    "!src/app/playlists/[id]/PlaylistDetailClient.tsx",
+    // Composition-root shells: layout.tsx just mounts providers (no
+    // branch logic of its own — PlayerProvider/ToastProvider are
+    // tested separately), playlists/[id]/page.tsx is only
+    // generateStaticParams() (build-time only, can't run under Jest).
+    "!src/app/layout.tsx",
+    "!src/app/playlists/[id]/page.tsx",
+    "!src/test/**",
+  ],
 };
 
 // next/jest prepends its own blanket "/node_modules/" ignore pattern

@@ -8,7 +8,7 @@ test("renders title and message", () => {
       message="Delete this song? This cannot be undone."
       onConfirm={() => {}}
       onCancel={() => {}}
-    />
+    />,
   );
   expect(screen.getByText("Delete Song")).toBeInTheDocument();
   expect(screen.getByText(/cannot be undone/)).toBeInTheDocument();
@@ -18,7 +18,12 @@ test("Delete calls onConfirm, Cancel calls onCancel", () => {
   const onConfirm = jest.fn();
   const onCancel = jest.fn();
   render(
-    <ConfirmDialog title="t" message="m" onConfirm={onConfirm} onCancel={onCancel} />
+    <ConfirmDialog
+      title="t"
+      message="m"
+      onConfirm={onConfirm}
+      onCancel={onCancel}
+    />,
   );
   fireEvent.click(screen.getByText("Delete"));
   expect(onConfirm).toHaveBeenCalledTimes(1);

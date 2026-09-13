@@ -15,7 +15,11 @@ test("pending renders pill with aria-label, no pulse", () => {
 
 test("processing pulses", () => {
   render(<StatusPill status="processing" />);
-  expect(screen.getByLabelText("Status: processing").querySelector(".status-dot--pulse")).not.toBeNull();
+  expect(
+    screen
+      .getByLabelText("Status: processing")
+      .querySelector(".status-dot--pulse"),
+  ).not.toBeNull();
 });
 
 test("failed renders", () => {

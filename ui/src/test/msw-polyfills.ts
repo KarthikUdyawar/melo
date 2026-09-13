@@ -5,16 +5,26 @@ const { TextDecoder, TextEncoder } = require("util");
 // Must run before importing undici — undici reads these off `global`
 // at module-init time. require() (not import) so this actually runs
 // first — ES imports get hoisted above all other statements.
-const { ReadableStream, TransformStream, WritableStream } = require("stream/web");
-Object.assign(global, { TextDecoder, TextEncoder, ReadableStream, TransformStream, WritableStream });
+const {
+  ReadableStream,
+  TransformStream,
+  WritableStream,
+} = require("stream/web");
+Object.assign(global, {
+  TextDecoder,
+  TextEncoder,
+  ReadableStream,
+  TransformStream,
+  WritableStream,
+});
 
 const { fetch, Headers, Request, Response } = require("undici");
 
 Object.assign(global, {
-    fetch,
-    Headers,
-    Request,
-    Response,
+  fetch,
+  Headers,
+  Request,
+  Response,
 });
 
 const { BroadcastChannel } = require("worker_threads");

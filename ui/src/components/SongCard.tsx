@@ -1,3 +1,5 @@
+// ui/src/components/SongCard.tsx
+
 import Image from "next/image";
 import type { Song } from "@/lib/types";
 import { formatDuration } from "@/lib/format";
@@ -27,7 +29,9 @@ export function SongCard({
   onRetry: () => void;
 }) {
   const isPlayable = song.status === "done";
-  const heartLabel = song.is_favorite ? "Remove from favorites" : "Add to favorites";
+  const heartLabel = song.is_favorite
+    ? "Remove from favorites"
+    : "Add to favorites";
 
   return (
     <div
@@ -35,18 +39,25 @@ export function SongCard({
       role="listitem"
       onClick={() => isPlayable && onPlay()}
     >
-      <Image
-        className="song-card__thumb"
-        src={song.thumbnail_url ?? ""}
-        alt={song.title ?? ""}
-        width={48}
-        height={48}
-        unoptimized
-        loading="lazy"
-        onError={(e) => {
-          (e.target as HTMLImageElement).style.visibility = "hidden";
-        }}
-      />
+      {song.thumbnail_url ? (
+        <Image
+          className="song-card__thumb"
+          src={song.thumbnail_url}
+          alt={song.title ?? ""}
+          width={48}
+          height={48}
+          unoptimized
+          loading="lazy"
+          onError={(e) => {
+            (e.target as HTMLImageElement).style.visibility = "hidden";
+          }}
+        />
+      ) : (
+        <div
+          className="song-card__thumb song-card__thumb--placeholder"
+          aria-hidden="true"
+        />
+      )}
       <div className="song-card__body">
         <div className="song-card__title">{song.title ?? "Processing…"}</div>
         <div className="song-card__meta">
@@ -100,7 +111,14 @@ function heartSvg(filled: boolean) {
       <path d="M10 17s-7-4.35-7-9a4 4 0 0 1 7-2.65A4 4 0 0 1 17 8c0 4.65-7 9-7 9z" />
     </svg>
   ) : (
-    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.5}>
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
       <path d="M10 17s-7-4.35-7-9a4 4 0 0 1 7-2.65A4 4 0 0 1 17 8c0 4.65-7 9-7 9z" />
     </svg>
   );

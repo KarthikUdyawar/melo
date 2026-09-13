@@ -15,7 +15,8 @@ SHELL := /bin/bash
 	act-lint act-unit act-integration act-coverage act-ci \
 	tree \
 	admin \
-	cadvisor-ids
+	cadvisor-ids \
+	fe-install fe-dev fe-lint fe-format fe-format-check fe-test fe-test-watch fe-test-cov fe-build
 
 .DEFAULT_GOAL := help
 
@@ -367,3 +368,34 @@ admin: ## Open Streamlit admin in browser
 cadvisor-ids: ## Print cAdvisor container IDs for api and worker
 	@echo "api:   $$(docker inspect --format='{{.Id}}' melo-api-1)"
 	@echo "worker: $$(docker inspect --format='{{.Id}}' melo-worker-1)"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Frontend (Sprint 7 — Next.js, ui/)
+# ──────────────────────────────────────────────────────────────────────────────
+
+fe-install: ## Install frontend deps
+	cd ui && pnpm install
+
+fe-dev: ## Run Next.js dev server (localhost:3000, /api/* won't resolve — see FRONTEND_SETUP.md)
+	cd ui && pnpm dev
+
+fe-lint: ## Lint frontend
+	cd ui && pnpm lint
+
+fe-format: ## Auto-format frontend with Prettier
+	cd ui && pnpm format
+
+fe-format-check: ## Check frontend formatting without writing
+	cd ui && pnpm format:check
+
+fe-test: ## Run frontend tests once
+	cd ui && pnpm test
+
+fe-test-watch: ## Run frontend tests in watch mode
+	cd ui && pnpm test:watch
+
+fe-test-cov: ## Run frontend tests with coverage (enforces 80% threshold)
+	cd ui && pnpm test:coverage
+
+fe-build: ## Static export build (ui/out/)
+	cd ui && pnpm build

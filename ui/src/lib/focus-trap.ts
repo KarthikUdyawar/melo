@@ -1,4 +1,5 @@
 /**
+ * ui/src/lib/focus-trap.ts
  * Ported from app.js's trapFocus(). Pure DOM logic, no React —
  * shared by Modal and (later) the Now Playing panel, same as the
  * vanilla version's shared function taking the container as a param.
@@ -8,8 +9,8 @@ export function trapFocus(container: HTMLElement, e: KeyboardEvent): void {
 
   const focusables = Array.from(
     container.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    )
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    ),
   ).filter((el) => !(el as HTMLButtonElement).disabled);
   // NOTE: no offsetParent/visibility check here — jsdom has no layout
   // engine, offsetParent is always null there, which silently emptied

@@ -11,7 +11,9 @@ const playlist: Playlist = {
 
 test("card click calls onOpen", () => {
   const onOpen = jest.fn();
-  render(<PlaylistCard playlist={playlist} onOpen={onOpen} onDelete={() => {}} />);
+  render(
+    <PlaylistCard playlist={playlist} onOpen={onOpen} onDelete={() => {}} />,
+  );
   fireEvent.click(screen.getByRole("listitem"));
   expect(onOpen).toHaveBeenCalledTimes(1);
 });
@@ -19,13 +21,21 @@ test("card click calls onOpen", () => {
 test("delete button calls onDelete, not onOpen", () => {
   const onOpen = jest.fn();
   const onDelete = jest.fn();
-  render(<PlaylistCard playlist={playlist} onOpen={onOpen} onDelete={onDelete} />);
+  render(
+    <PlaylistCard playlist={playlist} onOpen={onOpen} onDelete={onDelete} />,
+  );
   fireEvent.click(screen.getByLabelText("Delete playlist"));
   expect(onDelete).toHaveBeenCalledTimes(1);
   expect(onOpen).not.toHaveBeenCalled();
 });
 
 test("singular 'song' at count 1", () => {
-  render(<PlaylistCard playlist={{ ...playlist, song_count: 1 }} onOpen={() => {}} onDelete={() => {}} />);
+  render(
+    <PlaylistCard
+      playlist={{ ...playlist, song_count: 1 }}
+      onOpen={() => {}}
+      onDelete={() => {}}
+    />,
+  );
   expect(screen.getByText("1 song")).toBeInTheDocument();
 });

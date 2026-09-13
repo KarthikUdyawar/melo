@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { trapFocus } from "@/lib/focus-trap";
 
 /**
+ * ui/src/components/Modal.tsx
  * Generic modal shell — overlay + focus trap + Escape-to-close.
  * FE7-8's AddSongModal/ConfirmDialog build their content inside this,
  * same relationship as the old .modal / trapFocus() pairing in app.js.

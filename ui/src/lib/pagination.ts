@@ -6,7 +6,7 @@
 export function hasMorePages(
   bookmark: string | null,
   recordsLength: number,
-  limit: number
+  limit: number,
 ): boolean {
   return !!bookmark && recordsLength >= limit;
 }

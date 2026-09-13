@@ -1,70 +1,54 @@
-# Handoff — Sprint 7: FE7-2 Components + FE7-5 Routes (in progress)
+# handoff.md — Sprint 7 post-ship UI bugfix session
 
 ## Context
 
-Repo: `KarthikUdyawar/melo`. Branch: `feature/sprint7-nextjs-frontend-rewrite`. Solo project. **This session's scope: FE7-2 (port components) fully, FE7-5 (real routes) partially, both TDD'd file-by-file with real `pnpm test`/`lint`/`build` runs after each change.** Previous handoff covered getting the scaffold to actually build/test for the first time (resolved, all green as of last session's close). Full ticket scope/locked decisions still live in `docs/PRD.md`/`docs/DECISIONS.md` — not duplicated here.
+Repo: `KarthikUdyawar/melo`. Branch: `feature/sprint7-nextjs-frontend-rewrite`. Solo project. **This session's scope:** Sprint 7 (Next.js frontend rewrite) was already fully done per the prior handoff (FE7-0 through FE7-11, Prettier, Makefile `fe-*` targets, all green). This session was Karthik's **first real run of the built frontend in a browser**, surfacing 10 visual/logic bugs across two rounds of screenshots. All 10 fixed, confirmed green.
 
-**Note:** this doc replaces the "first real build/test run" handoff — that session's scope is done and folded into `TODO.md`/`DECISIONS.md`. The yt-dlp 403 hotfix (unsprinted, Sep 2026) is still open and independent of this sprint — see `docs/DECISIONS.md`'s "Hotfix" section and `docs/TODO.md`'s Hotfix block. Don't lose track of it.
-
-Conventions in effect: **caveman ultra**, **clean-code**, **tdd**, **ponytail**. Terse responses, minimal diffs, git-diff format by default.
+Conventions in effect: **caveman ultra**, **clean-code**, **tdd**, **ponytail**. Workflow: Karthik screenshots the broken UI → Claude requests real source files (no guess-diffs) → root-cause identified against actual code → git-diff returned → Karthik applies + runs `make fe-format && make fe-lint && make fe-test-cov && make fe-build` for real → pastes terminal output back → confirmed green before next bug.
 
 ## What happened, in order
 
-1. **FE7-2 component port** — `StatusPill`, `SongCard`, `SongCardMenu` (dropdown, no ARIA menu role per Post-Sprint-6 fix), `PlaylistCard`, `ToastProvider`/`useToast` (replaces the old imperative `renderToast()`), generic `<Modal>` shell (focus-trap + Escape + overlay-click-close), `<ConfirmDialog>` (re-scoped here from a misread of PRD's table — only `<AddSongModal>` is FE7-8). Helpers `formatDuration`/`trapFocus` ported as pure functions, each TDD'd (red confirmed via jsdom's `offsetParent` gotcha below).
-2. **`trapFocus()` jsdom gotcha** — first test run failed both focus-wrap cases (`toHaveBeenCalled` 0 times). Root cause: jsdom has no layout engine, so `offsetParent` is always `null` regardless of real visibility — the ported filter (`el.offsetParent !== null`) silently emptied the focusables list every time. Dropped that filter; noted in code that real hidden-element checks should use `.hidden`/computed `display` instead, not `offsetParent`.
-3. **Lint/build cleanup, several rounds** (each only surfaced by actually running the command, not guessable from a diff):
-   - `SongCard`'s `<img>` → `next/image`'s `<Image unoptimized>`, silencing `@next/next/no-img-element`. `unoptimized` kept explicit per-element (not just relying on `next.config.mjs`'s global setting).
-   - `jest.config.ts`'s anonymous default export → named async function, silencing `import/no-anonymous-default-export`.
-   - `focus-trap.ts` TS build error (`'last' is possibly 'undefined'`) — `noUncheckedIndexedAccess` flagged array-index access even though the length check above guarantees both indices exist; non-null assertions added.
-   - `msw-polyfills.ts` TS build error (`Definitions ... conflict with those in another file`) — `next build`'s typecheck was pulling this Jest-only file into the production typecheck via `tsconfig.json`'s blanket `**/*.ts` include, where its `require()`-based global polyfills collided with `lib.dom`'s own declarations. Fixed by excluding `src/test/**/*` in `tsconfig.json` (Jest doesn't consult this include/exclude list, so `pnpm test` unaffected).
-   - Stray `/* eslint-disable @typescript-eslint/no-var-requires */` in `msw-polyfills.ts` → hard error, not a warning: the referenced rule was never registered (`next/core-web-vitals` doesn't pull in `@typescript-eslint`'s plugin), so ESLint treats the disable comment itself as invalid. Removed — same root cause as Sprint 7's earlier `no-unused-vars` rule drop.
-   - `pnpm lint` was walking into `out/`'s compiled build output and flagging React internals inside minified vendor bundles. Added `.eslintignore` (`out/`, `.next/`, `node_modules/`).
-4. **FE7-5 page wiring, started** — `<Nav>` (sidebar + tab bar + phone FAB, `usePathname()`-based active-link detection replacing the old hash router's `highlightNavLink()`), wired into `layout.tsx` alongside `ToastProvider` and a static player-bar placeholder (real audio wiring is FE7-4/FE7-6, not this ticket). Pages written: `/` (Library — search/status/sort filters, 2s poll while any song pending/processing, cursor pagination via `hasMorePages()`), `/favorites`, `/playlists` (grid + inline create), `/playlists/[id]` (read-only ordered list — drag-reorder is FE7-7). Two new pure-function helpers TDD'd: `parsePlaylistId()` (reads the real playlist id from `window.location.pathname`, since the static-export shell can't know it at build time) and `hasMorePages()` (ported bookmark/short-page pagination-end logic from the old `app.js`).
-5. **`pnpm build` currently broken** — `/playlists/[id]/page.tsx` combines `"use client"` with an exported `generateStaticParams()`. Next 14 disallows this outright (`generateStaticParams` must live in a Server Component). Not fixed yet — see Still Open.
+1. **Logo 404** — `ui/assets/logo.png` (old vanilla-UI path) was never copied into `ui/public/`, which is the only directory Next's static export bundles into `out/`. Fixed by copying the file to `ui/public/assets/logo.png`, no code change.
+2. **Player bar + Now Playing panel rendered broken (stacked, oversized, unstyled)** — FE7-6 had shipped `PlayerBar.tsx`/`NowPlayingPanel.tsx` markup referencing classes (`.player-bar__info`, `.player-bar__thumb`, `.player-ctrl-wide`, `.now-playing*`, `.player-btn`, `.player-time`, `.loop-badge`, etc.) that were never added to `globals.css`. Two rounds of CSS diffs added the missing rules for both surfaces.
+3. **Icon/UX pass** (one batch of feedback): pause/next looked visually identical, emoji volume icons unwanted, player bar too tall with a tiny scrubber knob, waveform too rectangular, shuffle/loop had no visible on/off state, shuffle reset playback to 0:00.
+   - New `components/icons.tsx` — inline SVG set (play/pause/prev/next/shuffle/loop/volume/mute), wired into both player surfaces, replacing emoji glyphs.
+   - `[aria-pressed="true"]`/`[data-mode="one"/"all"]` attribute-selector CSS for shuffle/loop active state — no new JS, reused existing a11y attributes as the styling hook.
+   - **Real bug, not CSS:** shuffle-reset-to-0:00 traced to `PlayerProvider`'s song-load `useEffect` firing on `state.queue`'s array *reference* (shuffle creates a new array while keeping the current song in place) rather than on "did the song actually change." Fixed with a `loadedSongIdRef` guard keyed on song id.
+   - **Real bug, not CSS:** waveform looked like a flat rectangular block. Root cause: `downsamplePeaks()` used max(\|x\|) per bucket, which saturates near 1.0 on loud/mastered-hot audio (most consumer tracks). Switched to `sqrt(RMS)` per bucket — natural peak/valley variation. `waveform.test.ts`'s hardcoded expected values recalculated to match (test was asserting the old algorithm, not new behavior).
+   - Player bar height 72px → 48px (two passes); scrubber/volume track/thumb restyled via the correct pseudo-elements (`::-webkit-slider-runnable-track`/`::-moz-range-track` for track, `::-webkit-slider-thumb`/`::-moz-range-thumb` for thumb) — original CSS targeted the `<input>` box itself, which browsers ignore for range-input rendering.
+4. **Follow-up bugs found after the icon/CSS batch, each isolated and fixed individually:**
+   - Loop "1" badge missing from the **footer** player bar (present in Now Playing panel) — `PlayerBar.tsx` never got the badge `<span>` added when `NowPlayingPanel.tsx` did.
+   - Volume slider still looked like unstyled native blue next to the themed lime scrubber — volume `<input>` had no `className` in either component; added `className="volume-slider"` to both.
+   - Now Playing panel's close (✕) button rendered centered near the panel content, not top-right of the page — two stacked issues: a stray `position: relative` left on `.now-playing` (should only live on `.now-playing-overlay`), and then a same-specificity tie between `.icon-btn`'s `position: relative` and `.now-playing__close`'s `position: absolute` that source order was resolving the wrong way. Fixed by scoping the close-button rule to the descendant selector `.now-playing .now-playing__close`, which wins the specificity tie regardless of future rule reordering.
+5. **Coverage maintenance** — new `icons.tsx` initially dropped `components` coverage to 0% funcs on that file; added `icons.test.tsx` (render-smoke test, 8 cases, one per icon) to restore it. Final confirmed run: **128/128 tests passing**, clean `pnpm build`, 0 lint errors.
 
 ## Still open — next session should start here
 
-- **`pnpm build` is red right now — fix this first.** `/playlists/[id]/page.tsx`'s `"use client"` + `generateStaticParams()` combo is invalid. Plan: split into a thin Server Component `page.tsx` that only exports `generateStaticParams()` (returning `[{ id: "_" }]`), delegating render to a separate `"use client"` child component that does the `window.location.pathname` parsing + `api.getPlaylist()` fetch + song-list render. Not started.
-- **FE7-5 has no page-level tests yet.** `ConfirmDialog`, `parsePlaylistId`, `hasMorePages` are unit-tested; the pages themselves (`page.tsx` files) aren't — would need msw handlers per page. Flagged for FE7-9, not blocking FE7-5's remaining work.
-- **`src/lib/api.ts`'s exact export shapes were inferred, not re-verified against the real file** while writing FE7-5's pages (`listSongs`, `submitSong` param shape, etc.) — assumed consistent with FE7-3's original diff. Worth a quick sanity pass next session since `pnpm build`'s typecheck would have caught real mismatches, but confirm once the `generateStaticParams` blocker is cleared and a full `pnpm build` runs clean end-to-end.
-- **Nav's Add Song buttons (sidebar + FAB) are disabled stubs.** FE7-8 owns wiring them to `<AddSongModal>`.
-- **Player bar in `layout.tsx` is a static empty-state placeholder**, no audio element, no state. FE7-4 (`PlayerProvider`) + FE7-6 (Player Bar/Now Playing panel) own the real version.
-- **`/playlists/[id]` page is read-only** (no drag-reorder) — that's FE7-7's scope, deliberately not touched here.
-- **`ui/src/app/globals.css` was replaced wholesale this session** (full-file swap, not a diff) with the ported design tokens + component styles from the old vanilla `style.css`, plus FE7-1's 3 hand-kept CSS-only exceptions (range-input thumbs, `--progress` gradient, `@keyframes`). Confirm the applied file matches what was intended — it was given as a full block since the assistant couldn't verify FE7-1's exact prior bytes to diff against safely.
-- **`ui/public/assets/logo.png` needs to exist** — `Nav.tsx` references `/assets/logo.png` (Next serves `public/` at root). Not copied automatically; copy the old `ui/assets/logo.png` into `ui/public/assets/logo.png`.
-- **Everything from the previous handoff (scaffold build/test run) is still resolved and unaffected** — `docker-compose.yml`/`INFRA.md`'s port-table update (3000→4000/4443), `Makefile`'s stale echoed URL, `FRONTEND_SETUP.md`'s Common Gotchas entries, the local-dev API proxy decision, and old `ui/*` vanilla file deletion are all still outstanding from before, unrelated to this session's work. See prior `TODO.md` entries.
-- **FE7-4 (`PlayerProvider`)** is still fully unstarted and still unblocked (`PRD.md`: only depends on FE7-0). Plan unchanged: pure-logic tests first (Fisher–Yates-keeps-current, `findNextPlayableIndex`, shuffle restore, loop-mode cycle, peak-downsampling math), zero DOM/JSX, same TDD pattern already proven out on FE7-2/FE7-3/FE7-5's helpers.
+- **`INFRA.md`'s port table**: still needs the `4000:80`/`4443:443` update for the `ui` service — flagged since FE7-10, still not done, still standalone/small.
+- **`FRONTEND_SETUP.md`'s Common Gotchas table**: still needs entries for the msw@2/Jest fixes and Prettier setup from earlier sessions — flagged multiple sessions running, still not done. Arguably also now needs an entry for "Next static export only bundles `public/`, not any other asset directory" given bug #1 this session.
+- **Local-dev API proxy** (`pnpm dev` can't reach `/api/*` standalone) — proposed `next.config.mjs` dev-only rewrite, not implemented, needs Karthik's confirm.
+- **Two product-level decisions still pending Karthik's confirm** (carried over, untouched again this session): `prev()` >3s-restart convention, phone song-card stacking layout.
+- **Old vanilla `ui/` root files** (`api.js`, `app.js`, `components.js`, `player.js`, `style.css`, `index.html`, root `nginx.conf`) — still not deleted. Now doubly justified: `ui/assets/logo.png` at the old vanilla path was exactly the kind of stale file that caused bug #1 (looked plausible, wasn't actually reachable by the new build).
+- **Manual browser smoke pass**: this session *was* effectively that pass for the player bar / Now Playing panel — but Library/Favorites/Playlists/PlaylistDetail/Add-Song-Modal still haven't had a dedicated click-through pass against the real HTTPS build. Waveform/player fixes should get one more visual confirm pass now that RMS + CSS changes have landed together.
+- **yt-dlp 403 hotfix** — still open, untouched this session.
+- **Process note for next session**: several rounds this session were slowed down by CSS diffs applied cumulatively without re-reading the file in between (leftover dead `position` declarations, duplicated `top` values). Going forward: after any multi-round CSS back-and-forth, request the full current file once at the end of the sequence and do one clean diff against it, rather than layering diff-on-diff blind.
 
-## Files touched this session (as diffs, not yet applied to a real branch)
+## Files touched this session
 
-- `ui/src/lib/format.ts`, `format.test.ts` — new, ported `formatDuration`
-- `ui/src/lib/focus-trap.ts`, `focus-trap.test.ts` — new, ported `trapFocus`, jsdom `offsetParent` fix
-- `ui/src/lib/playlist-path.ts`, `playlist-path.test.ts` — new, `parsePlaylistId()`
-- `ui/src/lib/pagination.ts`, `pagination.test.ts` — new, `hasMorePages()`
-- `ui/src/components/StatusPill.tsx` + test — new
-- `ui/src/components/SongCard.tsx` + test — new, thumbnail uses `next/image`
-- `ui/src/components/SongCardMenu.tsx` — new
-- `ui/src/components/PlaylistCard.tsx` + test — new
-- `ui/src/components/Toast.tsx` + test — new (`ToastProvider`/`useToast`)
-- `ui/src/components/Modal.tsx` + test — new
-- `ui/src/components/ConfirmDialog.tsx` + test — new
-- `ui/src/components/Nav.tsx` — new
-- `ui/src/app/layout.tsx` — wired `ToastProvider`, `Nav`, placeholder player bar
-- `ui/src/app/page.tsx` — replaced placeholder with real Library page
-- `ui/src/app/favorites/page.tsx`, `ui/src/app/playlists/page.tsx`, `ui/src/app/playlists/[id]/page.tsx` — new (last one currently build-broken, see Still Open)
-- `ui/src/app/globals.css` — full-file replace (see Still Open note)
-- `ui/tsconfig.json` — excluded `src/test/**/*`
-- `ui/jest.config.ts` — named the async export function
-- `ui/src/test/msw-polyfills.ts` — removed stray unregistered-rule disable comment
-- `ui/.eslintignore` — new (`out/`, `.next/`, `node_modules/`)
+- `ui/public/assets/logo.png` — new (copy of `ui/assets/logo.png`)
+- `ui/src/app/globals.css` — player bar, Now Playing panel, icon/badge, slider track/thumb, close-button-specificity fixes (multiple passes)
+- `ui/src/components/icons.tsx` — new (SVG icon set)
+- `ui/src/components/icons.test.tsx` — new (coverage)
+- `ui/src/components/PlayerBar.tsx` — icon swap, `volume-slider` class, loop badge span
+- `ui/src/components/NowPlayingPanel.tsx` — icon swap, `volume-slider` class, `drawBar()` rounded-rect helper
+- `ui/src/components/PlayerProvider.tsx` — `loadedSongIdRef` guard on the song-load effect
+- `ui/src/lib/waveform.ts` — max-abs → sqrt(RMS) downsample
+- `ui/src/lib/waveform.test.ts` — expected values recalculated for RMS
 - `docs/TODO.md`, `docs/DECISIONS.md`, `docs/handoff.md` — this session's log
 
 ## For the next session
 
-- First priority: fix the `generateStaticParams`/`"use client"` build break on `/playlists/[id]/page.tsx` — nothing else in FE7-5 can be called done until `pnpm build` is green again.
-- Then: finish FE7-5 (page-level tests, confirm `lib/api.ts` shapes) or move to FE7-4 (`PlayerProvider`) — both are now realistic next steps.
-- `INFRA.md` port-table diff for the real `4000`/`4443` ports — still outstanding from before, small/standalone.
-- `FRONTEND_SETUP.md` Common Gotchas additions — now has two more sessions' worth of fixes to log (msw/Jest six-fix list, plus this session's lint/typecheck/jsdom fixes). Worth doing in one pass before it goes stale.
-- Decide the local-dev API proxy question (still open, see prior handoff) — blocks comfortable `pnpm dev` iteration on later tickets.
-- Recommended skills for continuation: `caveman` (ultra), `clean-code`, `tdd`, `ponytail` — all standing preferences already in memory, all followed this session.
-- Reminder: the yt-dlp 403 hotfix (separate, unsprinted work) is still unresolved — see `docs/TODO.md`'s Hotfix block. Not blocking Sprint 7, but don't forget it exists.
+- **Sprint 7 remains fully shipped** (FE7-0 through FE7-11) — this session was a bugfix pass on top of it, not new scope.
+- All commands run for real by Karthik this session: `make fe-format && make fe-lint && make fe-test-cov && make fe-build` — final state 128/128 tests passing, clean build, 0 lint errors. Confirmed visually in-browser after each fix via screenshot.
+- Recommended skills for continuation: `caveman` (ultra), `clean-code`, `tdd`, `ponytail` — all standing preferences, all followed this session.
+- Suggested next focus: `INFRA.md`/`FRONTEND_SETUP.md` doc catchup, delete stale vanilla `ui/` root files, full manual click-through of remaining pages, then either the yt-dlp hotfix confirmation or a Sprint 8 candidate from `ROADMAP.md`.
